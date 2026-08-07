@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1024px;
+        height: 1024px;
+        background: transparent;
+      }
+      .tile {
+        position: absolute;
+        inset: 64px;
+        border-radius: 224px;
+        background: linear-gradient(160deg, #a9e4f7 0%, #56b6dc 45%, #17719c 100%);
+        box-shadow:
+          inset 0 6px 22px rgba(255, 255, 255, 0.55),
+          inset 0 -14px 40px rgba(8, 60, 88, 0.35);
+        overflow: hidden;
+      }
+      svg {
+        position: absolute;
+        inset: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="tile">
+      <svg viewBox="0 0 896 896" xmlns="http://www.w3.org/2000/svg">
+        <!-- sun -->
+        <circle cx="640" cy="230" r="110" fill="rgba(255,255,255,0.92)" />
+        <!-- back swell -->
+        <path
+          d="M-40,600 C120,520 260,660 420,590 C580,520 700,640 936,560 L936,940 L-40,940 Z"
+          fill="rgba(255,255,255,0.30)"
+        />
+        <!-- main breaking wave -->
+        <path
+          d="M-40,700 C140,560 330,560 420,650 C470,700 450,760 380,760 C420,800 520,790 570,720 C650,610 780,600 936,660 L936,940 L-40,940 Z"
+          fill="rgba(255,255,255,0.88)"
+        />
+        <!-- foam accent -->
+        <path
+          d="M-40,830 C160,790 400,870 620,820 C760,790 850,810 936,830 L936,940 L-40,940 Z"
+          fill="rgba(214,242,252,0.9)"
+        />
+      </svg>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,274 @@
+/* Offshore start page — floats on the window's liquid glass */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  color: #0b3c50;
+  -webkit-font-smoothing: antialiased;
+}
+
+.start {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: linear-gradient(180deg, rgba(234, 249, 255, 0.55) 0%, rgba(205, 236, 250, 0.4) 60%, rgba(180, 224, 244, 0.32) 100%);
+  overflow: hidden;
+}
+
+.start-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 11vh;
+  z-index: 2;
+  width: 100%;
+  padding: 0 32px;
+}
+
+.clock {
+  font-size: 76px;
+  font-weight: 250;
+  letter-spacing: -1.5px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: #0a4b66;
+}
+
+.date {
+  margin-top: 8px;
+  font-size: 15px;
+  font-weight: 500;
+  color: rgba(11, 60, 80, 0.62);
+}
+
+.greeting {
+  margin-top: 4px;
+  font-size: 13.5px;
+  color: rgba(11, 60, 80, 0.45);
+}
+.tagline {
+  font-style: italic;
+}
+
+.search-pill {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 34px;
+  width: min(560px, 90%);
+  height: 52px;
+  padding: 0 20px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 0.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    0 12px 34px rgba(10, 70, 96, 0.16);
+  color: #1d84ad;
+}
+
+.search-pill input {
+  flex: 1;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 16px;
+  color: #0b3c50;
+  font-family: inherit;
+  user-select: text;
+}
+.search-pill input::placeholder {
+  color: rgba(11, 60, 80, 0.35);
+}
+
+.shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 18px;
+  margin-top: 38px;
+  max-width: 640px;
+}
+
+.shortcut-wrap {
+  position: relative;
+}
+
+.shortcut {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  cursor: default;
+  width: 76px;
+}
+
+.shortcut-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  font-size: 23px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 8px 20px rgba(10, 70, 96, 0.2);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.shortcut:hover .shortcut-tile {
+  transform: translateY(-2px) scale(1.04);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 12px 26px rgba(10, 70, 96, 0.26);
+}
+.shortcut-tile.ghost {
+  background: rgba(255, 255, 255, 0.5);
+  color: rgba(11, 60, 80, 0.55);
+  font-size: 19px;
+  box-shadow: inset 0 0 0 1.5px rgba(11, 60, 80, 0.14);
+}
+.edit-toggle.editing .shortcut-tile {
+  color: #1d84ad;
+}
+
+.shortcut-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(11, 60, 80, 0.7);
+  max-width: 76px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shortcut-remove {
+  position: absolute;
+  top: -6px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: #e26d5c;
+  color: white;
+  font-size: 13px;
+  line-height: 1;
+  cursor: default;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.add-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 22px;
+}
+.add-row input {
+  height: 34px;
+  padding: 0 12px;
+  border: 0.5px solid rgba(255, 255, 255, 0.9);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.65);
+  font-size: 13px;
+  color: #0b3c50;
+  outline: none;
+  font-family: inherit;
+  user-select: text;
+}
+.add-row input:first-child {
+  width: 130px;
+}
+.add-row input:nth-child(2) {
+  width: 200px;
+}
+.add-row button {
+  height: 34px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 10px;
+  background: #1d84ad;
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: default;
+}
+.add-row button:hover {
+  background: #16749a;
+}
+
+/* ---------- waves ---------- */
+
+.waves {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 190px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.wave {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 200%;
+  height: 100%;
+}
+
+.dither-canvas {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 200%;
+  height: 190px;
+  image-rendering: pixelated;
+  animation: drift 22s linear infinite;
+}
+
+.wave-back {
+  animation: drift 26s linear infinite;
+}
+.wave-mid {
+  animation: drift 18s linear infinite reverse;
+}
+.wave-front {
+  animation: drift 12s linear infinite;
+}
+
+@keyframes drift {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.start-footer {
+  position: absolute;
+  bottom: 14px;
+  width: 100%;
+  text-align: center;
+  font-size: 11px;
+  color: rgba(11, 60, 80, 0.4);
+  z-index: 2;
+}

@@ -1,0 +1,23 @@
+appId: com.offshore.browser
+productName: Offshore
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - "!**/.DS_Store"
+asar: true
+npmRebuild: false
+mac:
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: dir
+      arch:
+        - arm64
+  identity: null
+dmg:
+  title: Offshore
