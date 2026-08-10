@@ -74,6 +74,8 @@ function mergeSettings(base: Settings, patch: Partial<Settings>): Settings {
       lists: { ...base.adblock.lists, ...(patch.adblock?.lists ?? {}) }
     },
     appearance: { ...base.appearance, ...(patch.appearance ?? {}) },
+    newTabWidgets: { ...base.newTabWidgets, ...(patch.newTabWidgets ?? {}) },
+    newTabWidgetLayout: { ...base.newTabWidgetLayout, ...(patch.newTabWidgetLayout ?? {}) },
     popups: { ...base.popups, ...(patch.popups ?? {}) },
     passwords: { ...base.passwords, ...(patch.passwords ?? {}) },
     brief: { ...base.brief, ...(patch.brief ?? {}) }

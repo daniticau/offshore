@@ -634,8 +634,8 @@ function App(): React.JSX.Element {
                   <Segmented
                     value={settings.tabOrientation}
                     options={[
-                      ['vertical', 'Sidebar'],
-                      ['horizontal', 'Top bar']
+                      ['vertical', 'Vertical'],
+                      ['horizontal', 'Horizontal']
                     ]}
                     onChange={(v) => patch({ tabOrientation: v })}
                   />
@@ -658,7 +658,7 @@ function App(): React.JSX.Element {
                 <div className="row">
                   <div className="row-title">
                     Show bookmarks
-                    <div className="row-sub">The tree in the sidebar, or a bar under the toolbar in top-bar layout.</div>
+                    <div className="row-sub">The tree in the sidebar, or a bar under the toolbar in horizontal layout.</div>
                   </div>
                   <Toggle on={settings.bookmarksBar} onChange={(v) => patch({ bookmarksBar: v })} />
                 </div>

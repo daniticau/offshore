@@ -1,0 +1,43 @@
+<meta charset="utf-8">
+<link rel="stylesheet" href="src/renderer/src/theme/theme.css">
+<link rel="stylesheet" href="src/renderer/src/chrome/chrome.css">
+<style>
+  body { background: #cfe6f3; }
+  /* force hover/close visible so spacing is measurable in a static shot */
+  .shot .new-tab-btn { background: var(--hover); color: var(--ink); }
+  .shot .tab-close { opacity: 1 !important; transform: none !important; }
+  .rule { position:absolute; background: rgba(220,0,0,.65); z-index: 99; }
+</style>
+<div class="chrome density-compact mode-vertical shot" style="position:relative;height:560px;width:260px">
+  <div class="sidebar">
+    <div class="traffic-spacer"></div>
+    <div class="sidebar-toolbar"><div class="nav-buttons"><button class="chrome-btn">◀</button><button class="chrome-btn">▶</button><button class="chrome-btn">⟳</button></div></div>
+    <div class="omnibox"><span style="color:var(--ink-faint)">Search or enter address</span></div>
+    <button class="new-tab-btn"><span class="tab-favicon">＋</span><span>New Tab</span></button>
+    <div class="tab-list">
+      <div class="tab-item active"><span class="tab-favicon"><img src="https://github.githubassets.com/favicons/favicon.png"></span><span class="tab-title">GitHub · Where software is built</span><button class="tab-close">✕</button></div>
+      <div class="tab-item"><span class="tab-favicon"><img src="https://www.wikipedia.org/static/favicon/wikipedia.ico"></span><span class="tab-title">Wikipedia, the free encyclopedia</span><button class="tab-close">✕</button></div>
+      <div class="tab-item"><span class="tab-favicon"><img src="https://news.ycombinator.com/favicon.ico"></span><span class="tab-title">Hacker News</span><button class="tab-close">✕</button></div>
+      <div class="tab-item"><span class="tab-favicon"><img src="https://developer.mozilla.org/favicon.ico"></span><span class="tab-title">MDN Web Docs</span><button class="tab-close">✕</button></div>
+    </div>
+  </div>
+</div>
+<pre id="out" style="font:12px ui-monospace;padding:12px"></pre>
+<script>
+  const r = (el) => el.getBoundingClientRect()
+  const btn = document.querySelector('.new-tab-btn')
+  const list = document.querySelector('.tab-list')
+  const first = document.querySelector('.tab-item')
+  const omni = document.querySelector('.omnibox')
+  const close = first.querySelector('.tab-close')
+  const fav = first.querySelector('.tab-favicon')
+  document.getElementById('out').textContent = [
+    'gap above new-tab btn: ' + (r(btn).top - r(omni).bottom).toFixed(1),
+    'gap below new-tab btn: ' + (r(first).top - r(btn).bottom).toFixed(1),
+    'tab right edge -> close right edge: ' + (r(first).right - r(close).right).toFixed(1),
+    'tab left edge -> favicon left edge: ' + (r(fav).left - r(first).left).toFixed(1),
+    'close box: ' + r(close).width + 'x' + r(close).height,
+    'favicon box: ' + r(fav).width + 'x' + r(fav).height,
+    'row height: ' + r(first).height
+  ].join('\n')
+</script>

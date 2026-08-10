@@ -1,19 +1,21 @@
 import React, { useEffect, useMemo, useRef } from 'react'
-import { REDUCED_MOTION, trackWaveCursor, troughAt } from './waveMouse'
+import { disturbAt, REDUCED_MOTION, trackWaveCursor, waveTime } from './waveMouse'
 
 /**
  * Layered, near-realistic ocean swell in pure SVG — and alive: five depth
  * layers, each an organic sum-of-sines surface with a vertical gradient and a
  * foam stroke on the near water. Every layer drifts the same direction at its
- * own speed (far water slower), and the whole surface parts away from the
- * cursor — a smooth trough follows the pointer, deepest on the front layer.
+ * own speed (far water slower), and the water shoves aside under the cursor —
+ * a tight dip with crests piled either side, skewed into a bow wave and wake
+ * when the pointer sweeps, deepest on the front layer.
  * Paths are recomputed per frame; with reduced motion it renders once.
  */
 
 const PERIOD = 720
 const VIEW_W = PERIOD * 2
 const HEIGHT = 240
-const SAMPLES = 96
+/** dense enough to resolve the tight cursor disturbance without faceting */
+const SAMPLES = 240
 
 interface Harmonic {
   k: number
@@ -72,10 +74,15 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
   const fillRefs = useRef<(SVGPathElement | null)[]>([])
   const foamRefs = useRef<(SVGPathElement | null)[]>([])
 
+  // keyed on the colour *values*, not the array identity: callers pass a fresh
+  // literal every render, and restarting the animation on each one is what made
+  // the drift visibly hitch
+  const colorKey = colors.join('|')
   const layers = useMemo<LayerSpec[]>(() => {
-    const a = parseColor(colors[0])
-    const b = parseColor(colors[1])
-    const c = parseColor(colors[2])
+    const [ca, cb, cc] = colorKey.split('|')
+    const a = parseColor(ca)
+    const b = parseColor(cb)
+    const c = parseColor(cc)
     return [
       {
         base: 96,
@@ -86,7 +93,7 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
         ],
         color: mix(a, b, -0.35),
         speed: 9,
-        trough: 8,
+        trough: 11,
         foam: false
       },
       {
@@ -98,7 +105,7 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
         ],
         color: a,
         speed: 14,
-        trough: 13,
+        trough: 17,
         foam: false
       },
       {
@@ -110,7 +117,7 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
         ],
         color: b,
         speed: 21,
-        trough: 19,
+        trough: 24,
         foam: true
       },
       {
@@ -122,7 +129,7 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
         ],
         color: mix(b, c, 0.55),
         speed: 30,
-        trough: 26,
+        trough: 32,
         foam: true
       },
       {
@@ -134,11 +141,11 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
         ],
         color: mix(c, [12, 30, 44, c[3] + 0.12], 0.4),
         speed: 42,
-        trough: 34,
+        trough: 42,
         foam: true
       }
     ]
-  }, [colors])
+  }, [colorKey])
 
   useEffect(() => {
     const host = hostRef.current
@@ -155,8 +162,8 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
         for (const h of layer.harmonics) {
           y += h.amp * Math.sin((2 * Math.PI * h.k * (x + drift)) / PERIOD + h.phase)
         }
-        // trough follows the cursor in screen space
-        y += troughAt(x / viewPerPx, cursor.current, layer.trough, 130)
+        // the cursor disturbance lives in screen space, tight to the pointer
+        y += disturbAt(x / viewPerPx, cursor.current, layer.trough, 74, tSec)
         d += i === 0 ? `M ${x.toFixed(1)} ${y.toFixed(1)}` : ` L ${x.toFixed(1)} ${y.toFixed(1)}`
       }
       return d
@@ -173,15 +180,13 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
     }
 
     let raf = 0
-    const start = performance.now()
     const loop = (): void => {
-      if (document.visibilityState === 'visible') {
-        draw((performance.now() - start) / 1000)
-      }
+      // page clock, not a per-mount origin — the phase survives a remount
+      if (document.visibilityState === 'visible') draw(waveTime())
       raf = requestAnimationFrame(loop)
     }
     if (reduced) {
-      draw(0)
+      draw(waveTime())
     } else {
       raf = requestAnimationFrame(loop)
     }

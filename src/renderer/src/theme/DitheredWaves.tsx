@@ -1,13 +1,13 @@
 import React, { useEffect, useRef } from 'react'
-import { REDUCED_MOTION, trackWaveCursor, troughAt } from './waveMouse'
+import { disturbAt, REDUCED_MOTION, trackWaveCursor, waveTime } from './waveMouse'
 
 /**
  * Chunky retro waves, now fully live: three bands rendered every frame on one
  * small canvas (Bayer-dithered, pixelated upscale). All bands drift the same
- * direction at different speeds, deeper water darker and denser — and the
- * surface parts away from the cursor, each band carving a smooth trough under
- * the pointer (front band deepest). Everything is deterministic math; with
- * reduced motion the surface renders once, static.
+ * direction at different speeds, deeper water darker and denser — and the water
+ * shoves aside under the cursor, each band carving a tight dip with crests
+ * piled either side and a wake when the pointer sweeps (front band deepest).
+ * Everything is deterministic math; with reduced motion it renders once.
  */
 
 const CELL = 4
@@ -47,7 +47,7 @@ function buildBands(colors: [string, string, string], H: number): Band[] {
       color: colors[0],
       base: 0.38,
       speed: 2.2,
-      trough: H * 0.1,
+      trough: H * 0.13,
       foam: false,
       harmonics: [
         { k: 2, amp: 0.095, phase: 0.6 },
@@ -59,7 +59,7 @@ function buildBands(colors: [string, string, string], H: number): Band[] {
       color: colors[1],
       base: 0.56,
       speed: 3.6,
-      trough: H * 0.16,
+      trough: H * 0.2,
       foam: true,
       harmonics: [
         { k: 3, amp: 0.105, phase: 2.4 },
@@ -71,7 +71,7 @@ function buildBands(colors: [string, string, string], H: number): Band[] {
       color: colors[2],
       base: 0.73,
       speed: 5.4,
-      trough: H * 0.24,
+      trough: H * 0.3,
       foam: true,
       harmonics: [
         { k: 4, amp: 0.09, phase: 4.1 },
@@ -110,6 +110,11 @@ export function DitheredWaves({ colors, height = 190, className }: DitheredWaves
   const hostRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
+  // keyed on the colour *values*, not the array identity: callers pass a fresh
+  // literal every render, and restarting the animation on each one is what made
+  // the drift visibly hitch
+  const colorKey = colors.join('|')
+
   useEffect(() => {
     const host = hostRef.current
     const canvas = canvasRef.current
@@ -128,7 +133,7 @@ export function DitheredWaves({ colors, height = 190, className }: DitheredWaves
       H = Math.max(12, Math.round(height / CELL))
       canvas.width = W
       canvas.height = H
-      bands = buildBands(colors, H)
+      bands = buildBands(colorKey.split('|') as [string, string, string], H)
       img = ctx.createImageData(W, H)
     }
     resize()
@@ -152,7 +157,8 @@ export function DitheredWaves({ colors, height = 190, className }: DitheredWaves
           for (const h of band.harmonics) {
             y0 += h.amp * Math.sin((2 * Math.PI * h.k * px) / W + h.phase)
           }
-          y0 += troughAt(x * CELL, cursor.current, band.trough, 110) / CELL
+          // cursor lives in screen px, the surface in cells
+          y0 += disturbAt(x * CELL, cursor.current, band.trough, 70, tSec)
           for (let y = 0; y < H; y++) {
             const d = y - y0
             const threshold = (BAYER[y % 4][x % 4] + 0.5) / 16
@@ -190,22 +196,20 @@ export function DitheredWaves({ colors, height = 190, className }: DitheredWaves
     }
 
     let raf = 0
-    const start = performance.now()
     const loop = (): void => {
-      if (document.visibilityState === 'visible') {
-        draw((performance.now() - start) / 1000)
-      }
+      // page clock, not a per-mount origin — the phase survives a remount
+      if (document.visibilityState === 'visible') draw(waveTime())
       raf = requestAnimationFrame(loop)
     }
     if (reduced) {
-      draw(0)
+      draw(waveTime())
     } else {
       raf = requestAnimationFrame(loop)
     }
 
     const ro = new ResizeObserver(() => {
       resize()
-      if (reduced) draw(0)
+      if (reduced) draw(waveTime())
     })
     ro.observe(host)
     return () => {
@@ -213,7 +217,7 @@ export function DitheredWaves({ colors, height = 190, className }: DitheredWaves
       cursor.detach()
       cancelAnimationFrame(raf)
     }
-  }, [colors, height])
+  }, [colorKey, height])
 
   return (
     <div ref={hostRef} className={`waves-host ${className ?? ''}`} style={{ height }} aria-hidden>

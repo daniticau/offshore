@@ -52,6 +52,24 @@ export function setupDevshot(): void {
       w.tabs.navigate(null, url)
       await delay(5000)
     }
+    if (process.env['OFFSHORE_SHOT_EDIT']) {
+      const t = w.tabs.activeTab
+      t?.wc.send('widgets:edit')
+      // click a widget so its style strip is in the capture
+      await delay(600)
+      await t?.wc
+        .executeJavaScript(
+          `(() => { const s = document.querySelectorAll('.widget-slot')[1]
+             if (!s) return false
+             const r = s.getBoundingClientRect()
+             const o = { bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, pointerId: 1 }
+             s.dispatchEvent(new PointerEvent('pointerdown', o))
+             s.dispatchEvent(new PointerEvent('pointerup', o))
+             return true })()`
+        )
+        .catch(() => false)
+      await delay(500)
+    }
     if (process.env['OFFSHORE_TEST_BOOKMARK']) {
       const { bookmarksStore } = await import('./stores')
       const tab = w.tabs.activeTab
@@ -271,8 +289,13 @@ function setupTestFlows(): void {
     }
 
     if (flow === 'widgets') {
-      const tab = w.tabs.activeTab!
       await delay(1500)
+      const tab = w.tabs.activeTab
+      if (!tab) {
+        say(`[flowtest] no active tab (tabs=${w.tabs.tabs.length})`)
+        app.exit(1)
+        return
+      }
       tab.wc.send('widgets:edit')
       await delay(800)
       const d: string = await tab.wc

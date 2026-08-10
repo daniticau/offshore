@@ -79,7 +79,10 @@ function ContentFrame({ children }: { children?: React.ReactNode }): React.JSX.E
 function EmptyHome({ settings }: { settings: Settings }): React.JSX.Element {
   const [now, setNow] = useState(new Date())
   const [text, setText] = useState('')
+  const [pillWidth, setPillWidth] = useState<number | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const hostRef = useRef<HTMLDivElement>(null)
+  const mirrorRef = useRef<HTMLSpanElement>(null)
   const isDark = useIsDark()
 
   useEffect(() => {
@@ -87,6 +90,27 @@ function EmptyHome({ settings }: { settings: Settings }): React.JSX.Element {
     inputRef.current?.focus()
     return () => clearInterval(t)
   }, [])
+
+  // The pill grows with what you type instead of scrolling the text out of
+  // sight — measured off a hidden mirror of the input, clamped to the pane.
+  const measure = useCallback(() => {
+    const mirror = mirrorRef.current
+    const host = hostRef.current
+    if (!mirror || !host) return
+    const avail = host.clientWidth
+    if (!avail) return
+    const base = Math.min(600, avail * 0.68)
+    const max = Math.max(base, Math.min(940, avail - 72))
+    const chrome = 22 * 2 + 18 + 12 + 10 // padding + icon + gap + caret slack
+    setPillWidth(Math.round(Math.min(max, Math.max(base, mirror.offsetWidth + chrome))))
+  }, [])
+
+  useLayoutEffect(measure, [measure, text])
+
+  useEffect(() => {
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [measure])
 
   const widgets = settings.newTabWidgets ?? DEFAULT_SETTINGS.newTabWidgets
   const acc = resolveAccentColors(settings.appearance ?? DEFAULT_SETTINGS.appearance, isDark)
@@ -102,14 +126,17 @@ function EmptyHome({ settings }: { settings: Settings }): React.JSX.Element {
 
   return (
     <div
+      ref={hostRef}
       className="empty-home no-drag"
       style={{ background: `linear-gradient(180deg, ${acc.tintTop} 0%, ${acc.tintBottom} 100%)` }}
     >
       <div className="eh-center">
-        {widgets.clock && <div className="eh-clock">{time}</div>}
-        {widgets.date && <div className="eh-date">{date}</div>}
-        <div className="eh-search">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+        <div className="eh-widgets">
+          {widgets.clock && <div className="eh-clock">{time}</div>}
+          {widgets.date && <div className="eh-date">{date}</div>}
+        </div>
+        <div className="eh-search" style={pillWidth ? { width: pillWidth } : undefined}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <circle cx="11" cy="11" r="7" />
             <path d="M21 21l-4.35-4.35" />
           </svg>
@@ -123,6 +150,9 @@ function EmptyHome({ settings }: { settings: Settings }): React.JSX.Element {
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && submit()}
           />
+          <span className="eh-measure" ref={mirrorRef} aria-hidden="true">
+            {text}
+          </span>
         </div>
       </div>
       {settings.appearance?.waves !== false &&

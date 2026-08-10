@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { BriefWeather, NewTabWidgets, Settings } from '@shared/types'
+import type { BriefWeather, NewTabWidgets, Settings, WidgetAlign, WidgetLayout } from '@shared/types'
 import { DEFAULT_SETTINGS, resolveAccentColors, weatherCondition } from '@shared/types'
 import { ClassicWaves } from '../theme/ClassicWaves'
 import { moonPhase } from '../theme/moon'
@@ -19,13 +19,15 @@ interface InternalApi {
 
 const internal = (window as unknown as { offshoreInternal?: InternalApi }).offshoreInternal
 
+type WidgetKey = keyof NewTabWidgets
+
 /** Each character keys on its value, so only changed digits roll in. */
-function SlidingClock({ time }: { time: string }): React.JSX.Element {
+function SlidingClock({ time, className }: { time: string; className?: string }): React.JSX.Element {
   return (
-    <div className="clock" aria-label={time}>
+    <div className={`clock ${className ?? ''}`} aria-label={time}>
       {time.split('').map((ch, i) => (
         <span className="clock-ch" key={`${i}-${ch}`}>
-          {ch === ' ' ? '\u00A0' : ch}
+          {ch === ' ' ? ' ' : ch}
         </span>
       ))}
     </div>
@@ -39,7 +41,7 @@ function greeting(hour: number): string {
   return 'Up late'
 }
 
-/** Single fetch shared by the weather + forecast widgets. */
+/** Single fetch shared by the weather / forecast / sun widgets. */
 function useWeather(enabled: boolean, hasLocation: boolean): BriefWeather | null {
   const [weather, setWeather] = useState<BriefWeather | null>(null)
 
@@ -65,17 +67,29 @@ function useWeather(enabled: boolean, hasLocation: boolean): BriefWeather | null
   return weather
 }
 
-function WeatherNow({ weather }: { weather: BriefWeather }): React.JSX.Element {
+function WeatherNow({ weather, style }: { weather: BriefWeather; style: string }): React.JSX.Element {
   const cond = weatherCondition(weather.now.code)
+  if (style === 'compact') {
+    return (
+      <div className="widget-weather compact">
+        <span className="brief-icon">
+          <Weather icon={cond.icon} isDay={weather.now.isDay} size={17} />
+        </span>{' '}
+        <strong>{weather.now.temp}°</strong>
+      </div>
+    )
+  }
   return (
     <div className="widget-weather">
       <span className="brief-icon">
         <Weather icon={cond.icon} isDay={weather.now.isDay} size={19} />
       </span>{' '}
       <strong>{weather.now.temp}°</strong> and {cond.label}
-      <span className="brief-hilo">
-        {'  '}H {weather.hi}° · L {weather.lo}°
-      </span>
+      {style !== 'plain' && (
+        <span className="brief-hilo">
+          {'  '}H {weather.hi}° · L {weather.lo}°
+        </span>
+      )}
     </div>
   )
 }
@@ -98,17 +112,11 @@ function ForecastHours({ weather }: { weather: BriefWeather }): React.JSX.Elemen
   )
 }
 
-/**
- * Widget-based new tab: time and date by default, everything else opt-in.
- * Right-click → Edit Widgets (or press-and-hold the page) enters an
- * iOS-home-screen edit mode: widgets jiggle, − removes, drag reorders,
- * and a tray below offers the rest. No inputs here otherwise — typing
- * happens in the omnibox.
- */
+// ---------------- widget catalogue ----------------
 
-const ALL_WIDGETS: (keyof NewTabWidgets)[] = ['clock', 'date', 'greeting', 'weather', 'forecast', 'sun', 'moon']
+const ALL_WIDGETS: WidgetKey[] = ['clock', 'date', 'greeting', 'weather', 'forecast', 'sun', 'moon']
 
-const WIDGET_LABELS: Record<keyof NewTabWidgets, string> = {
+const WIDGET_LABELS: Record<WidgetKey, string> = {
   clock: 'Time',
   date: 'Date',
   greeting: 'Greeting',
@@ -118,12 +126,59 @@ const WIDGET_LABELS: Record<keyof NewTabWidgets, string> = {
   moon: 'Moon phase'
 }
 
+/** Looks each widget can wear, chosen from its own strip in edit mode. */
+const WIDGET_STYLES: Partial<Record<WidgetKey, { id: string; label: string }[]>> = {
+  clock: [
+    { id: 'serif', label: 'Serif' },
+    { id: 'light', label: 'Light' },
+    { id: 'mono', label: 'Mono' },
+    { id: 'small', label: 'Small' }
+  ],
+  date: [
+    { id: 'long', label: 'Sunday, August 10' },
+    { id: 'short', label: 'Sun, Aug 10' },
+    { id: 'numeric', label: '8/10/26' }
+  ],
+  greeting: [
+    { id: 'serif', label: 'Serif' },
+    { id: 'plain', label: 'Plain' }
+  ],
+  weather: [
+    { id: 'full', label: 'Full' },
+    { id: 'plain', label: 'No high/low' },
+    { id: 'compact', label: 'Just the temp' }
+  ]
+}
+
+const DEFAULT_STYLE: Record<WidgetKey, string> = {
+  clock: 'serif',
+  date: 'long',
+  greeting: 'serif',
+  weather: 'full',
+  forecast: 'strip',
+  sun: 'line',
+  moon: 'line'
+}
+
+/**
+ * Widget-based new tab: time and date by default, everything else opt-in.
+ * Right-click → Edit Widgets (or press and hold) enters iPhone-home-screen
+ * edit mode — widgets jiggle, − removes, drag moves them anywhere including
+ * left and right, and each offers its own looks. No inputs here otherwise;
+ * typing happens in the omnibox.
+ */
 function App(): React.JSX.Element {
   const [now, setNow] = useState(new Date())
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [editing, setEditing] = useState(false)
-  const [dragKey, setDragKey] = useState<keyof NewTabWidgets | null>(null)
-  const [previewOrder, setPreviewOrder] = useState<(keyof NewTabWidgets)[] | null>(null)
+  const [selected, setSelected] = useState<WidgetKey | null>(null)
+  const [drag, setDrag] = useState<{ key: WidgetKey; dx: number; dy: number } | null>(null)
+  const [previewOrder, setPreviewOrder] = useState<WidgetKey[] | null>(null)
+  const [previewAlign, setPreviewAlign] = useState<WidgetAlign | null>(null)
+
+  const centerRef = useRef<HTMLDivElement>(null)
+  const slotRefs = useRef<Map<WidgetKey, HTMLElement>>(new Map())
+  const dragStart = useRef<{ x: number; y: number; moved: boolean } | null>(null)
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isDark = useIsDark()
 
@@ -140,49 +195,64 @@ function App(): React.JSX.Element {
   useEffect(() => {
     if (!editing) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' || e.key === 'Enter') setEditing(false)
+      if (e.key === 'Escape' || e.key === 'Enter') {
+        setEditing(false)
+        setSelected(null)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [editing])
 
   const patch = (p: Partial<Settings>): void => {
-    setSettings((prev) => ({ ...prev, ...p }))
+    setSettings((prev) => ({
+      ...prev,
+      ...p,
+      newTabWidgets: { ...prev.newTabWidgets, ...(p.newTabWidgets ?? {}) },
+      newTabWidgetLayout: { ...prev.newTabWidgetLayout, ...(p.newTabWidgetLayout ?? {}) }
+    }))
     void internal?.settings.set(p)
   }
 
   const widgets: NewTabWidgets = settings.newTabWidgets ?? DEFAULT_SETTINGS.newTabWidgets
-  const baseOrder = (settings.newTabWidgetOrder?.length ? settings.newTabWidgetOrder : ALL_WIDGETS).filter(
-    (k) => ALL_WIDGETS.includes(k)
+  const layout = settings.newTabWidgetLayout ?? {}
+  const baseOrder = (settings.newTabWidgetOrder?.length ? settings.newTabWidgetOrder : ALL_WIDGETS).filter((k) =>
+    ALL_WIDGETS.includes(k)
   )
-  const fullOrder = [...baseOrder, ...ALL_WIDGETS.filter((k) => !baseOrder.includes(k))]
+  const fullOrder: WidgetKey[] = [...baseOrder, ...ALL_WIDGETS.filter((k) => !baseOrder.includes(k))]
   const order = previewOrder ?? fullOrder
   const enabledKeys = order.filter((k) => widgets[k])
   const availableKeys = ALL_WIDGETS.filter((k) => !widgets[k])
+
+  const layoutFor = (key: WidgetKey): WidgetLayout => ({
+    align: layout[key]?.align ?? 'center',
+    style: layout[key]?.style ?? DEFAULT_STYLE[key]
+  })
 
   const hasLocation = settings.brief?.lat != null
   const wantsWeather = widgets.weather || widgets.forecast || widgets.sun
   const weather = useWeather(wantsWeather, hasLocation)
 
   const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  const date = now.toLocaleDateString([], {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric'
-  })
   const acc = resolveAccentColors(settings.appearance ?? DEFAULT_SETTINGS.appearance, isDark)
 
-  const renderWidget = (key: keyof NewTabWidgets): React.ReactNode => {
+  const dateText = (style: string): string => {
+    if (style === 'short') return now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+    if (style === 'numeric') return now.toLocaleDateString()
+    return now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })
+  }
+
+  const renderWidget = (key: WidgetKey, style: string): React.ReactNode => {
     switch (key) {
       case 'clock':
-        return <SlidingClock time={time} />
+        return <SlidingClock time={time} className={`clock-${style}`} />
       case 'date':
-        return <div className="date">{date}</div>
+        return <div className="date">{dateText(style)}</div>
       case 'greeting':
-        return <div className="brief-line greet">{greeting(now.getHours())}.</div>
+        return <div className={style === 'plain' ? 'greet-plain' : 'brief-line greet'}>{greeting(now.getHours())}.</div>
       case 'weather':
         return weather ? (
-          <WeatherNow weather={weather} />
+          <WeatherNow weather={weather} style={style} />
         ) : editing ? (
           <div className="widget-line dim">Weather{hasLocation ? '…' : ' — set a location in Settings'}</div>
         ) : null
@@ -198,7 +268,7 @@ function App(): React.JSX.Element {
             ☀️ {weather.sunrise} → 🌙 {weather.sunset}
           </div>
         ) : editing ? (
-          <div className="widget-line dim">Sunrise & sunset</div>
+          <div className="widget-line dim">Sunrise &amp; sunset</div>
         ) : null
       case 'moon':
         return (
@@ -209,21 +279,93 @@ function App(): React.JSX.Element {
     }
   }
 
-  const commitOrder = (): void => {
-    if (previewOrder) patch({ newTabWidgetOrder: previewOrder })
-    setDragKey(null)
-    setPreviewOrder(null)
+  // ---- pointer drag: vertical position reorders, horizontal places ----
+
+  const onWidgetPointerDown = (e: React.PointerEvent, key: WidgetKey): void => {
+    if (!editing) return
+    if ((e.target as HTMLElement).closest('.widget-remove, .style-strip')) return
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    dragStart.current = { x: e.clientX, y: e.clientY, moved: false }
+    setDrag({ key, dx: 0, dy: 0 })
+    setPreviewOrder(order)
+    setPreviewAlign(layoutFor(key).align)
   }
 
-  const removeWidget = (key: keyof NewTabWidgets): void => {
+  const onWidgetPointerMove = (e: React.PointerEvent, key: WidgetKey): void => {
+    const start = dragStart.current
+    if (!start || !drag || drag.key !== key) return
+    const dx = e.clientX - start.x
+    const dy = e.clientY - start.y
+    if (!start.moved && Math.hypot(dx, dy) > 4) start.moved = true
+    setDrag({ key, dx, dy })
+
+    // horizontal thirds of the row decide where the widget lives
+    const rect = centerRef.current?.getBoundingClientRect()
+    if (rect && rect.width > 0) {
+      const t = (e.clientX - rect.left) / rect.width
+      setPreviewAlign(t < 0.34 ? 'left' : t > 0.66 ? 'right' : 'center')
+    }
+
+    // insertion point = how many other widgets sit above the pointer
+    const others = enabledKeys.filter((k) => k !== key)
+    let insertAt = 0
+    for (const k of others) {
+      const el = slotRefs.current.get(k)
+      if (!el) continue
+      const r = el.getBoundingClientRect()
+      if (e.clientY > r.top + r.height / 2) insertAt++
+    }
+    const next = [...others]
+    next.splice(insertAt, 0, key)
+    setPreviewOrder([...next, ...fullOrder.filter((k) => !next.includes(k))])
+  }
+
+  const endDrag = (): void => {
+    setDrag(null)
+    setPreviewOrder(null)
+    setPreviewAlign(null)
+  }
+
+  const onWidgetPointerUp = (e: React.PointerEvent, key: WidgetKey): void => {
+    const start = dragStart.current
+    dragStart.current = null
+    try {
+      ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+    } catch {
+      /* pointer already released */
+    }
+    if (!start) return
+    if (!start.moved) {
+      // a tap, not a drag: open this widget's style strip
+      setSelected((prev) => (prev === key ? null : key))
+      endDrag()
+      return
+    }
+    patch({
+      newTabWidgetOrder: previewOrder ?? fullOrder,
+      newTabWidgetLayout: {
+        ...layout,
+        [key]: { ...layoutFor(key), align: previewAlign ?? layoutFor(key).align }
+      }
+    })
+    endDrag()
+  }
+
+  const removeWidget = (key: WidgetKey): void => {
+    if (selected === key) setSelected(null)
     patch({ newTabWidgets: { ...widgets, [key]: false } })
   }
 
-  const addWidget = (key: keyof NewTabWidgets): void => {
+  const addWidget = (key: WidgetKey): void => {
     patch({ newTabWidgets: { ...widgets, [key]: true } })
   }
 
-  // iOS-style: press and hold empty space to start editing
+  const setStyle = (key: WidgetKey, style: string): void => {
+    patch({ newTabWidgetLayout: { ...layout, [key]: { ...layoutFor(key), style } } })
+  }
+
+  // press and hold empty space to start editing, like the home screen
   const startHold = (e: React.PointerEvent): void => {
     if (editing) return
     if ((e.target as HTMLElement).closest('.widget-slot, .we-done, .we-tray')) return
@@ -239,81 +381,109 @@ function App(): React.JSX.Element {
   return (
     <div
       className={`start ${editing ? 'editing' : ''}`}
-      style={{
-        background: `linear-gradient(180deg, ${acc.tintTop} 0%, ${acc.tintBottom} 100%)`
-      }}
+      style={{ background: `linear-gradient(180deg, ${acc.tintTop} 0%, ${acc.tintBottom} 100%)` }}
       onPointerDown={startHold}
       onPointerUp={cancelHold}
       onPointerMove={cancelHold}
       onPointerLeave={cancelHold}
     >
-      {editing && (
-        <button className="we-done" onClick={() => setEditing(false)}>
-          Done
-        </button>
-      )}
+      {/* the edit chrome stays mounted and fades — mounting it on the click
+          makes entering and leaving edit mode snap, which reads cheap */}
+      <button
+        className={`we-done ${editing ? 'on' : ''}`}
+        tabIndex={editing ? 0 : -1}
+        aria-hidden={!editing}
+        onClick={() => {
+          setEditing(false)
+          setSelected(null)
+        }}
+      >
+        Done
+      </button>
 
-      <div className="start-center">
+      <div className="start-center" ref={centerRef}>
         {enabledKeys.length === 0 && editing && (
           <div className="widget-line dim">A perfectly calm, blank page. Add something below.</div>
         )}
         {enabledKeys.map((key, i) => {
-          const inner = renderWidget(key)
+          const conf = layoutFor(key)
+          const align = drag?.key === key && previewAlign ? previewAlign : conf.align
+          const style = conf.style ?? DEFAULT_STYLE[key]
+          const inner = renderWidget(key, style)
           if (!inner) return null
+          const dragging = drag?.key === key
+          const styles = WIDGET_STYLES[key]
           return (
             <div
               key={key}
-              className={`widget-slot ${editing ? 'jiggle' : ''} ${dragKey === key ? 'dragging' : ''}`}
-              style={editing ? { animationDelay: `${(i % 3) * -0.09}s` } : undefined}
-              draggable={editing}
-              onDragStart={(e) => {
-                setDragKey(key)
-                setPreviewOrder(order)
-                e.dataTransfer.effectAllowed = 'move'
+              ref={(el) => {
+                if (el) slotRefs.current.set(key, el)
+                else slotRefs.current.delete(key)
               }}
-              onDragOver={(e) => {
-                if (!dragKey || dragKey === key) return
-                e.preventDefault()
-                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                const before = e.clientY < rect.top + rect.height / 2
-                setPreviewOrder((prev) => {
-                  const cur = [...(prev ?? order)]
-                  const from = cur.indexOf(dragKey)
-                  let to = cur.indexOf(key)
-                  if (from === -1 || to === -1) return cur
-                  cur.splice(from, 1)
-                  to = cur.indexOf(key)
-                  cur.splice(before ? to : to + 1, 0, dragKey)
-                  return cur
-                })
-              }}
-              onDragEnd={commitOrder}
-              onDrop={(e) => {
-                e.preventDefault()
-                commitOrder()
+              className={`widget-slot align-${align} ${editing ? 'editable' : ''} ${dragging ? 'dragging' : ''} ${
+                selected === key ? 'selected' : ''
+              }`}
+              style={dragging ? { transform: `translate(${drag.dx}px, ${drag.dy}px)`, zIndex: 5 } : undefined}
+              onPointerDown={(e) => onWidgetPointerDown(e, key)}
+              onPointerMove={(e) => onWidgetPointerMove(e, key)}
+              onPointerUp={(e) => onWidgetPointerUp(e, key)}
+              onPointerCancel={() => {
+                dragStart.current = null
+                endDrag()
               }}
             >
-              {editing && (
-                <button className="widget-remove" title={`Remove ${WIDGET_LABELS[key]}`} onClick={() => removeWidget(key)}>
-                  −
-                </button>
+              <button
+                className="widget-remove"
+                title={`Remove ${WIDGET_LABELS[key]}`}
+                tabIndex={editing ? 0 : -1}
+                aria-hidden={!editing}
+                style={editing ? { transitionDelay: `${Math.min(i, 5) * 22}ms` } : undefined}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => removeWidget(key)}
+              >
+                −
+              </button>
+              <div
+                className={`widget-inner ${editing && !dragging ? 'jiggle' : ''}`}
+                style={editing && !dragging ? { animationDelay: `${(i % 3) * -0.14}s` } : undefined}
+              >
+                {inner}
+              </div>
+              {editing && selected === key && styles && (
+                <div className="style-strip" onPointerDown={(e) => e.stopPropagation()}>
+                  {styles.map((s) => (
+                    <button
+                      key={s.id}
+                      className={`style-chip ${style === s.id ? 'on' : ''}`}
+                      onClick={() => setStyle(key, s.id)}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
               )}
-              {inner}
             </div>
           )
         })}
       </div>
 
-      {editing && availableKeys.length > 0 && (
-        <div className="we-tray">
-          {availableKeys.map((key) => (
-            <button key={key} className="we-tray-add" onClick={() => addWidget(key)}>
+      <div className={`we-tray ${editing ? 'on' : ''}`} aria-hidden={!editing}>
+        {availableKeys.length > 0 ? (
+          availableKeys.map((key) => (
+            <button
+              key={key}
+              className="we-tray-add"
+              tabIndex={editing ? 0 : -1}
+              onClick={() => addWidget(key)}
+            >
               <span className="we-tray-badge">+</span>
               {WIDGET_LABELS[key]}
             </button>
-          ))}
-        </div>
-      )}
+          ))
+        ) : (
+          <span className="we-tray-hint">Drag to move · tap a widget for its styles</span>
+        )}
+      </div>
 
       {settings.appearance?.waves !== false &&
         (settings.appearance?.waveStyle === 'classic' ? (

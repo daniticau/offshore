@@ -29,6 +29,10 @@ body,
   --omnibox-h: 36px;
   --btn-h: 28px;
   --tab-gap: 3px;
+  --tab-btn: 22px;
+  --tab-icon: 16px;
+  /* the new-tab row belongs to the tab list — equal air above and below it */
+  --tab-list-gap: 4px;
   --section-gap: 8px;
   --traffic-h: 44px;
   --font-chrome: 13px;
@@ -53,6 +57,8 @@ body,
   --omnibox-h: 31px;
   --btn-h: 26px;
   --tab-gap: 2px;
+  --tab-btn: 20px;
+  --tab-icon: 15px;
   --section-gap: 6px;
   --traffic-h: 38px;
   --font-chrome: 12.5px;
@@ -174,12 +180,25 @@ body,
   align-items: center;
   justify-content: center;
 }
+/* The search pill sits dead centre; the widgets hang above it, out of flow,
+   so growing the pill never shifts the clock. */
 .eh-center {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  transform: translateY(-6vh);
+  width: 100%;
   z-index: 2;
+}
+.eh-widgets {
+  position: absolute;
+  bottom: calc(100% + 46px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  white-space: nowrap;
 }
 .eh-clock {
   font-family: var(--font-display);
@@ -195,34 +214,48 @@ body,
   color: var(--ink-soft);
 }
 .eh-search {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: min(520px, 70%);
-  min-width: 260px;
-  height: 44px;
-  margin-top: 26px;
-  padding: 0 16px;
+  gap: 12px;
+  width: min(600px, 68%);
+  min-width: 280px;
+  height: 56px;
+  padding: 0 22px;
   border: 0.5px solid var(--glass-border);
-  border-radius: 22px;
+  border-radius: 28px;
   background: var(--surface);
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
     var(--shadow-soft);
   color: var(--accent-strong);
+  transition: width var(--dur-slow) var(--ease-out);
 }
 .eh-search input {
   flex: 1;
+  min-width: 0;
   border: none;
   outline: none;
   background: transparent;
   color: var(--ink);
   font-family: inherit;
-  font-size: 15px;
+  font-size: 17px;
   user-select: text;
 }
 .eh-search input::placeholder {
   color: var(--ink-faint);
+  opacity: 0.5;
+}
+/* invisible twin of the input — its width is what the pill grows to */
+.eh-measure {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+  font-family: inherit;
+  font-size: 17px;
 }
 .empty-home .waves-host,
 .empty-home .classic-waves {
@@ -400,6 +433,10 @@ body,
   width: 100%;
   height: calc(var(--row-h) - 2px);
   padding: 0 10px;
+  /* the sidebar's section gap would leave the first tab further away than the
+     row above — pull both sides back to the same small --tab-list-gap */
+  margin-top: calc(var(--tab-list-gap) - var(--section-gap));
+  margin-bottom: calc(var(--tab-list-gap) - var(--section-gap));
   border: none;
   border-radius: var(--radius-row);
   background: transparent;
@@ -424,7 +461,7 @@ body,
   overflow-y: auto;
   overflow-x: hidden;
   margin: 0 -4px;
-  padding: 2px 4px;
+  padding: 0 4px 2px;
 }
 .tab-list::-webkit-scrollbar {
   width: 5px;
@@ -435,16 +472,46 @@ body,
   align-items: center;
   gap: 8px;
   height: var(--row-h);
-  padding: 0 8px 0 10px;
+  /* trailing padding is tighter than the leading one so the close button's own
+     box lands flush in the row instead of floating away from the right edge */
+  padding: 0 5px 0 10px;
   border-radius: var(--radius-row);
   font-size: var(--font-chrome);
   flex-shrink: 0;
+  overflow: hidden;
   transition:
     background var(--dur) var(--ease-out),
     box-shadow var(--dur) var(--ease-out);
 }
 .tab-item:hover {
   background: var(--hover);
+}
+
+/* a new tab unrolls instead of appearing; a closed one rolls up before it goes */
+@keyframes tab-item-in {
+  from {
+    height: 0;
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    height: var(--row-h);
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.tab-item.entering {
+  animation: tab-item-in 150ms var(--ease-out);
+}
+.tab-item.closing {
+  height: 0;
+  opacity: 0;
+  margin-bottom: calc(-1 * var(--tab-gap));
+  pointer-events: none;
+  transition:
+    height 110ms var(--ease-out),
+    margin-bottom 110ms var(--ease-out),
+    opacity 90ms var(--ease-out);
 }
 .tab-item.active {
   background: var(--active-row);
@@ -456,19 +523,22 @@ body,
   opacity: 0.5;
 }
 
+/* Favicons arrive at every size and aspect ratio: one square box, contained,
+   so a wide logo never stretches and a small one never sits off-centre. */
 .tab-favicon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: var(--tab-icon);
+  height: var(--tab-icon);
   flex-shrink: 0;
   color: var(--accent);
 }
 .tab-favicon img {
-  width: 15px;
-  height: 15px;
-  border-radius: 4px;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 3px;
 }
 
 .tab-title {
@@ -483,8 +553,8 @@ body,
 .tab-close {
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: var(--tab-btn);
+  height: var(--tab-btn);
   border: none;
   border-radius: var(--radius-xs);
   background: transparent;
@@ -497,13 +567,21 @@ body,
 }
 .tab-close {
   display: inline-flex;
-  visibility: hidden;
+  opacity: 0;
+  transform: scale(0.82);
+  pointer-events: none;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    background var(--dur) var(--ease-out);
 }
 .tab-item:hover .tab-close,
 .tab-item.active .tab-close,
 .htab:hover .tab-close,
 .htab.active .tab-close {
-  visibility: visible;
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
 }
 .tab-close:hover,
 .tab-audio:hover {
@@ -1065,7 +1143,7 @@ browser-action-list {
   align-items: center;
   gap: 7px;
   height: var(--htab-h);
-  padding: 0 9px;
+  padding: 0 5px 0 9px;
   /* Helium-style: every tab the same width; hover and new tabs never resize
      neighbours — they only shrink together once the strip overflows. */
   width: 190px;

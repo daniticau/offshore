@@ -412,18 +412,55 @@ function useDragReorder(ids: number[]): {
 
 // ---------------- tab items ----------------
 
+/** Arc-quick tab motion: a genuinely new tab slides open, a closing one collapses
+ * before the real close lands, so rows never blink in or out of existence.
+ * Space switches must not replay the entrance — hence the id diff, not a mount flag. */
+function useTabMotion(tabsState: TabsState): {
+  entering: (id: number) => boolean
+  closing: (id: number) => boolean
+  closeAnimated: (id: number) => void
+} {
+  const [closingIds, setClosingIds] = useState<Set<number>>(new Set())
+  const allIds = tabsState.tabs.map((t) => t.id)
+  const prevAllIds = useRef<Set<number>>(new Set(allIds))
+  const enteringIds = new Set(allIds.filter((id) => !prevAllIds.current.has(id)))
+  useEffect(() => {
+    prevAllIds.current = new Set(allIds)
+  })
+
+  return {
+    entering: (id) => enteringIds.has(id),
+    closing: (id) => closingIds.has(id),
+    closeAnimated: (id) => {
+      setClosingIds((prev) => new Set(prev).add(id))
+      setTimeout(() => {
+        void offshore.tabs.close(id)
+        setClosingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+      }, 110)
+    }
+  }
+}
+
 function TabItemVertical({
   tab,
   active,
-  drag
+  drag,
+  motion
 }: {
   tab: TabInfo
   active: boolean
   drag: ReturnType<typeof useDragReorder>
+  motion: ReturnType<typeof useTabMotion>
 }): React.JSX.Element {
   return (
     <div
-      className={`tab-item ${active ? 'active' : ''} ${drag.dragId === tab.id ? 'dragging' : ''}`}
+      className={`tab-item ${active ? 'active' : ''} ${drag.dragId === tab.id ? 'dragging' : ''} ${
+        motion.closing(tab.id) ? 'closing' : ''
+      } ${motion.entering(tab.id) ? 'entering' : ''}`}
       draggable
       onDragStart={(e) => drag.onDragStart(e, tab.id)}
       onDragOver={(e) => drag.onDragOver(e, tab.id)}
@@ -431,7 +468,7 @@ function TabItemVertical({
       onDrop={drag.onDrop}
       onClick={() => void offshore.tabs.activate(tab.id)}
       onAuxClick={(e) => {
-        if (e.button === 1) void offshore.tabs.close(tab.id)
+        if (e.button === 1) motion.closeAnimated(tab.id)
       }}
       onContextMenu={(e) => {
         e.preventDefault()
@@ -459,7 +496,7 @@ function TabItemVertical({
         className="tab-close"
         onClick={(e) => {
           e.stopPropagation()
-          void offshore.tabs.close(tab.id)
+          motion.closeAnimated(tab.id)
         }}
         title="Close tab (⌘W)"
       >
@@ -508,6 +545,7 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
   const drag = useDragReorder(spaceTabs.map((t) => t.id))
   const { dir } = useSpacePane(tabsState)
   const shown = orderedTabs(spaceTabs, drag.order)
+  const motion = useTabMotion(tabsState)
 
   return (
     <div className="sidebar drag">
@@ -553,7 +591,13 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
         style={{ '--dir': dir } as React.CSSProperties}
       >
         {shown.map((tab) => (
-          <TabItemVertical key={tab.id} tab={tab} active={tab.id === tabsState.activeTabId} drag={drag} />
+          <TabItemVertical
+            key={tab.id}
+            tab={tab}
+            active={tab.id === tabsState.activeTabId}
+            drag={drag}
+            motion={motion}
+          />
         ))}
       </div>
       <Downloads downloads={downloads} />
@@ -600,28 +644,7 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
   const drag = useDragReorder(spaceTabs.map((t) => t.id))
   const { dir } = useSpacePane(tabsState)
   const shown = orderedTabs(spaceTabs, drag.order)
-  const [closingIds, setClosingIds] = useState<Set<number>>(new Set())
-
-  // only genuinely new tabs get the slide-in — space switches must not replay it
-  const allIds = tabsState.tabs.map((t) => t.id)
-  const prevAllIds = useRef<Set<number>>(new Set(allIds))
-  const enteringIds = new Set(allIds.filter((id) => !prevAllIds.current.has(id)))
-  useEffect(() => {
-    prevAllIds.current = new Set(allIds)
-  })
-
-  // Helium-quick close: collapse the tab (120ms), then actually close it
-  const closeAnimated = (id: number): void => {
-    setClosingIds((prev) => new Set(prev).add(id))
-    setTimeout(() => {
-      void offshore.tabs.close(id)
-      setClosingIds((prev) => {
-        const next = new Set(prev)
-        next.delete(id)
-        return next
-      })
-    }, 110)
-  }
+  const motion = useTabMotion(tabsState)
 
   return (
     <div className="topbar drag">
@@ -645,7 +668,7 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
               key={tab.id}
               className={`htab ${tab.id === tabsState.activeTabId ? 'active' : ''} ${
                 drag.dragId === tab.id ? 'dragging' : ''
-              } ${closingIds.has(tab.id) ? 'closing' : ''} ${enteringIds.has(tab.id) ? 'entering' : ''}`}
+              } ${motion.closing(tab.id) ? 'closing' : ''} ${motion.entering(tab.id) ? 'entering' : ''}`}
               draggable
               onDragStart={(e) => drag.onDragStart(e, tab.id)}
               onDragOver={(e) => drag.onDragOver(e, tab.id)}
@@ -653,7 +676,7 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
               onDrop={drag.onDrop}
               onClick={() => void offshore.tabs.activate(tab.id)}
               onAuxClick={(e) => {
-                if (e.button === 1) closeAnimated(tab.id)
+                if (e.button === 1) motion.closeAnimated(tab.id)
               }}
               onContextMenu={(e) => {
                 e.preventDefault()
@@ -680,7 +703,7 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
                 className="tab-close"
                 onClick={(e) => {
                   e.stopPropagation()
-                  closeAnimated(tab.id)
+                  motion.closeAnimated(tab.id)
                 }}
               >
                 <IconClose size={10} />

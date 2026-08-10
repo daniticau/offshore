@@ -95,6 +95,14 @@ export interface NewTabWidgets {
   moon: boolean
 }
 
+export type WidgetAlign = 'left' | 'center' | 'right'
+
+/** Where a widget sits on the row, and which of its looks it wears. */
+export interface WidgetLayout {
+  align: WidgetAlign
+  style?: string
+}
+
 export interface AppearanceSettings {
   theme: ThemePref
   waves: boolean
@@ -370,6 +378,8 @@ export interface Settings {
   newTabWidgets: NewTabWidgets
   /** Vertical order of enabled widgets on the new-tab page. */
   newTabWidgetOrder: (keyof NewTabWidgets)[]
+  /** Per-widget placement + style, set by dragging in the page's edit mode. */
+  newTabWidgetLayout: Partial<Record<keyof NewTabWidgets, WidgetLayout>>
   /** Local heuristic prose analysis that flags AI-generated-looking pages. No AI involved. */
   slopDetector: boolean
   /** Pop playing video into a floating mini-player when its tab is backgrounded */
@@ -635,6 +645,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bookmarksBar: true,
   newTabWidgets: { clock: true, date: true, greeting: false, weather: false, forecast: false, sun: false, moon: false },
   newTabWidgetOrder: ['clock', 'date', 'greeting', 'weather', 'forecast', 'sun', 'moon'],
+  newTabWidgetLayout: {},
   slopDetector: true,
   autoPip: true,
   uiSounds: true,
