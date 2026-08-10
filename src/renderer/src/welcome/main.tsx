@@ -4,6 +4,7 @@ import type { NewTabWidgets, SearchEngineId, Settings, TabOrientation, ThemePref
 import { DEFAULT_SETTINGS, SEARCH_ENGINES, accentColors } from '@shared/types'
 import { playArrival, playTone } from '../chrome/sounds'
 import { DitheredWaves } from '../theme/DitheredWaves'
+import logoUrl from '../theme/offshore-logo.png'
 import { useIsDark } from '../theme/useTheme'
 import '../theme/theme.css'
 import './welcome.css'
@@ -20,21 +21,7 @@ const STEPS = 5
 function Logo(): React.JSX.Element {
   return (
     <div className="logo">
-      <svg viewBox="0 0 96 96" width="88" height="88">
-        <defs>
-          <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#a9e4f7" />
-            <stop offset="0.5" stopColor="#56b6dc" />
-            <stop offset="1" stopColor="#17719c" />
-          </linearGradient>
-        </defs>
-        <rect x="2" y="2" width="92" height="92" rx="24" fill="url(#lg)" />
-        <circle cx="66" cy="26" r="11" fill="rgba(255,255,255,0.92)" />
-        <path
-          d="M2,64 C18,50 34,50 42,58 C46,62 44,68 38,68 C42,72 52,71 57,64 C64,54 78,53 94,60 L94,94 L2,94 Z"
-          fill="rgba(255,255,255,0.88)"
-        />
-      </svg>
+      <img src={logoUrl} alt="" width={96} height={96} />
     </div>
   )
 }

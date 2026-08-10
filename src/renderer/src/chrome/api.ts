@@ -3,6 +3,7 @@ import type {
   ActionId,
   BlockedPopup,
   BookmarkNode,
+  BriefWeather,
   FindResult,
   PasswordOffer,
   Settings,
@@ -59,6 +60,7 @@ export interface OffshoreApi {
   privacy: {
     clearSite(): Promise<boolean>
   }
+  brief: { weather(): Promise<BriefWeather | null> }
   find: {
     start(text: string, opts: { findNext: boolean; forward: boolean }): Promise<void>
     stop(): Promise<void>

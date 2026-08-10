@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useRef } from 'react'
-import { disturbAt, REDUCED_MOTION, trackWaveCursor, waveTime } from './waveMouse'
+import { liftAt, REDUCED_MOTION, swirlAt, trackWaveCursor, waveTime } from './waveMouse'
 
 /**
  * Layered, near-realistic ocean swell in pure SVG — and alive: five depth
  * layers, each an organic sum-of-sines surface with a vertical gradient and a
  * foam stroke on the near water. Every layer drifts the same direction at its
- * own speed (far water slower), and the water shoves aside under the cursor —
- * a tight dip with crests piled either side, skewed into a bow wave and wake
- * when the pointer sweeps, deepest on the front layer.
+ * own speed (far water slower), and the cursor rides in the water like an
+ * object: the swell is shoved radially aside around it and piles into a soft
+ * rim, strongest on the near layers.
  * Paths are recomputed per frame; with reduced motion it renders once.
  */
 
@@ -16,6 +16,8 @@ const VIEW_W = PERIOD * 2
 const HEIGHT = 240
 /** dense enough to resolve the tight cursor disturbance without faceting */
 const SAMPLES = 240
+/** cursor influence radius, screen px */
+const CURSOR_R = 74
 
 interface Harmonic {
   k: number
@@ -57,8 +59,10 @@ interface LayerSpec {
   color: [number, number, number, number]
   /** drift speed in viewBox px/s; same sign everywhere = one direction */
   speed: number
-  /** cursor trough depth in viewBox px */
-  trough: number
+  /** how hard the cursor shoves this layer aside; 1 = full */
+  push: number
+  /** height of the rim piled around the cursor, viewBox px */
+  rim: number
   foam: boolean
 }
 
@@ -93,7 +97,8 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
         ],
         color: mix(a, b, -0.35),
         speed: 9,
-        trough: 11,
+        push: 0.4,
+        rim: 3,
         foam: false
       },
       {
@@ -105,7 +110,8 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
         ],
         color: a,
         speed: 14,
-        trough: 17,
+        push: 0.55,
+        rim: 4,
         foam: false
       },
       {
@@ -117,7 +123,8 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
         ],
         color: b,
         speed: 21,
-        trough: 24,
+        push: 0.75,
+        rim: 5.5,
         foam: true
       },
       {
@@ -129,7 +136,8 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
         ],
         color: mix(b, c, 0.55),
         speed: 30,
-        trough: 32,
+        push: 1,
+        rim: 7,
         foam: true
       },
       {
@@ -141,7 +149,8 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
         ],
         color: mix(c, [12, 30, 44, c[3] + 0.12], 0.4),
         speed: 42,
-        trough: 42,
+        push: 1.3,
+        rim: 9,
         foam: true
       }
     ]
@@ -158,12 +167,13 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
       let d = ''
       for (let i = 0; i <= SAMPLES; i++) {
         const x = (i / SAMPLES) * VIEW_W
+        // the cursor lives in screen space; the swell is shoved aside around it
+        const sx = x + drift + swirlAt(x / viewPerPx, cursor.current, CURSOR_R, layer.push) * viewPerPx
         let y = layer.base
         for (const h of layer.harmonics) {
-          y += h.amp * Math.sin((2 * Math.PI * h.k * (x + drift)) / PERIOD + h.phase)
+          y += h.amp * Math.sin((2 * Math.PI * h.k * sx) / PERIOD + h.phase)
         }
-        // the cursor disturbance lives in screen space, tight to the pointer
-        y += disturbAt(x / viewPerPx, cursor.current, layer.trough, 74, tSec)
+        y += liftAt(x / viewPerPx, cursor.current, layer.rim, CURSOR_R)
         d += i === 0 ? `M ${x.toFixed(1)} ${y.toFixed(1)}` : ` L ${x.toFixed(1)} ${y.toFixed(1)}`
       }
       return d
@@ -198,7 +208,7 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
 
   return (
     <div ref={hostRef} className="classic-waves" style={{ height }} aria-hidden>
-      <svg className="cw-svg cw-live" viewBox={`0 0 ${VIEW_W} ${HEIGHT}`} preserveAspectRatio="none">
+      <svg className="cw-svg" viewBox={`0 0 ${VIEW_W} ${HEIGHT}`} preserveAspectRatio="none">
         <defs>
           {layers.map((l, i) => {
             const [r, g, b, alpha] = l.color

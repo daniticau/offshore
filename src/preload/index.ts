@@ -77,6 +77,9 @@ const api = {
   privacy: {
     clearSite: () => invoke('privacy:clear-site')
   },
+  brief: {
+    weather: () => invoke('brief:weather')
+  },
   find: {
     start: (text: string, opts: { findNext: boolean; forward: boolean }) =>
       invoke('find:start', text, opts),

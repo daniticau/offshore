@@ -69,7 +69,9 @@ body,
   transform: translateY(-18px) scale(0.985);
 }
 
+.logo img,
 .logo svg {
+  border-radius: 26px;
   filter: drop-shadow(0 12px 26px rgba(10, 70, 96, 0.28));
   animation: bob 6s ease-in-out infinite;
 }

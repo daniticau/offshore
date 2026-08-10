@@ -7,8 +7,7 @@ import type {
   TabsState
 } from '@shared/types'
 import { DEFAULT_SETTINGS, accentColors, resolveAccentColors } from '@shared/types'
-import { ClassicWaves } from '../theme/ClassicWaves'
-import { DitheredWaves } from '../theme/DitheredWaves'
+import { HomeCanvas } from '../start/HomeCanvas'
 import { accentVars, useIsDark } from '../theme/useTheme'
 import { offshore, prettyHost } from './api'
 import { PasswordBanner } from './PasswordBanner'
@@ -73,95 +72,27 @@ function ContentFrame({ children }: { children?: React.ReactNode }): React.JSX.E
 
 /**
  * The zero-tab home screen: what the window shows when every tab is closed.
- * Clock, date, waves, and one centered search bar — typing conjures the first
- * tab. The window itself only closes when the human closes it.
+ * It is the new tab page — same component, same widgets, same settings — so
+ * editing widgets here and editing them on a new tab are one thing. Typing in
+ * the pill conjures the first tab; the window only closes when the human
+ * closes it.
  */
-function EmptyHome({ settings }: { settings: Settings }): React.JSX.Element {
-  const [now, setNow] = useState(new Date())
-  const [text, setText] = useState('')
-  const [pillWidth, setPillWidth] = useState<number | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const hostRef = useRef<HTMLDivElement>(null)
-  const mirrorRef = useRef<HTMLSpanElement>(null)
-  const isDark = useIsDark()
-
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 10_000)
-    inputRef.current?.focus()
-    return () => clearInterval(t)
-  }, [])
-
-  // The pill grows with what you type instead of scrolling the text out of
-  // sight — measured off a hidden mirror of the input, clamped to the pane.
-  const measure = useCallback(() => {
-    const mirror = mirrorRef.current
-    const host = hostRef.current
-    if (!mirror || !host) return
-    const avail = host.clientWidth
-    if (!avail) return
-    const base = Math.min(600, avail * 0.68)
-    const max = Math.max(base, Math.min(940, avail - 72))
-    const chrome = 22 * 2 + 18 + 12 + 10 // padding + icon + gap + caret slack
-    setPillWidth(Math.round(Math.min(max, Math.max(base, mirror.offsetWidth + chrome))))
-  }, [])
-
-  useLayoutEffect(measure, [measure, text])
-
-  useEffect(() => {
-    window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
-  }, [measure])
-
-  const widgets = settings.newTabWidgets ?? DEFAULT_SETTINGS.newTabWidgets
-  const acc = resolveAccentColors(settings.appearance ?? DEFAULT_SETTINGS.appearance, isDark)
-  const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  const date = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })
-
-  const submit = (): void => {
-    const q = text.trim()
-    if (!q) return
-    setText('')
-    void offshore.tabs.create(q)
-  }
-
+function EmptyHome({
+  settings,
+  onPatch
+}: {
+  settings: Settings
+  onPatch(patch: Partial<Settings>): void
+}): React.JSX.Element {
   return (
-    <div
-      ref={hostRef}
-      className="empty-home no-drag"
-      style={{ background: `linear-gradient(180deg, ${acc.tintTop} 0%, ${acc.tintBottom} 100%)` }}
-    >
-      <div className="eh-center">
-        <div className="eh-widgets">
-          {widgets.clock && <div className="eh-clock">{time}</div>}
-          {widgets.date && <div className="eh-date">{date}</div>}
-        </div>
-        <div className="eh-search" style={pillWidth ? { width: pillWidth } : undefined}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <circle cx="11" cy="11" r="7" />
-            <path d="M21 21l-4.35-4.35" />
-          </svg>
-          <input
-            ref={inputRef}
-            value={text}
-            placeholder="Search or type a URL"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && submit()}
-          />
-          <span className="eh-measure" ref={mirrorRef} aria-hidden="true">
-            {text}
-          </span>
-        </div>
-      </div>
-      {settings.appearance?.waves !== false &&
-        (settings.appearance?.waveStyle === 'classic' ? (
-          <ClassicWaves colors={[acc.waveA, acc.waveB, acc.waveC]} height={170} />
-        ) : (
-          <DitheredWaves colors={[acc.waveA, acc.waveB, acc.waveC]} height={160} />
-        ))}
-    </div>
+    <HomeCanvas
+      className="no-drag"
+      settings={settings}
+      onPatch={onPatch}
+      onSubmit={(input) => void offshore.tabs.create(input)}
+      fetchWeather={() => offshore.brief.weather()}
+      autoFocus
+    />
   )
 }
 
@@ -201,6 +132,17 @@ export function App(): React.JSX.Element {
   const mode = settings.tabOrientation
   const density = settings.toolbarDensity
   const activeTab = tabsState.tabs.find((t) => t.id === tabsState.activeTabId)
+
+  /** Optimistic settings write — main echoes it back over settings:changed. */
+  const patchSettings = useCallback((p: Partial<Settings>) => {
+    setSettings((prev) => ({
+      ...prev,
+      ...p,
+      newTabWidgets: { ...prev.newTabWidgets, ...(p.newTabWidgets ?? {}) },
+      newTabWidgetLayout: { ...prev.newTabWidgetLayout, ...(p.newTabWidgetLayout ?? {}) }
+    }))
+    void offshore.settings.set(p)
+  }, [])
 
   // ---- dynamic density: collapse / reveal choreography ----
 
@@ -578,7 +520,7 @@ export function App(): React.JSX.Element {
       {/* Rounded backdrop + shadow behind the web content view; also the insets source */}
       <ContentFrame>
         {tabsState.tabs.filter((t) => t.spaceId === tabsState.activeSpaceId).length === 0 && (
-          <EmptyHome settings={settings} />
+          <EmptyHome settings={settings} onPatch={patchSettings} />
         )}
       </ContentFrame>
 

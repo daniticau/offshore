@@ -1,16 +1,18 @@
 import React, { useEffect, useRef } from 'react'
-import { disturbAt, REDUCED_MOTION, trackWaveCursor, waveTime } from './waveMouse'
+import { liftAt, REDUCED_MOTION, swirlAt, trackWaveCursor, waveTime } from './waveMouse'
 
 /**
  * Chunky retro waves, now fully live: three bands rendered every frame on one
  * small canvas (Bayer-dithered, pixelated upscale). All bands drift the same
- * direction at different speeds, deeper water darker and denser — and the water
- * shoves aside under the cursor, each band carving a tight dip with crests
- * piled either side and a wake when the pointer sweeps (front band deepest).
+ * direction at different speeds, deeper water darker and denser — and the
+ * cursor rides in the water like an object, each band shoved radially aside
+ * around it and piled into a soft rim (front band most).
  * Everything is deterministic math; with reduced motion it renders once.
  */
 
 const CELL = 4
+/** cursor influence radius, screen px */
+const CURSOR_R = 66
 const BAYER = [
   [0, 8, 2, 10],
   [12, 4, 14, 6],
@@ -36,8 +38,10 @@ interface Band {
   harmonics: { k: number; amp: number; phase: number }[]
   /** drift speed, cells per second (same sign = same direction) */
   speed: number
-  /** cursor trough depth, cells */
-  trough: number
+  /** how hard the cursor shoves this band aside; 1 = full */
+  push: number
+  /** height of the rim piled around the cursor, cells */
+  rim: number
   foam: boolean
 }
 
@@ -47,7 +51,8 @@ function buildBands(colors: [string, string, string], H: number): Band[] {
       color: colors[0],
       base: 0.38,
       speed: 2.2,
-      trough: H * 0.13,
+      push: 0.5,
+      rim: H * 0.03,
       foam: false,
       harmonics: [
         { k: 2, amp: 0.095, phase: 0.6 },
@@ -59,7 +64,8 @@ function buildBands(colors: [string, string, string], H: number): Band[] {
       color: colors[1],
       base: 0.56,
       speed: 3.6,
-      trough: H * 0.2,
+      push: 0.8,
+      rim: H * 0.045,
       foam: true,
       harmonics: [
         { k: 3, amp: 0.105, phase: 2.4 },
@@ -71,7 +77,8 @@ function buildBands(colors: [string, string, string], H: number): Band[] {
       color: colors[2],
       base: 0.73,
       speed: 5.4,
-      trough: H * 0.3,
+      push: 1.15,
+      rim: H * 0.062,
       foam: true,
       harmonics: [
         { k: 4, amp: 0.09, phase: 4.1 },
@@ -92,7 +99,8 @@ function buildBands(colors: [string, string, string], H: number): Band[] {
       base: d.base * H,
       harmonics: d.harmonics.map((h) => ({ k: h.k, amp: h.amp * H, phase: h.phase })),
       speed: d.speed,
-      trough: d.trough,
+      push: d.push,
+      rim: d.rim,
       foam: d.foam
     }
   })
@@ -150,15 +158,15 @@ export function DitheredWaves({ colors, height = 190, className }: DitheredWaves
         const [fr, fg, fb] = band.foamRgb
         const drift = tSec * band.speed
         for (let x = 0; x < W; x++) {
-          // sample the surface in drifting pattern space; the cursor trough
-          // lives in screen space so the water parts under the pointer
-          const px = x + drift
+          // sample the surface in drifting pattern space; the cursor lives in
+          // screen px, so the water is shoved aside around the pointer
+          const sx = x * CELL
+          const px = x + drift + swirlAt(sx, cursor.current, CURSOR_R, band.push) / CELL
           let y0 = band.base
           for (const h of band.harmonics) {
             y0 += h.amp * Math.sin((2 * Math.PI * h.k * px) / W + h.phase)
           }
-          // cursor lives in screen px, the surface in cells
-          y0 += disturbAt(x * CELL, cursor.current, band.trough, 70, tSec)
+          y0 += liftAt(sx, cursor.current, band.rim, CURSOR_R)
           for (let y = 0; y < H; y++) {
             const d = y - y0
             const threshold = (BAYER[y % 4][x % 4] + 0.5) / 16
@@ -221,7 +229,7 @@ export function DitheredWaves({ colors, height = 190, className }: DitheredWaves
 
   return (
     <div ref={hostRef} className={`waves-host ${className ?? ''}`} style={{ height }} aria-hidden>
-      <canvas ref={canvasRef} className="waves-canvas waves-live" />
+      <canvas ref={canvasRef} className="waves-canvas" />
     </div>
   )
 }

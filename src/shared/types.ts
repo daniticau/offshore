@@ -643,7 +643,9 @@ export const DEFAULT_SETTINGS: Settings = {
   restoreSession: true,
   keepHistory: false,
   bookmarksBar: true,
-  newTabWidgets: { clock: true, date: true, greeting: false, weather: false, forecast: false, sun: false, moon: false },
+  // Out of the box the home screen is the time, the search pill, and nothing
+  // else. Every other widget is one press-and-hold away.
+  newTabWidgets: { clock: true, date: false, greeting: false, weather: false, forecast: false, sun: false, moon: false },
   newTabWidgetOrder: ['clock', 'date', 'greeting', 'weather', 'forecast', 'sun', 'moon'],
   newTabWidgetLayout: {},
   slopDetector: true,

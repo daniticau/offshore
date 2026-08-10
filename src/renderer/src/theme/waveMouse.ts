@@ -1,8 +1,10 @@
 /**
- * Shared cursor state for the interactive waves. The pointer shoves the water
- * around rather than merely bending it: a tight core is pushed down right under
- * the cursor, the displaced water piles into crests just either side, and
- * movement skews the whole thing — a bow wave ahead, a rippling wake behind.
+ * Shared cursor state for the interactive waves. The pointer behaves like an
+ * object sitting in the water: it shoves the surface radially outward — the
+ * swell stretches away on both sides and piles into a soft rim — rather than
+ * denting the water downward. The displacement depends only on where the
+ * cursor is, never on how fast it moves, so sweeping side to side slides the
+ * same shape along instead of bobbing the water level.
  * Renderers read `current` every frame; values are already smoothed here so
  * both wave styles feel identical.
  */
@@ -11,8 +13,6 @@ export interface WaveCursor {
   x: number
   /** 0 = far away, 1 = at/inside the water */
   strength: number
-  /** smoothed horizontal pointer velocity, px/s (signed) */
-  vx: number
 }
 
 /**
@@ -23,26 +23,19 @@ export interface WaveCursor {
 export const waveTime = (): number => performance.now() / 1000
 
 export function trackWaveCursor(host: HTMLElement): { current: WaveCursor; detach: () => void } {
-  const current: WaveCursor = { x: -10_000, strength: 0, vx: 0 }
-  const target: WaveCursor = { x: -10_000, strength: 0, vx: 0 }
+  const current: WaveCursor = { x: -10_000, strength: 0 }
+  const target: WaveCursor = { x: -10_000, strength: 0 }
   let seeded = false
-  let lastX = 0
-  let lastT = 0
   let raf = 0
 
   const onMove = (e: MouseEvent): void => {
     const r = host.getBoundingClientRect()
     if (r.height === 0) return
     const x = e.clientX - r.left
-    if (seeded && e.timeStamp > lastT) {
-      const v = ((x - lastX) / (e.timeStamp - lastT)) * 1000
-      target.vx = Math.max(-2200, Math.min(2200, v))
-    } else {
+    if (!seeded) {
       current.x = x
       seeded = true
     }
-    lastX = x
-    lastT = e.timeStamp
     target.x = x
     const d = e.clientY - r.top
     // approaching from above ramps in over ~120px; inside the water = full
@@ -50,14 +43,11 @@ export function trackWaveCursor(host: HTMLElement): { current: WaveCursor; detac
   }
   const onLeave = (): void => {
     target.strength = 0
-    target.vx = 0
   }
   const tick = (): void => {
     // tight tracking: the disturbance sits on the cursor, not trailing it
     current.x += (target.x - current.x) * 0.4
     current.strength += (target.strength - current.strength) * 0.16
-    current.vx += (target.vx - current.vx) * 0.25
-    target.vx *= 0.9 // momentum bleeds off once the pointer stops
     raf = requestAnimationFrame(tick)
   }
 
@@ -75,31 +65,34 @@ export function trackWaveCursor(host: HTMLElement): { current: WaveCursor; detac
 }
 
 /**
- * Surface displacement under the cursor, in the same units as `depth` (+y is
- * down, so a positive result digs the water down). `radius` is the core width
- * in px; the kernel has compact support at ~3.5x that, so there is no wide
- * soft halo — the effect stays local to the pointer.
+ * Horizontal shove, px. The surface pattern is sampled at `x + swirlAt(x)`, so
+ * the water flows radially away from the pointer on both sides — crests stretch
+ * and lean around it the way they would around something actually sitting in
+ * the swell. Odd in (x - cursor.x), so it never raises or lowers the water
+ * level; `radius` sets the core width and the kernel dies out by ~3x that.
  */
-export function disturbAt(
-  x: number,
-  cursor: WaveCursor,
-  depth: number,
-  radius: number,
-  tSec: number
-): number {
+export function swirlAt(x: number, cursor: WaveCursor, radius: number, scale = 1): number {
   const s = cursor.strength
   if (s <= 0.001) return 0
   const r = (x - cursor.x) / radius
-  if (r < -3.5 || r > 3.5) return 0
-  const g = Math.exp(-1.7 * r * r)
-  // Mexican hat: a dip in the core, water piled into crests at |r| ~ 1
-  const core = (1 - 1.55 * r * r) * g
-  // sweeping the pointer pushes a bow wave ahead and hollows out behind it
-  const push = Math.max(-1, Math.min(1, cursor.vx / 900))
-  const bow = -1.5 * r * g * push
-  // ripples riding out of the wake, fading as the pointer settles
-  const wake = Math.sin(5.2 * r - tSec * 6.5) * g * Math.abs(push) * 0.32
-  return s * depth * (core + bow + wake)
+  if (r < -3 || r > 3) return 0
+  // capped below 1: at 1 the shove cancels dx/dx and the surface folds over
+  const k = Math.min(0.72, 0.5 * scale)
+  return -s * k * radius * r * Math.exp(-1.1 * r * r)
+}
+
+/**
+ * The rim of water the pointer pushes up around itself, in the same units as
+ * `amount` (+y is down, so this returns negative — the surface lifts). Zero at
+ * the cursor and zero far away: a ring, not a dent.
+ */
+export function liftAt(x: number, cursor: WaveCursor, amount: number, radius: number): number {
+  const s = cursor.strength
+  if (s <= 0.001) return 0
+  const r = (x - cursor.x) / radius
+  if (r < -3 || r > 3) return 0
+  // peaks at |r| ~ 0.79, normalised so the crest reaches exactly `amount`
+  return -s * amount * 4.35 * r * r * Math.exp(-1.6 * r * r)
 }
 
 export const REDUCED_MOTION = (): boolean =>

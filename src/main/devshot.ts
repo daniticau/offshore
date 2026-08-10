@@ -326,7 +326,7 @@ function setupTestFlows(): void {
       check('zero tabs is allowed', w.tabs.tabs.length === 0, `tabs=${w.tabs.tabs.length}`)
       const eh: string = await w.win.webContents
         .executeJavaScript(
-          `JSON.stringify({home: !!document.querySelector('.empty-home'), search: !!document.querySelector('.eh-search input')})`
+          `JSON.stringify({home: !!document.querySelector('.start'), search: !!document.querySelector('.start-search input')})`
         )
         .catch((e) => `err: ${e}`)
       say(`[flowtest] empty home: ${eh}`)
