@@ -924,7 +924,7 @@ export class TabManager {
     if (toDisplayUrl(wc.getURL()) === 'offshore://start') {
       add({
         label: 'Edit Widgets…',
-        click: () => this.createTab(internalPageUrl('settings') + '#newtab')
+        click: () => wc.send('widgets:edit')
       })
       add({ type: 'separator' })
     }

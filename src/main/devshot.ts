@@ -270,6 +270,30 @@ function setupTestFlows(): void {
       return
     }
 
+    if (flow === 'widgets') {
+      const tab = w.tabs.activeTab!
+      await delay(1500)
+      tab.wc.send('widgets:edit')
+      await delay(800)
+      const d: string = await tab.wc
+        .executeJavaScript(
+          `JSON.stringify({
+             done: !!document.querySelector('.we-done'),
+             tray: document.querySelectorAll('.we-tray-add').length,
+             jiggling: document.querySelectorAll('.jiggle').length,
+             removers: document.querySelectorAll('.widget-remove').length
+           })`
+        )
+        .catch((e) => `err: ${e}`)
+      say(`[flowtest] edit mode: ${d}`)
+      check('Done button shows', d.includes('"done":true'), d)
+      check('add tray lists available widgets', /"tray":[1-9]/.test(d))
+      check('widgets jiggle with remove badges', /"jiggling":[1-9]/.test(d) && /"removers":[1-9]/.test(d))
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
     if (flow === 'lasttab') {
       const before = BrowserWindow.getAllWindows().length
       const only = w.tabs.activeTab!

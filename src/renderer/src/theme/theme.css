@@ -298,7 +298,8 @@ select {
 
 @media (prefers-reduced-motion: reduce) {
   .waves-canvas,
-  .cw-layer {
+  .cw-layer,
+  .jiggle {
     animation: none;
   }
   * {

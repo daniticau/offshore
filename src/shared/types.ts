@@ -368,6 +368,8 @@ export interface Settings {
   bookmarksBar: boolean
   /** What the new-tab page shows. Time and date by default; the rest is opt-in. */
   newTabWidgets: NewTabWidgets
+  /** Vertical order of enabled widgets on the new-tab page. */
+  newTabWidgetOrder: (keyof NewTabWidgets)[]
   /** Local heuristic prose analysis that flags AI-generated-looking pages. No AI involved. */
   slopDetector: boolean
   /** Pop playing video into a floating mini-player when its tab is backgrounded */
@@ -632,6 +634,7 @@ export const DEFAULT_SETTINGS: Settings = {
   keepHistory: false,
   bookmarksBar: true,
   newTabWidgets: { clock: true, date: true, greeting: false, weather: false, forecast: false, sun: false, moon: false },
+  newTabWidgetOrder: ['clock', 'date', 'greeting', 'weather', 'forecast', 'sun', 'moon'],
   slopDetector: true,
   autoPip: true,
   uiSounds: true,

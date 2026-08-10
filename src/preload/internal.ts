@@ -73,7 +73,11 @@ const api = {
   app: {
     info: () => invoke('app:info')
   },
-  open: (url: string) => invoke('internal:open', url)
+  open: (url: string) => invoke('internal:open', url),
+  /** Fires when the chrome asks the new-tab page to enter widget edit mode. */
+  onEditWidgets: (cb: () => void) => {
+    ipcRenderer.on('widgets:edit', () => cb())
+  }
 }
 
 if (isInternalDocument()) {
