@@ -124,3 +124,97 @@ export const IconSidebar = svg(
     <path d="M9.5 4v16" />
   </>
 )
+export const IconFolder = svg(
+  <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+)
+export const IconChevron = svg(<path d="M9 6l6 6-6 6" />)
+export const IconBookmarkTray = svg(
+  <>
+    <path d="M7 3h10a1 1 0 0 1 1 1v16l-6-4-6 4V4a1 1 0 0 1 1-1z" />
+  </>
+)
+export const IconArrowUpRight = svg(
+  <>
+    <path d="M7 17L17 7" />
+    <path d="M9 7h8v8" />
+  </>
+)
+export const IconBolt = svg(<path d="M13 2L4 14h6l-1 8 9-12h-6z" />)
+export const IconKey = svg(
+  <>
+    <circle cx="8" cy="15" r="4.5" />
+    <path d="M11.2 11.8L20 3" />
+    <path d="M16.5 6.5l3 3" />
+    <path d="M14 9l2.2 2.2" />
+  </>
+)
+export const IconPopupBlocked = svg(
+  <>
+    <rect x="3" y="5" width="13" height="11" rx="2" />
+    <path d="M9 19h12" opacity="0" />
+    <rect x="11" y="10" width="10" height="9" rx="2" />
+  </>
+)
+export const IconFinder = svg(
+  <>
+    <path d="M3 8l9-5 9 5" />
+    <path d="M5 10v9h14v-9" />
+  </>
+)
+
+export const IconTune = svg(
+  <>
+    <path d="M4 8h10" />
+    <path d="M18 8h2" />
+    <circle cx="16" cy="8" r="2.2" />
+    <path d="M4 16h2" />
+    <path d="M10 16h10" />
+    <circle cx="8" cy="16" r="2.2" />
+  </>
+)
+export const IconMore = svg(
+  <>
+    <circle cx="12" cy="5" r="1" />
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="12" cy="19" r="1" />
+  </>
+)
+export const IconCode = svg(
+  <>
+    <path d="M8 8l-4 4 4 4" />
+    <path d="M16 8l4 4-4 4" />
+  </>
+)
+export const IconSplit = svg(
+  <>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="M12 5v14" />
+  </>
+)
+export const IconLock = svg(
+  <>
+    <rect x="5" y="11" width="14" height="9" rx="2" />
+    <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+  </>
+)
+export const IconUnlock = svg(
+  <>
+    <rect x="5" y="11" width="14" height="9" rx="2" />
+    <path d="M8 11V8a4 4 0 0 1 7.4-2" />
+  </>
+)
+
+export const IconAlert = svg(
+  <>
+    <path d="M12 3l10 18H2z" />
+    <path d="M12 10v5" />
+    <circle cx="12" cy="18" r="0.4" />
+  </>
+)
+export const IconSlop = svg(
+  <>
+    <path d="M5 13c2-2.4 4-2.4 6 0s4 2.4 6 0" />
+    <path d="M4 4l16 16" />
+    <path d="M16 5.5l0.9 2.1 2.1 0.9-2.1 0.9-0.9 2.1-0.9-2.1-2.1-0.9 2.1-0.9z" />
+  </>
+)

@@ -1,6 +1,11 @@
-import React, { useCallback, useRef, useState } from 'react'
+import React, { useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { Settings, TabOrientation } from '@shared/types'
+import type { NewTabWidgets, SearchEngineId, Settings, TabOrientation, ThemePref } from '@shared/types'
+import { DEFAULT_SETTINGS, SEARCH_ENGINES, accentColors } from '@shared/types'
+import { playArrival, playTone } from '../chrome/sounds'
+import { DitheredWaves } from '../theme/DitheredWaves'
+import { useIsDark } from '../theme/useTheme'
+import '../theme/theme.css'
 import './welcome.css'
 
 interface InternalApi {
@@ -10,37 +15,12 @@ interface InternalApi {
 
 const internal = (window as unknown as { offshoreInternal?: InternalApi }).offshoreInternal
 
-/** Soft synthesized tones — no assets, very quiet, ocean-ish. */
-function useTones() {
-  const ctxRef = useRef<AudioContext | null>(null)
-  return useCallback((step: number) => {
-    try {
-      ctxRef.current ??= new AudioContext()
-      const ctx = ctxRef.current
-      const freqs = [392, 440, 494, 523]
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      const filter = ctx.createBiquadFilter()
-      filter.type = 'lowpass'
-      filter.frequency.value = 1200
-      osc.type = 'sine'
-      osc.frequency.value = freqs[step % freqs.length]
-      gain.gain.setValueAtTime(0, ctx.currentTime)
-      gain.gain.linearRampToValueAtTime(0.08, ctx.currentTime + 0.02)
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.6)
-      osc.connect(filter).connect(gain).connect(ctx.destination)
-      osc.start()
-      osc.stop(ctx.currentTime + 0.65)
-    } catch {
-      /* sound is a garnish, never an error */
-    }
-  }, [])
-}
+const STEPS = 5
 
 function Logo(): React.JSX.Element {
   return (
     <div className="logo">
-      <svg viewBox="0 0 96 96" width="96" height="96">
+      <svg viewBox="0 0 96 96" width="88" height="88">
         <defs>
           <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
             <stop offset="0" stopColor="#a9e4f7" />
@@ -59,45 +39,53 @@ function Logo(): React.JSX.Element {
   )
 }
 
-function Waves(): React.JSX.Element {
-  return (
-    <div className="waves" aria-hidden>
-      <svg className="wave wave-back" viewBox="0 0 2880 220" preserveAspectRatio="none">
-        <path d="M0,110 C240,60 480,160 720,110 C960,60 1200,160 1440,110 C1680,60 1920,160 2160,110 C2400,60 2640,160 2880,110 L2880,220 L0,220 Z" />
-      </svg>
-      <svg className="wave wave-front" viewBox="0 0 2880 220" preserveAspectRatio="none">
-        <path d="M0,155 C240,110 480,200 720,155 C960,110 1200,200 1440,155 C1680,110 1920,200 2160,155 C2400,110 2640,200 2880,155 L2880,220 L0,220 Z" />
-      </svg>
-    </div>
-  )
-}
-
 function App(): React.JSX.Element {
   const [step, setStep] = useState(0)
   const [orientation, setOrientation] = useState<TabOrientation>('vertical')
-  const play = useTones()
+  const [engine, setEngine] = useState<SearchEngineId>(DEFAULT_SETTINGS.searchEngine)
+  const [theme, setTheme] = useState<ThemePref>('system')
+  const [widgets, setWidgets] = useState<NewTabWidgets>(DEFAULT_SETTINGS.newTabWidgets)
+  const isDark = useIsDark()
 
   const advance = (): void => {
-    play(step + 1)
-    setStep((s) => Math.min(s + 1, 2))
+    playTone(step + 1)
+    setStep((s) => Math.min(s + 1, STEPS - 1))
   }
 
-  const finish = (): void => {
-    play(2)
-    void internal?.settings
-      .set({ tabOrientation: orientation, onboarded: true })
-      .then(() => internal?.open('offshore://start'))
+  const pickTheme = (t: ThemePref): void => {
+    setTheme(t)
+    // apply immediately — the whole window retints live
+    void internal?.settings.set({ appearance: { ...DEFAULT_SETTINGS.appearance, theme: t } })
   }
+
+  const finish = (skip = false): void => {
+    if (!skip) playArrival()
+    const patch: Partial<Settings> = skip
+      ? { onboarded: true }
+      : {
+          tabOrientation: orientation,
+          searchEngine: engine,
+          appearance: { ...DEFAULT_SETTINGS.appearance, theme },
+          newTabWidgets: widgets,
+          onboarded: true
+        }
+    void internal?.settings.set(patch).then(() => internal?.open('offshore://start'))
+  }
+
+  const acc = accentColors('sea', isDark)
+
+  const slideClass = (i: number): string =>
+    `slide ${step === i ? 'active' : step > i ? 'passed' : ''}`
 
   return (
     <div className="welcome">
-      <button className="skip" onClick={finish}>
+      <button className="skip" onClick={() => finish(true)}>
         Skip
       </button>
 
       <div className={`slides step-${step}`}>
         {/* 1 — hero */}
-        <section className={`slide ${step === 0 ? 'active' : step > 0 ? 'passed' : ''}`}>
+        <section className={slideClass(0)}>
           <Logo />
           <h1 className="wordmark">Offshore</h1>
           <p className="tagline">A calm, human browser.</p>
@@ -107,7 +95,7 @@ function App(): React.JSX.Element {
         </section>
 
         {/* 2 — layout */}
-        <section className={`slide ${step === 1 ? 'active' : step > 1 ? 'passed' : ''}`}>
+        <section className={slideClass(1)}>
           <h2>Where do your tabs live?</h2>
           <p className="sub">⌘⇧B switches this any time.</p>
           <div className="layout-choices">
@@ -137,23 +125,94 @@ function App(): React.JSX.Element {
           </button>
         </section>
 
-        {/* 3 — done */}
-        <section className={`slide ${step === 2 ? 'active' : ''}`}>
-          <Logo />
+        {/* 3 — search engine */}
+        <section className={slideClass(2)}>
+          <h2>Search with…</h2>
+          <p className="sub">Change it later in Settings.</p>
+          <div className="engine-choices">
+            {(Object.keys(SEARCH_ENGINES) as SearchEngineId[]).map((id) => (
+              <button
+                key={id}
+                className={`engine-pill ${engine === id ? 'chosen' : ''}`}
+                onClick={() => setEngine(id)}
+              >
+                {SEARCH_ENGINES[id].name}
+              </button>
+            ))}
+          </div>
+          <p className="shield-note">Suggestions are always local — keystrokes never leave your Mac.</p>
+          <button className="cta" onClick={advance}>
+            Next
+          </button>
+        </section>
+
+        {/* 4 — new tab widgets */}
+        <section className={slideClass(3)}>
+          <h2>Your new tab</h2>
+          <p className="sub">Time and date are always there. Add more if you like.</p>
+          <div className="widget-choices">
+            {(
+              [
+                ['greeting', 'Greeting', 'A serif good-morning line'],
+                ['weather', 'Weather', 'Current conditions, no account'],
+                ['forecast', 'Hourly forecast', 'The hours ahead at a glance'],
+                ['sun', 'Sunrise & sunset', 'Golden-hour bookkeeping'],
+                ['moon', 'Moon phase', 'Pure math, no API']
+              ] as [keyof NewTabWidgets, string, string][]
+            ).map(([key, label, sub]) => (
+              <button
+                key={key}
+                className={`widget-card ${widgets[key] ? 'chosen' : ''}`}
+                onClick={() => setWidgets({ ...widgets, [key]: !widgets[key] })}
+              >
+                <span className="widget-name">{label}</span>
+                <span className="widget-sub">{sub}</span>
+              </button>
+            ))}
+          </div>
+          <p className="shield-note">
+            Weather needs a location — set it any time in Settings → New Tab.
+          </p>
+          <button className="cta" onClick={advance}>
+            Next
+          </button>
+        </section>
+
+        {/* 5 — done + theme */}
+        <section className={slideClass(4)}>
           <h2>You’re all set.</h2>
-          <button className="cta big" onClick={finish}>
+          <p className="sub">One more thing — pick your light.</p>
+          <div className="theme-choices">
+            {(
+              [
+                ['system', 'Auto'],
+                ['light', 'Light'],
+                ['dark', 'Dark']
+              ] as [ThemePref, string][]
+            ).map(([t, label]) => (
+              <button
+                key={t}
+                className={`theme-card theme-${t} ${theme === t ? 'chosen' : ''}`}
+                onClick={() => pickTheme(t)}
+              >
+                <span className="theme-swatch" />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+          <button className="cta big" onClick={() => finish()}>
             Start browsing
           </button>
         </section>
       </div>
 
       <div className="dots">
-        {[0, 1, 2].map((i) => (
+        {Array.from({ length: STEPS }, (_, i) => (
           <span key={i} className={`dot ${i === step ? 'on' : ''}`} />
         ))}
       </div>
 
-      <Waves />
+      <DitheredWaves colors={[acc.waveA, acc.waveB, acc.waveC]} height={220} />
     </div>
   )
 }

@@ -9,9 +9,9 @@ export function devRendererUrl(): string | undefined {
   return process.env['ELECTRON_RENDERER_URL']
 }
 
-export type InternalPage = 'start' | 'settings' | 'welcome'
+export type InternalPage = 'start' | 'settings' | 'welcome' | 'error'
 
-export const INTERNAL_PAGES: readonly InternalPage[] = ['start', 'settings', 'welcome']
+export const INTERNAL_PAGES: readonly InternalPage[] = ['start', 'settings', 'welcome', 'error']
 
 export function isInternalPage(page: string): page is InternalPage {
   return (INTERNAL_PAGES as readonly string[]).includes(page)
@@ -43,6 +43,36 @@ export function isInternalUrl(url: string): boolean {
   const dev = devRendererUrl()
   if (dev && url.startsWith(dev)) return true
   return false
+}
+
+/** Loadable URL for the themed error page. */
+export function errorPageUrl(failedUrl: string, code: number, desc: string): string {
+  const qs = `?url=${encodeURIComponent(failedUrl)}&code=${code}&desc=${encodeURIComponent(desc)}`
+  const dev = devRendererUrl()
+  if (dev) return `${dev}/error.html${qs}`
+  return `offshore://error/${qs}`
+}
+
+/** If url is our error page, return the original URL it stands in for. */
+export function errorPageTarget(url: string): string | null {
+  if (!isInternalUrl(url)) return null
+  try {
+    const u = new URL(url)
+    const isErrorPage = u.protocol === 'offshore:' ? u.hostname === 'error' : u.pathname.endsWith('/error.html')
+    if (!isErrorPage) return null
+    return u.searchParams.get('url')
+  } catch {
+    return null
+  }
+}
+
+/** If a stored/session url is an offshore:// display url, map to a loadable url. */
+export function remapInternal(url: string): string {
+  if (url.startsWith('offshore://')) {
+    const page = url.replace('offshore://', '').replace(/\/.*$/, '')
+    if (isInternalPage(page)) return internalPageUrl(page)
+  }
+  return url
 }
 
 /** Resolve what the user typed in the omnibox into a URL. */
@@ -95,9 +125,27 @@ export function prettyHost(url: string): string {
   }
 }
 
-/** Chrome-like UA: drop Electron and app tokens so sites treat us as Chrome. */
+/** Chrome-like UA: drop Electron and app tokens, and reduce the Chrome version to
+ * the frozen `.0.0.0` form real Chrome ships so we present an ordinary Chrome UA. */
 export function normalizeUserAgent(ua: string): string {
   return ua
     .replace(/\s?Electron\/[\d.]+/i, '')
     .replace(/\s?offshore\/[\d.]+/i, '')
+    .replace(/(Chrome\/\d+)\.\d+\.\d+\.\d+/i, '$1.0.0.0')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+/** The three low-entropy UA client hints Chrome sends to every secure origin.
+ * Electron drops these when the UA is overridden — their absence next to a Chrome
+ * UA is a classic bot tell (Google's "unusual traffic" page). We restore them. */
+export function clientHintHeaders(): Record<string, string> {
+  const major = (process.versions.chrome || '138').split('.')[0]
+  const platform =
+    process.platform === 'darwin' ? '"macOS"' : process.platform === 'win32' ? '"Windows"' : '"Linux"'
+  return {
+    'sec-ch-ua': `"Chromium";v="${major}", "Not)A;Brand";v="8", "Google Chrome";v="${major}"`,
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': platform
+  }
 }

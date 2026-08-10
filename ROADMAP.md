@@ -10,43 +10,59 @@ Notes from the founder (2026-08-06) — gripes with other browsers and what Offs
   app through castLabs EVS (their free VMP-signing service — requires creating an EVS account,
   then `python -m castlabs_evs.account signup` + signing in the package step). Without the
   signature Widevine refuses to initialize, so this lands with packaging, not dev builds.
-- [x] **Auto mini-player (the Arc thing).** Playing video in a tab and switching to another tab
-  pops the video into a floating bottom-right player (Chromium native picture-in-picture) with
-  play/pause and "back to tab" controls. Auto-exit when you return to the tab.
+- [x] **Auto mini-player (the Arc thing).** Probe-based (catches muted players), skips Shorts
+  and looping hero videos, races fixed.
 
-## Design & feel (from Helium / Arc)
+## Design & feel (from Helium / Arc) — landed 2026-08-06
 
-- Keep Helium's **compactness and snappiness** — chrome stays lightweight, no bloat, animations
-  under 200ms, nothing blocks the content view.
-- Arc-style **micro-animations and subtle sound effects** — tiny UI sounds (tab close, download
-  done) behind a setting, off by default until they feel right.
-- Smooth transition animation when toggling sidebar ↔ top bar tab layout.
-
-## Round 2 notes (same day, second dictation)
-
-- [x] **Appearance customizability** — waves removable, wave style (classic / dithered), accent
-  color presets. Default stays light-blue surf.
-- [x] **Onboarding** — Arc/Coast-style first-launch flow: animated, wave visuals, pick layout +
-  search engine, subtle sounds. Short and beautiful, skippable.
-- [x] **Visible bookmarks** — quick-access bookmark strip in the sidebar; manager in settings.
-- [ ] **Optional Spaces** — Arc-like spaces (named tab sets, animated switch) *as an option*,
-  while normal multi-window always works too. Both, never either/or. (v2 — real design work.)
-- [ ] **Toolbar density modes** — Helium-style options (dynamic / compact / classic). (v2)
-- [ ] **Password manager** — Arc-quality: secure vault + autofill + easy management. Honest
-  scoping: Electron does not ship Chrome's password manager, so this is a native build —
-  macOS Keychain-backed encryption via `safeStorage`, form detection/autofill, management UI
-  in settings. Until then: 1Password/Bitwarden extensions work via the Web Store today.
-- Settings philosophy: keep Helium's "cut the bullshit" simplicity as the bar.
+- [x] **Full redesign on a token system** — light + dark themes, Newsreader/Inter bundled
+  locally, dithered waves everywhere, refined padding, animations ≤200ms.
+- [x] **Toolbar density modes** — classic / compact / dynamic (auto-hiding chrome, ⌘S).
+- [x] **Arc-style micro-sounds** — synthesized, behind a setting (default on, very quiet).
+- [x] **Onboarding** — 4 steps: hero, layout, search engine, theme (live retint). Skippable,
+  re-runnable from Settings.
+- [x] **Bookmark folders** — sidebar tree with real site favicons (stored icon → the site's own
+  `/favicon.ico` → letter glyph), drag to organize, ⌘D popover with folder picker, omnibox
+  search, manager in Settings.
+- [x] **Widevine DRM** — castLabs Electron for Content Security; Netflix/Spotify playback, CDM
+  auto-installed on first launch, `drm` test flow proves the key system answers.
+- [x] **Inline omnibox** — the palette became a real toolbar input: type-ahead completion,
+  dropdown suggestions, focus lands there on every new tab; the start page keeps zero inputs.
+- [x] **AI slop detector** — deterministic prose heuristics in the page preload, 0–100 score,
+  tiny toolbar badge. The core tenet, shipped without a model.
+- [x] **Chrome-style downloads panel**, bookmarks-bar quick toggle, last-tab keeps the window,
+  live cursor-reactive waves, widget context menu, sliding clock digits.
+- [x] **Helium toolbar** — site-info popover (connection, Shield, popups, per-site data clear),
+  split view, bookmarks bar, downloads/devtools buttons, three-dots menu with everything.
+- [x] **Widget new tab** — time+date default, greeting/weather/forecast opt-in via onboarding
+  step or Settings; location prompt lives only in Settings. Realistic layered classic waves +
+  textured dithered waves.
+- [x] **Chromium-style settings** — left category nav, centered cards, plain-language Shield
+  (two switches + custom rules), accent circles + any-color picker, bookmarks bar toggle.
+- [x] **History off by default** — `keepHistory` setting, default false. Nothing recorded, no
+  history suggestions in the omnibox; switching it off clears whatever was already kept.
+- [x] **Spaces** — per-window named tab sets, animated switch (⌘⌥←/→, ⌘⌥N), per-space accent,
+  optional **separate logins** (own session partition per space — the school/home Gmail thing).
+  Normal multi-window untouched, forever.
+- [x] **Password manager** — safeStorage vault (Keychain-backed), capture + autofill with
+  per-profile account memory, Touch ID reveal, management UI in Settings.
+- [x] **Popup blocker** — gesture-tracking, per-site allowlist, blocked chip in the chrome.
+- [x] **Morning brief without AI** — shipped as the weather brief (Open-Meteo, no key, manual
+  location, quiet failure). RSS/calendar variants deliberately skipped for now.
+- [x] **Session restore v2** — all windows, spaces, profiles, bounds; v1 files migrate.
+- [x] **Security pass** — `file://` no longer trusted for privileged IPC, internal bridge only
+  exposed on Offshore's own pages, popups hardened, themed error pages.
 
 ## Ideas (non-AI by principle)
 
-- **Morning brief without AI** (Dia's brief, de-AI'd): optional start-page widgets — RSS
-  headlines from feeds the user picks, local weather, today's calendar (EventKit). All fetched
-  directly, rendered plainly, zero AI summarization. Off by default.
-- Color customization: accent color / glass tint picker (Helium-level, not Vivaldi-level).
+- RSS headlines / calendar widgets on the start page (the rest of the de-AI'd Dia brief) —
+  only if they can stay as quiet as the weather line.
+- Color customization: custom accent/glass tint picker (Helium-level, not Vivaldi-level).
+- Per-space extensions (extensions currently apply to shared-login spaces only).
+- Favicon caching for bookmarks (stored URLs can go stale).
 
 ## Explicitly rejected
 
-- Spaces/workspaces with forced window model (the Arc gripe) — Offshore keeps normal macOS
+- Spaces/workspaces with a forced window model (the Arc gripe) — Offshore keeps normal macOS
   multi-window behavior forever.
 - Any AI feature, ever. That's the whole point of the name.

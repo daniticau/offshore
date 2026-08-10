@@ -1,5 +1,5 @@
 import { Menu, app, type MenuItemConstructorOptions } from 'electron'
-import { bookmarksStore, settingsStore } from './stores'
+import { settingsStore } from './stores'
 import { internalPageUrl } from './util'
 import { createWindow, focusedOffshoreWindow, type OffshoreWindow } from './windows'
 
@@ -19,7 +19,7 @@ export function installMenu(): void {
     label: i === 8 ? 'Last Tab' : `Tab ${i + 1}`,
     accelerator: `Cmd+${i + 1}`,
     click: withActive((w) => {
-      const tabs = w.tabs.tabs
+      const tabs = w.tabs.tabsIn(w.tabs.activeSpaceId)
       const tab = i === 8 ? tabs[tabs.length - 1] : tabs[i]
       if (tab) w.tabs.activateTab(tab.id)
     })
@@ -49,8 +49,25 @@ export function installMenu(): void {
     {
       label: 'File',
       submenu: [
-        { label: 'New Tab', accelerator: 'Cmd+T', click: withActive((w) => w.tabs.createTab()) },
+        {
+          label: 'New Tab',
+          accelerator: 'Cmd+T',
+          click: withActive((w) => {
+            w.tabs.createTab()
+            // Cursor lands in the omnibox: type, hit enter, gone
+            w.win.webContents.focus()
+            w.sendToChrome('omnibox:focus')
+          })
+        },
         { label: 'New Window', accelerator: 'Cmd+N', click: () => void createWindow() },
+        {
+          label: 'New Space',
+          accelerator: 'Cmd+Alt+N',
+          click: withActive((w) => {
+            const space = w.tabs.createSpace()
+            w.sendToChrome('spaces:begin-rename', space.id)
+          })
+        },
         { type: 'separator' },
         {
           label: 'Reopen Closed Tab',
@@ -61,7 +78,10 @@ export function installMenu(): void {
         {
           label: 'Open Location…',
           accelerator: 'Cmd+L',
-          click: withActive((w) => w.sendToChrome('omnibox:focus'))
+          click: withActive((w) => {
+            w.win.webContents.focus()
+            w.sendToChrome('omnibox:focus')
+          })
         },
         { type: 'separator' },
         {
@@ -111,7 +131,12 @@ export function installMenu(): void {
         },
         { type: 'separator' },
         {
-          label: 'Toggle Tab Sidebar',
+          label: 'Toggle Sidebar',
+          accelerator: 'Cmd+S',
+          click: withActive((w) => w.sendToChrome('chrome:toggle-collapse'))
+        },
+        {
+          label: 'Switch Tab Layout',
           accelerator: 'Cmd+Shift+B',
           click: () => {
             const current = settingsStore.get().tabOrientation
@@ -175,16 +200,9 @@ export function installMenu(): void {
       label: 'Bookmarks',
       submenu: [
         {
-          label: 'Bookmark This Page',
+          label: 'Bookmark This Page…',
           accelerator: 'Cmd+D',
-          click: withActive((w) => {
-            const tab = w.tabs.activeTab
-            if (!tab) return
-            const url = tab.wc.getURL()
-            if (!url) return
-            bookmarksStore.toggle(url, tab.wc.getTitle())
-            w.tabs.pushState()
-          })
+          click: withActive((w) => w.sendToChrome('bookmarks:edit-current'))
         }
       ]
     },
@@ -205,6 +223,17 @@ export function installMenu(): void {
           click: withActive((w) => cycleTab(w, -1))
         },
         { type: 'separator' },
+        {
+          label: 'Next Space',
+          accelerator: 'Cmd+Alt+Right',
+          click: withActive((w) => w.tabs.cycleSpace(1))
+        },
+        {
+          label: 'Previous Space',
+          accelerator: 'Cmd+Alt+Left',
+          click: withActive((w) => w.tabs.cycleSpace(-1))
+        },
+        { type: 'separator' },
         ...selectTabItems,
         { type: 'separator' },
         { role: 'front' }
@@ -217,7 +246,7 @@ export function installMenu(): void {
 }
 
 function cycleTab(w: OffshoreWindow, dir: 1 | -1): void {
-  const tabs = w.tabs.tabs
+  const tabs = w.tabs.tabsIn(w.tabs.activeSpaceId)
   if (tabs.length < 2) return
   const idx = tabs.findIndex((t) => t.id === w.tabs.activeTabId)
   const next = tabs[(idx + dir + tabs.length) % tabs.length]

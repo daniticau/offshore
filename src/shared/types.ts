@@ -1,5 +1,19 @@
+// ---------------- Tabs & spaces ----------------
+
+export type SpaceProfile = 'shared' | 'separate'
+
+export interface SpaceInfo {
+  id: string
+  name: string
+  /** Optional per-space accent; undefined = follow global appearance accent */
+  accent?: AccentId
+  /** 'separate' gives the space its own cookie jar (session partition) */
+  profile: SpaceProfile
+}
+
 export interface TabInfo {
   id: number
+  spaceId: string
   url: string
   displayUrl: string
   title: string
@@ -10,16 +24,24 @@ export interface TabInfo {
   audible: boolean
   muted: boolean
   blockedCount: number
+  blockedPopups: number
   isBookmarked: boolean
+  /** 0–100 heuristic "reads like AI slop" score for the loaded page */
+  slopScore?: number
 }
 
 export interface TabsState {
   tabs: TabInfo[]
   activeTabId: number
+  spaces: SpaceInfo[]
+  activeSpaceId: string
+  /** Two tab ids sharing the content area, when split view is on */
+  splitPair: [number, number] | null
 }
 
 export type SearchEngineId = 'duckduckgo' | 'google' | 'brave' | 'startpage'
 export type TabOrientation = 'vertical' | 'horizontal'
+export type ToolbarDensity = 'classic' | 'compact' | 'dynamic'
 
 export interface AdblockSettings {
   enabled: boolean
@@ -31,6 +53,26 @@ export interface AdblockSettings {
   allowlist: string[]
 }
 
+export interface PopupSettings {
+  /** Block popups that aren't backed by a recent user gesture */
+  block: boolean
+  /** hostnames allowed to open popups freely */
+  allowlist: string[]
+}
+
+export interface PasswordSettings {
+  /** Master switch for saving prompts + autofill */
+  enabled: boolean
+}
+
+export interface BriefSettings {
+  enabled: boolean
+  locationName: string
+  lat: number | null
+  lon: number | null
+  unit: 'auto' | 'c' | 'f'
+}
+
 export interface HomeShortcut {
   title: string
   url: string
@@ -38,17 +80,35 @@ export interface HomeShortcut {
 
 export type AccentId = 'sea' | 'kelp' | 'dusk' | 'sand'
 export type WaveStyle = 'classic' | 'dithered'
+export type ThemePref = 'system' | 'light' | 'dark'
+
+export interface NewTabWidgets {
+  clock: boolean
+  date: boolean
+  greeting: boolean
+  weather: boolean
+  /** hourly strip under the weather line */
+  forecast: boolean
+  /** sunrise & sunset times (needs a location, from Open-Meteo) */
+  sun: boolean
+  /** current moon phase — pure local math, no network */
+  moon: boolean
+}
 
 export interface AppearanceSettings {
+  theme: ThemePref
   waves: boolean
   waveStyle: WaveStyle
   accent: AccentId
+  /** A custom accent hex (e.g. "#7a4de0"); when set it overrides the preset. */
+  accentCustom?: string | null
 }
 
-export interface AccentSpec {
-  name: string
-  sea: string
-  seaDeep: string
+// ---------------- Accents (light + dark) ----------------
+
+export interface AccentModeColors {
+  accent: string
+  accentStrong: string
   tintTop: string
   tintBottom: string
   waveA: string
@@ -57,109 +117,353 @@ export interface AccentSpec {
   tiles: [string, string][]
 }
 
+export interface AccentSpec {
+  name: string
+  light: AccentModeColors
+  dark: AccentModeColors
+}
+
 export const ACCENTS: Record<AccentId, AccentSpec> = {
   sea: {
     name: 'Sea',
-    sea: '#1d84ad',
-    seaDeep: '#0e6b8c',
-    tintTop: 'rgba(213,240,252,0.5)',
-    tintBottom: 'rgba(183,224,244,0.35)',
-    waveA: 'rgba(125,199,230,0.28)',
-    waveB: 'rgba(95,179,215,0.34)',
-    waveC: 'rgba(58,152,194,0.4)',
-    tiles: [
-      ['#8fd6ef', '#4aa9cf'],
-      ['#7fcbe8', '#3d95bd'],
-      ['#a3e0f2', '#5cb4d6'],
-      ['#8ed2e6', '#4d9fc4'],
-      ['#b0e4f5', '#68bcd9'],
-      ['#86cfe9', '#4299c2']
-    ]
+    light: {
+      accent: '#1d84ad',
+      accentStrong: '#0e6b8c',
+      tintTop: 'rgba(213,240,252,0.5)',
+      tintBottom: 'rgba(183,224,244,0.35)',
+      waveA: 'rgba(125,199,230,0.28)',
+      waveB: 'rgba(95,179,215,0.34)',
+      waveC: 'rgba(58,152,194,0.4)',
+      tiles: [
+        ['#8fd6ef', '#4aa9cf'],
+        ['#7fcbe8', '#3d95bd'],
+        ['#a3e0f2', '#5cb4d6'],
+        ['#8ed2e6', '#4d9fc4'],
+        ['#b0e4f5', '#68bcd9'],
+        ['#86cfe9', '#4299c2']
+      ]
+    },
+    dark: {
+      accent: '#4db2d8',
+      accentStrong: '#8fd4ec',
+      tintTop: 'rgba(14,36,50,0.55)',
+      tintBottom: 'rgba(8,22,32,0.42)',
+      waveA: 'rgba(46,118,158,0.34)',
+      waveB: 'rgba(34,96,134,0.42)',
+      waveC: 'rgba(24,76,110,0.5)',
+      tiles: [
+        ['#2f7ea6', '#175a7c'],
+        ['#2a739a', '#134f6e'],
+        ['#3689b2', '#1d6486'],
+        ['#28688c', '#114863'],
+        ['#3d95bd', '#20688a'],
+        ['#245f80', '#0e3f58']
+      ]
+    }
   },
   kelp: {
     name: 'Kelp',
-    sea: '#1d9c85',
-    seaDeep: '#0d7a67',
-    tintTop: 'rgba(214,247,238,0.5)',
-    tintBottom: 'rgba(180,236,222,0.35)',
-    waveA: 'rgba(120,214,192,0.28)',
-    waveB: 'rgba(88,196,172,0.34)',
-    waveC: 'rgba(52,168,143,0.4)',
-    tiles: [
-      ['#84dcc4', '#3daf92'],
-      ['#96e2cd', '#4bbd9f'],
-      ['#7ed5bd', '#35a487'],
-      ['#a4e7d4', '#57c4a8'],
-      ['#8bdec7', '#41b295'],
-      ['#79d2b8', '#2f9c80']
-    ]
+    light: {
+      accent: '#1d9c85',
+      accentStrong: '#0d7a67',
+      tintTop: 'rgba(214,247,238,0.5)',
+      tintBottom: 'rgba(180,236,222,0.35)',
+      waveA: 'rgba(120,214,192,0.28)',
+      waveB: 'rgba(88,196,172,0.34)',
+      waveC: 'rgba(52,168,143,0.4)',
+      tiles: [
+        ['#84dcc4', '#3daf92'],
+        ['#96e2cd', '#4bbd9f'],
+        ['#7ed5bd', '#35a487'],
+        ['#a4e7d4', '#57c4a8'],
+        ['#8bdec7', '#41b295'],
+        ['#79d2b8', '#2f9c80']
+      ]
+    },
+    dark: {
+      accent: '#3fbfa2',
+      accentStrong: '#8fe0cc',
+      tintTop: 'rgba(10,34,28,0.55)',
+      tintBottom: 'rgba(6,22,18,0.42)',
+      waveA: 'rgba(36,124,104,0.34)',
+      waveB: 'rgba(26,102,86,0.42)',
+      waveC: 'rgba(18,80,68,0.5)',
+      tiles: [
+        ['#26866e', '#145847'],
+        ['#1f7a64', '#0f4d3e'],
+        ['#2d9179', '#1a614f'],
+        ['#1a6f5a', '#0b4436'],
+        ['#339c83', '#206a57'],
+        ['#166351', '#073a2e']
+      ]
+    }
   },
   dusk: {
     name: 'Dusk',
-    sea: '#6d7fd0',
-    seaDeep: '#4d5cab',
-    tintTop: 'rgba(228,232,252,0.5)',
-    tintBottom: 'rgba(206,212,246,0.35)',
-    waveA: 'rgba(160,172,232,0.28)',
-    waveB: 'rgba(136,150,222,0.34)',
-    waveC: 'rgba(108,124,206,0.4)',
-    tiles: [
-      ['#aab6ee', '#6d7fd0'],
-      ['#b8c2f2', '#7c8cd8'],
-      ['#9fadea', '#5f70c6'],
-      ['#c2cbf5', '#8a99dd'],
-      ['#a4b1ec', '#6577cc'],
-      ['#94a3e6', '#5566bf']
-    ]
+    light: {
+      accent: '#6d7fd0',
+      accentStrong: '#4d5cab',
+      tintTop: 'rgba(228,232,252,0.5)',
+      tintBottom: 'rgba(206,212,246,0.35)',
+      waveA: 'rgba(160,172,232,0.28)',
+      waveB: 'rgba(136,150,222,0.34)',
+      waveC: 'rgba(108,124,206,0.4)',
+      tiles: [
+        ['#aab6ee', '#6d7fd0'],
+        ['#b8c2f2', '#7c8cd8'],
+        ['#9fadea', '#5f70c6'],
+        ['#c2cbf5', '#8a99dd'],
+        ['#a4b1ec', '#6577cc'],
+        ['#94a3e6', '#5566bf']
+      ]
+    },
+    dark: {
+      accent: '#8b9ae0',
+      accentStrong: '#b8c2f2',
+      tintTop: 'rgba(20,24,46,0.55)',
+      tintBottom: 'rgba(12,15,32,0.42)',
+      waveA: 'rgba(84,96,168,0.34)',
+      waveB: 'rgba(68,80,148,0.42)',
+      waveC: 'rgba(52,62,124,0.5)',
+      tiles: [
+        ['#515fae', '#323c78'],
+        ['#4a58a5', '#2c3670'],
+        ['#5a68b8', '#3a4484'],
+        ['#424f9a', '#252e64'],
+        ['#6472c2', '#434e90'],
+        ['#3a4790', '#1f2858']
+      ]
+    }
   },
   sand: {
     name: 'Sand',
-    sea: '#c98a4b',
-    seaDeep: '#a86c2f',
-    tintTop: 'rgba(252,242,228,0.55)',
-    tintBottom: 'rgba(246,226,200,0.4)',
-    waveA: 'rgba(232,190,140,0.3)',
-    waveB: 'rgba(222,172,116,0.36)',
-    waveC: 'rgba(206,150,88,0.42)',
-    tiles: [
-      ['#eec49a', '#c98a4b'],
-      ['#f2cfa8', '#d2954f'],
-      ['#e9ba8c', '#bf7f41'],
-      ['#f5d7b5', '#d99f5c'],
-      ['#ecc094', '#c68746'],
-      ['#e5b283', '#b87838']
-    ]
+    light: {
+      accent: '#c98a4b',
+      accentStrong: '#a86c2f',
+      tintTop: 'rgba(252,242,228,0.55)',
+      tintBottom: 'rgba(246,226,200,0.4)',
+      waveA: 'rgba(232,190,140,0.3)',
+      waveB: 'rgba(222,172,116,0.36)',
+      waveC: 'rgba(206,150,88,0.42)',
+      tiles: [
+        ['#eec49a', '#c98a4b'],
+        ['#f2cfa8', '#d2954f'],
+        ['#e9ba8c', '#bf7f41'],
+        ['#f5d7b5', '#d99f5c'],
+        ['#ecc094', '#c68746'],
+        ['#e5b283', '#b87838']
+      ]
+    },
+    dark: {
+      accent: '#d9a05e',
+      accentStrong: '#eec49a',
+      tintTop: 'rgba(40,28,14,0.52)',
+      tintBottom: 'rgba(26,18,8,0.4)',
+      waveA: 'rgba(150,104,52,0.34)',
+      waveB: 'rgba(126,86,40,0.42)',
+      waveC: 'rgba(100,66,28,0.5)',
+      tiles: [
+        ['#96682f', '#63421c'],
+        ['#8a5f2e', '#5c3d1a'],
+        ['#a37436', '#6f4b21'],
+        ['#7e5527', '#523414'],
+        ['#b07f3e', '#7a5527'],
+        ['#714b20', '#452b0f']
+      ]
+    }
   }
 }
+
+export function accentColors(id: AccentId, dark: boolean): AccentModeColors {
+  const spec = ACCENTS[id] ?? ACCENTS.sea
+  return dark ? spec.dark : spec.light
+}
+
+// ---------------- Custom accent (derive a full palette from one hex) ----------------
+
+function hexToHsl(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return null
+  const n = parseInt(m[1], 16)
+  const r = ((n >> 16) & 255) / 255
+  const g = ((n >> 8) & 255) / 255
+  const b = (n & 255) / 255
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const l = (max + min) / 2
+  if (max === min) return [0, 0, l]
+  const d = max - min
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+  let h: number
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6
+  else if (max === g) h = ((b - r) / d + 2) / 6
+  else h = ((r - g) / d + 4) / 6
+  return [h * 360, s, l]
+}
+
+function hsl(h: number, s: number, l: number, a?: number): string {
+  const clampedS = Math.max(0, Math.min(1, s))
+  const clampedL = Math.max(0, Math.min(1, l))
+  const base = `${Math.round(h)} ${Math.round(clampedS * 100)}% ${Math.round(clampedL * 100)}%`
+  return a == null ? `hsl(${base})` : `hsl(${base} / ${a})`
+}
+
+/** Build the full accent palette (tints, waves, tiles) from a single hex color. */
+export function customAccentColors(hex: string, dark: boolean): AccentModeColors {
+  const parsed = hexToHsl(hex)
+  if (!parsed) return accentColors('sea', dark)
+  const [h, s] = parsed
+  // Normalize lightness so wildly light/dark picks still read as an accent
+  const sat = Math.max(0.25, Math.min(0.85, s))
+  if (!dark) {
+    return {
+      accent: hsl(h, sat, 0.42),
+      accentStrong: hsl(h, sat, 0.3),
+      tintTop: hsl(h, sat, 0.9, 0.5),
+      tintBottom: hsl(h, sat, 0.82, 0.35),
+      waveA: hsl(h, sat, 0.68, 0.28),
+      waveB: hsl(h, sat, 0.6, 0.34),
+      waveC: hsl(h, sat, 0.5, 0.4),
+      tiles: [0, 1, 2, 3, 4, 5].map((i) => [
+        hsl(h + i * 4 - 10, sat, 0.72),
+        hsl(h + i * 4 - 10, sat, 0.5)
+      ]) as [string, string][]
+    }
+  }
+  return {
+    accent: hsl(h, sat, 0.58),
+    accentStrong: hsl(h, sat, 0.74),
+    tintTop: hsl(h, sat, 0.14, 0.55),
+    tintBottom: hsl(h, sat, 0.08, 0.42),
+    waveA: hsl(h, sat, 0.36, 0.34),
+    waveB: hsl(h, sat, 0.28, 0.42),
+    waveC: hsl(h, sat, 0.22, 0.5),
+    tiles: [0, 1, 2, 3, 4, 5].map((i) => [
+      hsl(h + i * 4 - 10, sat, 0.36),
+      hsl(h + i * 4 - 10, sat, 0.22)
+    ]) as [string, string][]
+  }
+}
+
+/** The palette the whole app should use: custom hex wins over the preset. */
+export function resolveAccentColors(appearance: AppearanceSettings, dark: boolean): AccentModeColors {
+  if (appearance.accentCustom) return customAccentColors(appearance.accentCustom, dark)
+  return accentColors(appearance.accent, dark)
+}
+
+// ---------------- Settings ----------------
 
 export interface Settings {
   tabOrientation: TabOrientation
   searchEngine: SearchEngineId
   adblock: AdblockSettings
+  popups: PopupSettings
+  passwords: PasswordSettings
+  brief: BriefSettings
   homeShortcuts: HomeShortcut[]
   restoreSession: boolean
+  /** Remember visited pages so they can come back as omnibox suggestions. Off by default. */
+  keepHistory: boolean
+  /** Show bookmarks in the chrome: sidebar tree (vertical) / bar under the toolbar (horizontal). */
+  bookmarksBar: boolean
+  /** What the new-tab page shows. Time and date by default; the rest is opt-in. */
+  newTabWidgets: NewTabWidgets
+  /** Local heuristic prose analysis that flags AI-generated-looking pages. No AI involved. */
+  slopDetector: boolean
   /** Pop playing video into a floating mini-player when its tab is backgrounded */
   autoPip: boolean
+  /** Tiny interface sounds (tab close, download done, …) */
+  uiSounds: boolean
+  toolbarDensity: ToolbarDensity
   appearance: AppearanceSettings
   /** First-launch onboarding completed */
   onboarded: boolean
 }
 
-export interface Bookmark {
+// ---------------- Bookmarks (v2: tree) ----------------
+
+export interface BookmarkNode {
   id: string
+  parentId: string | null
+  /** position among siblings */
+  index: number
+  type: 'folder' | 'bookmark'
   title: string
-  url: string
+  url?: string
+  favicon?: string
   createdAt: number
 }
 
+// ---------------- Session persistence (v2) ----------------
+
+export interface SessionSpaceV2 {
+  id: string
+  name: string
+  accent?: AccentId
+  profile?: SpaceProfile
+  tabs: { url: string }[]
+  activeTabIndex: number
+}
+
+export interface SessionWindowV2 {
+  bounds?: { x: number; y: number; width: number; height: number }
+  spaces: SessionSpaceV2[]
+  activeSpaceId: string
+}
+
+export interface SessionV2 {
+  version: 2
+  windows: SessionWindowV2[]
+}
+
+// ---------------- Omnibox / palette ----------------
+
+export type ActionId =
+  | 'new-tab'
+  | 'close-tab'
+  | 'reopen-tab'
+  | 'new-space'
+  | 'toggle-layout'
+  | 'toggle-sidebar'
+  | 'open-settings'
+  | 'open-downloads'
+  | 'show-welcome'
+  | 'cycle-theme'
+
+export interface ActionDef {
+  id: ActionId
+  label: string
+  /** extra match words beyond the label */
+  keywords: string
+}
+
+export const ACTION_DEFS: ActionDef[] = [
+  { id: 'new-tab', label: 'New Tab', keywords: 'create open' },
+  { id: 'close-tab', label: 'Close Tab', keywords: 'remove' },
+  { id: 'reopen-tab', label: 'Reopen Closed Tab', keywords: 'restore undo' },
+  { id: 'new-space', label: 'New Space', keywords: 'workspace create' },
+  { id: 'toggle-layout', label: 'Switch Tab Layout', keywords: 'sidebar top bar horizontal vertical' },
+  { id: 'toggle-sidebar', label: 'Toggle Sidebar', keywords: 'hide show collapse' },
+  { id: 'open-settings', label: 'Open Settings', keywords: 'preferences options' },
+  { id: 'open-downloads', label: 'Open Downloads Folder', keywords: 'finder files' },
+  { id: 'show-welcome', label: 'Show Welcome', keywords: 'onboarding intro tour' },
+  { id: 'cycle-theme', label: 'Cycle Theme', keywords: 'dark light system appearance mode' }
+]
+
 export interface Suggestion {
-  kind: 'url' | 'search' | 'history' | 'bookmark' | 'internal'
+  kind: 'url' | 'search' | 'history' | 'bookmark' | 'internal' | 'tab' | 'action'
   /** text shown prominently */
   text: string
   /** what gets navigated to (url or search query url) */
   url: string
   title?: string
+  /** kind 'tab': the tab to switch to */
+  tabId?: number
+  /** kind 'action': what to run */
+  action?: ActionId
 }
+
+// ---------------- Adblock ----------------
 
 export interface AdblockListMeta {
   id: string
@@ -187,8 +491,97 @@ export interface DownloadItemInfo {
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'
   receivedBytes: number
   totalBytes: number
-  savePath: string
 }
+
+// ---------------- Passwords ----------------
+
+export interface PasswordMeta {
+  id: string
+  origin: string
+  host: string
+  username: string
+  createdAt: number
+  lastUsedAt: number
+}
+
+export interface PasswordOffer {
+  offerId: string
+  tabId: number
+  host: string
+  username: string
+  kind: 'new' | 'update'
+}
+
+export interface PasswordsStatus {
+  available: boolean
+  canTouchId: boolean
+}
+
+// ---------------- Popups ----------------
+
+export interface BlockedPopup {
+  url: string
+  ts: number
+}
+
+// ---------------- Weather brief ----------------
+
+export type WeatherIcon =
+  | 'sun'
+  | 'cloud-sun'
+  | 'cloud'
+  | 'fog'
+  | 'drizzle'
+  | 'rain'
+  | 'snow'
+  | 'storm'
+
+export interface BriefWeather {
+  location: string
+  unit: 'c' | 'f'
+  now: { temp: number; code: number; isDay: boolean }
+  hi: number
+  lo: number
+  hours: { hour: string; temp: number; code: number; isDay: boolean }[]
+  /** local times, e.g. "6:12 AM" — present when the API provided them */
+  sunrise?: string
+  sunset?: string
+  fetchedAt: number
+}
+
+// ---------------- Downloads ----------------
+
+export interface DownloadEntry {
+  id: string
+  filename: string
+  state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'
+  receivedBytes: number
+  totalBytes: number
+  startedAt: number
+}
+
+export interface GeocodeResult {
+  name: string
+  admin1?: string
+  country?: string
+  lat: number
+  lon: number
+}
+
+/** WMO weather code -> label + icon (sun/cloud-sun swap to moon variants at night in the UI) */
+export function weatherCondition(code: number): { label: string; icon: WeatherIcon } {
+  if (code === 0) return { label: 'clear', icon: 'sun' }
+  if (code === 1 || code === 2) return { label: 'partly cloudy', icon: 'cloud-sun' }
+  if (code === 3) return { label: 'overcast', icon: 'cloud' }
+  if (code === 45 || code === 48) return { label: 'foggy', icon: 'fog' }
+  if (code >= 51 && code <= 57) return { label: 'drizzling', icon: 'drizzle' }
+  if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return { label: 'raining', icon: 'rain' }
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return { label: 'snowing', icon: 'snow' }
+  if (code >= 95) return { label: 'stormy', icon: 'storm' }
+  return { label: 'cloudy', icon: 'cloud' }
+}
+
+// ---------------- Constants ----------------
 
 export const SEARCH_ENGINES: Record<SearchEngineId, { name: string; searchUrl: string }> = {
   duckduckgo: { name: 'DuckDuckGo', searchUrl: 'https://duckduckgo.com/?q=%s' },
@@ -226,6 +619,9 @@ export const DEFAULT_SETTINGS: Settings = {
     customRules: '',
     allowlist: []
   },
+  popups: { block: true, allowlist: [] },
+  passwords: { enabled: true },
+  brief: { enabled: true, locationName: '', lat: null, lon: null, unit: 'auto' },
   homeShortcuts: [
     { title: 'YouTube', url: 'https://www.youtube.com' },
     { title: 'GitHub', url: 'https://github.com' },
@@ -233,7 +629,13 @@ export const DEFAULT_SETTINGS: Settings = {
     { title: 'Wikipedia', url: 'https://www.wikipedia.org' }
   ],
   restoreSession: true,
+  keepHistory: false,
+  bookmarksBar: true,
+  newTabWidgets: { clock: true, date: true, greeting: false, weather: false, forecast: false, sun: false, moon: false },
+  slopDetector: true,
   autoPip: true,
-  appearance: { waves: true, waveStyle: 'classic', accent: 'sea' },
+  uiSounds: true,
+  toolbarDensity: 'compact',
+  appearance: { theme: 'system', waves: true, waveStyle: 'dithered', accent: 'sea' },
   onboarded: false
 }

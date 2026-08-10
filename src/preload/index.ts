@@ -19,7 +19,13 @@ const SUBSCRIBABLE = new Set([
   'find:open',
   'find:result',
   'downloads:event',
-  'devshot:composite'
+  'devshot:composite',
+  'spaces:begin-rename',
+  'bookmarks:begin-rename',
+  'bookmarks:edit-current',
+  'chrome:toggle-collapse',
+  'passwords:offer',
+  'popups:blocked'
 ])
 
 const api = {
@@ -33,16 +39,43 @@ const api = {
     reload: (id?: number, force?: boolean) => invoke('tabs:reload', id, force),
     stop: (id?: number) => invoke('tabs:stop', id),
     reorder: (ids: number[]) => invoke('tabs:reorder', ids),
+    toggleSplit: () => invoke('tabs:toggle-split'),
+    devtools: () => invoke('tabs:devtools'),
     mute: (id: number, muted: boolean) => invoke('tabs:mute', id, muted),
     getState: () => invoke('tabs:get-state')
+  },
+  spaces: {
+    create: (name?: string) => invoke('spaces:create', name),
+    activate: (id: string) => invoke('spaces:activate', id),
+    rename: (id: string, name: string) => invoke('spaces:rename', id, name),
+    setAccent: (id: string, accent: string | null) => invoke('spaces:set-accent', id, accent),
+    moveTab: (tabId: number, spaceId: string) => invoke('spaces:move-tab', tabId, spaceId),
+    remove: (id: string) => invoke('spaces:remove', id)
+  },
+  menu: {
+    appContext: () => invoke('menu:app-context'),
+    tabContext: (tabId: number) => invoke('menu:tab-context', tabId),
+    spaceContext: (spaceId: string) => invoke('menu:space-context', spaceId),
+    bookmarkContext: (nodeId: string) => invoke('menu:bookmark-context', nodeId)
   },
   omnibox: {
     suggest: (input: string) => invoke('omnibox:suggest', input)
   },
+  extensions: {
+    has: () => invoke('extensions:has')
+  },
+  actions: {
+    run: (id: string) => invoke('action:run', id)
+  },
   chrome: {
     setInsets: (insets: { top: number; left: number; right: number; bottom: number }) =>
       invoke('chrome:insets', insets),
-    setOverlay: (open: boolean) => invoke('chrome:overlay', open)
+    setOverlay: (open: boolean) => invoke('chrome:overlay', open),
+    setCollapsed: (collapsed: boolean) => invoke('chrome:set-collapsed', collapsed),
+    focusPage: () => invoke('chrome:focus-page')
+  },
+  privacy: {
+    clearSite: () => invoke('privacy:clear-site')
   },
   find: {
     start: (text: string, opts: { findNext: boolean; forward: boolean }) =>
@@ -51,8 +84,31 @@ const api = {
   },
   bookmarks: {
     list: () => invoke('bookmarks:list'),
-    toggle: (url: string, title: string) => invoke('bookmarks:toggle', url, title),
-    remove: (idOrUrl: string) => invoke('bookmarks:remove', idOrUrl)
+    toggle: (url: string, title: string, favicon?: string) =>
+      invoke('bookmarks:toggle', url, title, favicon),
+    addFolder: (title: string, parentId: string | null) =>
+      invoke('bookmarks:add-folder', title, parentId),
+    update: (id: string, patch: { title?: string; url?: string }) =>
+      invoke('bookmarks:update', id, patch),
+    move: (id: string, parentId: string | null, index: number) =>
+      invoke('bookmarks:move', id, parentId, index),
+    remove: (id: string) => invoke('bookmarks:remove', id),
+    setLastFolder: (id: string | null) => invoke('bookmarks:set-last-folder', id)
+  },
+  passwords: {
+    resolveOffer: (offerId: string, action: 'save' | 'never' | 'dismiss') =>
+      invoke('passwords:resolve-offer', offerId, action)
+  },
+  popups: {
+    getBlocked: (tabId: number) => invoke('popups:get-blocked', tabId),
+    open: (tabId: number, url: string) => invoke('popups:open', tabId, url),
+    allowSite: (tabId: number) => invoke('popups:allow-site', tabId)
+  },
+  downloads: {
+    list: () => invoke('downloads:list'),
+    clear: () => invoke('downloads:clear'),
+    open: (id: string) => invoke('downloads:open', id),
+    reveal: (id: string) => invoke('downloads:reveal', id)
   },
   settings: {
     get: () => invoke('settings:get'),
@@ -60,6 +116,9 @@ const api = {
   },
   adblock: {
     toggleSite: (url: string) => invoke('adblock:toggle-site', url)
+  },
+  app: {
+    info: () => invoke('app:info')
   },
   window: {
     zoom: () => invoke('window:zoom')

@@ -31,7 +31,8 @@ export default defineConfig({
           index: resolve('src/renderer/index.html'),
           start: resolve('src/renderer/start.html'),
           settings: resolve('src/renderer/settings.html'),
-          welcome: resolve('src/renderer/welcome.html')
+          welcome: resolve('src/renderer/welcome.html'),
+          error: resolve('src/renderer/error.html')
         }
       }
     }

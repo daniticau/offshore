@@ -1,0 +1,266 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import type { Suggestion, TabInfo } from '@shared/types'
+import { offshore, prettyHost } from './api'
+import {
+  IconArrowUpRight,
+  IconBolt,
+  IconClock,
+  IconGlobe,
+  IconGear,
+  IconSearch,
+  IconStarFilled,
+  IconTune,
+  IconWave
+} from './icons'
+
+const KIND_ICON: Record<Suggestion['kind'], React.ComponentType<{ size?: number }>> = {
+  url: IconGlobe,
+  search: IconSearch,
+  history: IconClock,
+  bookmark: IconStarFilled,
+  internal: IconWave,
+  tab: IconArrowUpRight,
+  action: IconBolt
+}
+
+function hintFor(s: Suggestion): string {
+  switch (s.kind) {
+    case 'tab':
+      return 'Switch to Tab'
+    case 'action':
+      return 'Action'
+    case 'bookmark':
+      return prettyHost(s.url)
+    case 'search':
+      return 'Search'
+    case 'history':
+      return prettyHost(s.url)
+    default:
+      return ''
+  }
+}
+
+/** The completable form of a suggestion: "youtube.com/…" — no scheme, no www. */
+function completionOf(s: Suggestion): string | null {
+  if (s.kind !== 'url' && s.kind !== 'bookmark' && s.kind !== 'history' && s.kind !== 'internal') {
+    return null
+  }
+  if (!s.url) return null
+  return s.url.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '')
+}
+
+export interface OmniboxProps {
+  activeTab?: TabInfo
+  compact?: boolean
+  /** Bumped by the app when ⌘T/⌘L want the cursor here. */
+  focusNonce: number
+  /** True while the dropdown needs to float over the page. */
+  onOverlayNeed: (need: boolean) => void
+  onNavigate: (input: string) => void
+  /** Site-info panel toggle — shown as the tune button when a site is loaded. */
+  onSiteInfo?: () => void
+}
+
+/**
+ * The one and only search bar: a real inline input in the toolbar. Focus lands
+ * here on every new tab; suggestions drop down underneath; the top match
+ * type-completes ahead of the cursor like a classic omnibox.
+ */
+export function Omnibox({ activeTab, compact, focusNonce, onOverlayNeed, onNavigate, onSiteInfo }: OmniboxProps): React.JSX.Element {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState('')
+  const [typed, setTyped] = useState('')
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  const [selected, setSelected] = useState(0)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastLen = useRef(0)
+
+  const isStart = !activeTab || activeTab.displayUrl === 'offshore://start' || !activeTab.url
+  // Chrome-style trim when idle: hide the boring https:// (http:// stays visible — it's a warning)
+  const idleValue = isStart ? '' : activeTab.displayUrl.replace(/^https:\/\//i, '').replace(/\/$/, '')
+
+  const dropdownOpen = editing && typed.trim().length > 0 && suggestions.length > 0
+  useEffect(() => {
+    onOverlayNeed(dropdownOpen)
+  }, [dropdownOpen, onOverlayNeed])
+
+  // ⌘T / ⌘L / new-tab button: take the cursor
+  useEffect(() => {
+    if (focusNonce === 0) return
+    const el = inputRef.current
+    if (!el) return
+    setEditing(true)
+    setValue(idleValue)
+    setTyped('')
+    setSuggestions([])
+    setSelected(0)
+    requestAnimationFrame(() => {
+      el.focus()
+      el.select()
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusNonce])
+
+  const endEditing = useCallback(
+    (refocusPage: boolean) => {
+      setEditing(false)
+      setTyped('')
+      setSuggestions([])
+      setSelected(0)
+      inputRef.current?.blur()
+      if (refocusPage) void offshore.chrome.focusPage()
+    },
+    []
+  )
+
+  const fetchSuggestions = (raw: string, grew: boolean): void => {
+    if (debounce.current) clearTimeout(debounce.current)
+    debounce.current = setTimeout(() => {
+      if (!raw.trim()) {
+        setSuggestions([])
+        setSelected(0)
+        return
+      }
+      void offshore.omnibox.suggest(raw).then((sugs) => {
+        setSuggestions(sugs)
+        setSelected(0)
+        // type-ahead: complete the top match past the cursor, selected
+        if (grew && sugs.length) {
+          const comp = completionOf(sugs[0])
+          if (comp && comp.toLowerCase().startsWith(raw.toLowerCase()) && comp.length > raw.length) {
+            const el = inputRef.current
+            if (el && el.value === raw) {
+              setValue(comp)
+              requestAnimationFrame(() => el.setSelectionRange(raw.length, comp.length))
+            }
+          }
+        }
+      })
+    }, 60)
+  }
+
+  const onChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
+    const raw = e.target.value
+    const grew = raw.length > lastLen.current
+    lastLen.current = raw.length
+    setValue(raw)
+    setTyped(raw)
+    fetchSuggestions(raw, grew)
+  }
+
+  const pick = (s: Suggestion | undefined): void => {
+    const fallback = typed.trim() || value.trim()
+    endEditing(false)
+    if (!s) {
+      if (fallback) onNavigate(fallback)
+      else void offshore.chrome.focusPage()
+      return
+    }
+    if (s.kind === 'tab' && s.tabId != null) {
+      void offshore.tabs.activate(s.tabId)
+      return
+    }
+    if (s.kind === 'action' && s.action) {
+      void offshore.actions.run(s.action)
+      return
+    }
+    onNavigate(s.url || fallback)
+  }
+
+  const onKeyDown = (e: React.KeyboardEvent): void => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      endEditing(true)
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setSelected((s) => Math.min(s + 1, Math.max(suggestions.length - 1, 0)))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setSelected((s) => Math.max(s - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      pick(suggestions[selected])
+    }
+  }
+
+  const shownValue = editing ? value : idleValue
+  const showFavicon = !editing && !isStart && activeTab?.favicon
+  // internal pages wear their own marks; the wave is the badge of a fresh tab
+  const idleGlyph = activeTab?.displayUrl.startsWith('offshore://settings') ? (
+    <IconGear size={13} />
+  ) : (
+    <IconWave size={13} />
+  )
+
+  return (
+    <div className={`omnibox no-drag ${compact ? 'compact' : ''} ${editing ? 'editing' : ''}`}>
+      {!editing && /^https?:/.test(activeTab?.url ?? '') && onSiteInfo ? (
+        <button className="omni-tune" title="Site information" onClick={onSiteInfo}>
+          <IconTune size={14} />
+        </button>
+      ) : (
+        <span className="omni-icon">
+          {showFavicon ? (
+            <img src={activeTab.favicon} alt="" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
+          ) : editing ? (
+            <IconSearch size={13} />
+          ) : (
+            idleGlyph
+          )}
+        </span>
+      )}
+      <input
+        ref={inputRef}
+        className="omni-input"
+        value={shownValue}
+        placeholder="Search or type URL"
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+        onFocus={(e) => {
+          if (!editing) {
+            setEditing(true)
+            setValue(idleValue)
+            setTyped('')
+            lastLen.current = idleValue.length
+            requestAnimationFrame(() => e.target.select())
+          }
+        }}
+        onBlur={() => {
+          // clicking a suggestion fires mousedown first (preventDefault keeps focus)
+          endEditing(false)
+        }}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+      />
+      {dropdownOpen && (
+        <div className="omni-dropdown surface-card">
+          {suggestions.map((s, i) => {
+            const Icon = KIND_ICON[s.kind] ?? IconGlobe
+            const hint = hintFor(s)
+            return (
+              <div
+                key={`${s.kind}-${s.url}-${s.tabId ?? ''}-${s.action ?? ''}-${i}`}
+                className={`omni-suggestion ${i === selected ? 'selected' : ''}`}
+                onMouseEnter={() => setSelected(i)}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  pick(s)
+                }}
+              >
+                <span className="s-icon">
+                  <Icon size={15} />
+                </span>
+                <span className="s-text">{s.kind === 'tab' ? s.text : s.title || s.text}</span>
+                <span className="s-url">
+                  {s.kind === 'tab' || s.kind === 'action' ? hint : s.title ? s.text : hint}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}

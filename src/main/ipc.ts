@@ -1,54 +1,206 @@
-import { ipcMain, shell, systemPreferences, type IpcMainInvokeEvent } from 'electron'
-import { SEARCH_ENGINES, type Settings, type Suggestion } from '@shared/types'
+import {
+  Menu,
+  MenuItem,
+  app,
+  dialog,
+  ipcMain,
+  shell,
+  systemPreferences,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent
+} from 'electron'
+import {
+  ACCENTS,
+  ACTION_DEFS,
+  SEARCH_ENGINES,
+  type AccentId,
+  type ActionId,
+  type PasswordOffer,
+  type Settings,
+  type Suggestion
+} from '@shared/types'
 import { adblock } from './adblock'
+import { fetchWeather, geocode } from './brief'
 import { listExtensions, uninstallExtension } from './extensions'
-import { bookmarksStore, historyStore, settingsStore } from './stores'
-import { devRendererUrl, prettyHost, resolveOmniboxInput } from './util'
+import { passwordVault } from './passwords'
+import {
+  allowPopupsForSite,
+  blockedPopups,
+  clearBlocked,
+  noteGesture,
+  pageEntry
+} from './popups'
+import { openDownload, preparedSessions, revealDownload } from './sessions'
+import { bookmarksStore, downloadsStore, historyStore, settingsStore } from './stores'
+import { devRendererUrl, internalPageUrl, prettyHost, resolveOmniboxInput } from './util'
 import { windowForChromeContents, windows, type Insets, type OffshoreWindow } from './windows'
 
-function chromeWindow(e: IpcMainInvokeEvent): OffshoreWindow | undefined {
+function chromeWindow(e: IpcMainInvokeEvent | IpcMainEvent): OffshoreWindow | undefined {
   return windowForChromeContents(e.sender.id)
 }
 
+/**
+ * Trusted = the chrome UI webContents itself, or a main frame on an internal
+ * origin (offshore:// in prod, the exact dev-server origin in dev). Plain
+ * file:// pages are NOT trusted — a downloaded .html must never reach
+ * privileged channels.
+ */
 function isTrustedSender(e: IpcMainInvokeEvent): boolean {
-  const url = e.senderFrame?.url ?? ''
+  if (chromeWindow(e)) return true
+  const frame = e.senderFrame
+  if (!frame) return false
+  try {
+    if (frame.parent !== null) return false
+  } catch {
+    return false
+  }
+  const url = frame.url
   if (url.startsWith('offshore://')) return true
   const dev = devRendererUrl()
-  if (dev && url.startsWith(dev)) return true
-  if (!url && chromeWindow(e)) return true
-  return url.startsWith('file://')
+  if (dev) {
+    try {
+      return new URL(url).origin === new URL(dev).origin
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
+/** Page senders (tabs + tracked popups) allowed on the password/gesture channels. */
+function validatedPageSender(e: IpcMainEvent): {
+  entry: NonNullable<ReturnType<typeof pageEntry>>
+  origin: URL
+} | null {
+  const entry = pageEntry(e.sender.id)
+  if (!entry) return null
+  const frame = e.senderFrame
+  if (!frame || frame !== e.sender.mainFrame) return null
+  let origin: URL
+  try {
+    origin = new URL(frame.url)
+  } catch {
+    return null
+  }
+  const ok =
+    origin.protocol === 'https:' ||
+    (origin.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(origin.hostname))
+  return ok ? { entry, origin } : null
 }
 
 export function broadcast(channel: string, ...args: unknown[]): void {
   for (const w of windows) w.sendToChrome(channel, ...args)
 }
 
-function buildSuggestions(input: string): Suggestion[] {
+function buildSuggestions(input: string, w?: OffshoreWindow): Suggestion[] {
   const q = input.trim()
   if (!q) return []
+  const ql = q.toLowerCase()
   const settings = settingsStore.get()
   const out: Suggestion[] = []
+  const seen = new Set<string>()
+  const push = (s: Suggestion): void => {
+    const key = s.kind === 'tab' ? `tab:${s.tabId}` : s.kind === 'action' ? `act:${s.action}` : s.url
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push(s)
+  }
+
+  // Open tabs in this window (strong matches outrank everything)
+  const tabMatches: { strong: boolean; s: Suggestion }[] = []
+  if (w) {
+    for (const info of w.tabs.state().tabs) {
+      if (info.id === w.tabs.activeTabId) continue
+      const title = info.title.toLowerCase()
+      const host = prettyHost(info.url).toLowerCase()
+      if (!title.includes(ql) && !host.includes(ql)) continue
+      const strong = host.startsWith(ql) || title.split(/\s+/).some((word) => word.startsWith(ql))
+      tabMatches.push({
+        strong,
+        s: { kind: 'tab', text: info.title, url: info.displayUrl, title: 'Switch to Tab', tabId: info.id }
+      })
+    }
+  }
+  for (const m of tabMatches.filter((t) => t.strong).slice(0, 2)) push(m.s)
 
   const resolved = resolveOmniboxInput(q, settings)
   const engine = SEARCH_ENGINES[settings.searchEngine] ?? SEARCH_ENGINES.duckduckgo
   const searchUrl = engine.searchUrl.replace('%s', encodeURIComponent(q))
-  out.push({ kind: resolved === searchUrl ? 'search' : 'url', text: q, url: resolved })
+  push({ kind: resolved === searchUrl ? 'search' : 'url', text: q, url: resolved })
+
+  // Actions
+  if (ql.length >= 2) {
+    const acts = ACTION_DEFS.filter(
+      (a) => a.label.toLowerCase().includes(ql) || a.keywords.includes(ql)
+    ).slice(0, 2)
+    for (const a of acts) push({ kind: 'action', text: a.label, url: '', action: a.id })
+  }
 
   for (const page of ['start', 'settings'] as const) {
-    if (page.startsWith(q.toLowerCase()) || `offshore://${page}`.startsWith(q.toLowerCase())) {
-      out.push({ kind: 'internal', text: `offshore://${page}`, url: `offshore://${page}`, title: page === 'start' ? 'Start Page' : 'Settings' })
+    if (page.startsWith(ql) || `offshore://${page}`.startsWith(ql)) {
+      push({
+        kind: 'internal',
+        text: `offshore://${page}`,
+        url: `offshore://${page}`,
+        title: page === 'start' ? 'New Tab' : 'Settings'
+      })
     }
   }
 
-  const ql = q.toLowerCase()
-  const seen = new Set(out.map((s) => s.url))
-  for (const h of historyStore.search(ql, 6)) {
-    if (!seen.has(h.url)) {
-      out.push(h)
-      seen.add(h.url)
+  for (const b of bookmarksStore.search(ql, 3)) push(b)
+  for (const m of tabMatches.filter((t) => !t.strong).slice(0, 2)) push(m.s)
+  if (settingsStore.get().keepHistory) {
+    for (const h of historyStore.search(ql, 6)) push(h)
+  }
+
+  return out.slice(0, 8)
+}
+
+function runAction(w: OffshoreWindow, id: ActionId): void {
+  switch (id) {
+    case 'new-tab':
+      w.tabs.createTab()
+      w.win.webContents.focus()
+      w.sendToChrome('omnibox:focus')
+      break
+    case 'close-tab': {
+      const active = w.tabs.activeTab
+      if (active) w.tabs.closeTab(active.id)
+      break
+    }
+    case 'reopen-tab':
+      w.tabs.reopenClosedTab()
+      break
+    case 'new-space': {
+      const space = w.tabs.createSpace()
+      w.sendToChrome('spaces:begin-rename', space.id)
+      break
+    }
+    case 'toggle-layout': {
+      const current = settingsStore.get().tabOrientation
+      settingsStore.set({ tabOrientation: current === 'vertical' ? 'horizontal' : 'vertical' })
+      break
+    }
+    case 'toggle-sidebar':
+      w.sendToChrome('chrome:toggle-collapse')
+      break
+    case 'open-settings':
+      w.tabs.createTab(internalPageUrl('settings'))
+      break
+    case 'open-downloads':
+      void shell.openPath(app.getPath('downloads'))
+      break
+    case 'show-welcome':
+      w.tabs.createTab(internalPageUrl('welcome'))
+      break
+    case 'cycle-theme': {
+      const s = settingsStore.get()
+      const order = ['system', 'light', 'dark'] as const
+      const next = order[(order.indexOf(s.appearance.theme) + 1) % order.length]
+      settingsStore.set({ appearance: { ...s.appearance, theme: next } })
+      break
     }
   }
-  return out.slice(0, 8)
 }
 
 export function setupIpc(): void {
@@ -85,14 +237,275 @@ export function setupIpc(): void {
   })
   ipcMain.handle('tabs:get-state', (e) => chromeWindow(e)?.tabs.state())
 
+  // ---- spaces ----
+  ipcMain.handle('spaces:create', (e, name?: string) => {
+    const w = chromeWindow(e)
+    if (!w) return
+    const space = w.tabs.createSpace(name)
+    return space.id
+  })
+  ipcMain.handle('spaces:activate', (e, id: string) => chromeWindow(e)?.tabs.activateSpace(id))
+  ipcMain.handle('spaces:rename', (e, id: string, name: string) =>
+    chromeWindow(e)?.tabs.renameSpace(id, name)
+  )
+  ipcMain.handle('spaces:set-accent', (e, id: string, accent: AccentId | null) =>
+    chromeWindow(e)?.tabs.setSpaceAccent(id, accent)
+  )
+  ipcMain.handle('spaces:move-tab', (e, tabId: number, spaceId: string) =>
+    chromeWindow(e)?.tabs.moveTabToSpace(tabId, spaceId)
+  )
+  ipcMain.handle('spaces:remove', async (e, id: string) => {
+    const w = chromeWindow(e)
+    if (!w) return
+    await confirmDeleteSpace(w, id)
+  })
+
+  // ---- native context menus for the chrome strip ----
+  ipcMain.handle('downloads:list', (e) => (chromeWindow(e) ? downloadsStore.list() : []))
+  ipcMain.handle('downloads:clear', (e) => {
+    if (chromeWindow(e)) downloadsStore.clear()
+  })
+  ipcMain.handle('extensions:has', async (e) => {
+    if (!chromeWindow(e)) return false
+    try {
+      return (await listExtensions()).length > 0
+    } catch {
+      return false
+    }
+  })
+  ipcMain.handle('tabs:toggle-split', (e) => chromeWindow(e)?.tabs.toggleSplit())
+  ipcMain.handle('tabs:devtools', (e) => {
+    const wc = chromeWindow(e)?.tabs.activeTab?.wc
+    if (!wc) return
+    if (wc.isDevToolsOpened()) wc.closeDevTools()
+    else wc.openDevTools({ mode: 'detach' })
+  })
+
+  // The three-dots menu: everything Helium keeps behind its kebab
+  // AI-slop heuristics run in the page preload; main just records the verdict.
+  ipcMain.on('slop:report', (e, payload: { score: number; signals: string[] }) => {
+    if (!settingsStore.get().slopDetector) return
+    const v = validatedPageSender(e)
+    if (!v || v.entry.kind !== 'tab') return
+    const w = v.entry.ownerWindow
+    const tab = w.tabs.byId(e.sender.id)
+    if (!tab) return
+    const score = Math.max(0, Math.min(100, Math.round(Number(payload?.score) || 0)))
+    tab.slopScore = score
+    w.tabs.pushState()
+  })
+
+  ipcMain.handle('menu:app-context', (e) => {
+    const w = chromeWindow(e)
+    if (!w) return
+    const s = settingsStore.get()
+    const menu = Menu.buildFromTemplate([
+      { label: 'New Tab', accelerator: 'Cmd+T', click: () => {
+        w.tabs.createTab()
+        w.win.webContents.focus()
+        w.sendToChrome('omnibox:focus')
+      } },
+      { label: 'New Window', accelerator: 'Cmd+N', click: () => void import('./windows').then((m) => m.createWindow()) },
+      { label: 'New Space', accelerator: 'Cmd+Alt+N', click: () => {
+        const space = w.tabs.createSpace()
+        w.sendToChrome('spaces:begin-rename', space.id)
+      } },
+      { type: 'separator' },
+      { label: 'Split View', accelerator: 'Cmd+Shift+S', type: 'checkbox', checked: w.tabs.splitPair !== null, click: () => w.tabs.toggleSplit() },
+      { label: 'Show Bookmarks', type: 'checkbox', checked: s.bookmarksBar, click: () => settingsStore.set({ bookmarksBar: !s.bookmarksBar }) },
+      { type: 'separator' },
+      { label: 'Downloads', click: () => void shell.openPath(app.getPath('downloads')) },
+      { label: 'Developer Tools', accelerator: 'Cmd+Alt+I', click: () => {
+        const wc = w.tabs.activeTab?.wc
+        if (!wc) return
+        if (wc.isDevToolsOpened()) wc.closeDevTools()
+        else wc.openDevTools({ mode: 'detach' })
+      } },
+      { type: 'separator' },
+      { label: 'Welcome Tour', click: () => w.tabs.createTab(internalPageUrl('welcome')) },
+      { label: 'Settings…', accelerator: 'Cmd+,', click: () => w.tabs.createTab(internalPageUrl('settings')) }
+    ])
+    menu.popup({ window: w.win })
+  })
+
+  ipcMain.handle('menu:tab-context', (e, tabId: number) => {
+    const w = chromeWindow(e)
+    const tab = w?.tabs.byId(tabId)
+    if (!w || !tab) return
+    const menu = new Menu()
+    const add = (opts: Electron.MenuItemConstructorOptions): void => {
+      menu.append(new MenuItem(opts))
+    }
+    add({ label: 'Close Tab', click: () => w.tabs.closeTab(tabId) })
+    add({ label: 'Close Other Tabs', click: () => w.tabs.closeOtherTabs(tabId) })
+    add({ label: 'Duplicate Tab', click: () => w.tabs.duplicateTab(tabId) })
+    add({ type: 'separator' })
+    const others = w.tabs.spaces.filter((s) => s.id !== tab.spaceId)
+    add({
+      label: 'Move to Space',
+      submenu: [
+        ...others.map((s) => ({
+          label: s.name,
+          click: () => w.tabs.moveTabToSpace(tabId, s.id)
+        })),
+        ...(others.length ? [{ type: 'separator' as const }] : []),
+        {
+          label: 'New Space',
+          click: () => {
+            const space = w.tabs.createSpace()
+            w.tabs.moveTabToSpace(tabId, space.id)
+            w.sendToChrome('spaces:begin-rename', space.id)
+          }
+        }
+      ]
+    })
+    add({ type: 'separator' })
+    const muted = tab.wc.isAudioMuted()
+    add({
+      label: muted ? 'Unmute Tab' : 'Mute Tab',
+      click: () => {
+        tab.wc.setAudioMuted(!muted)
+        w.tabs.pushState()
+      }
+    })
+    const url = tab.wc.getURL()
+    if (url && !url.startsWith('offshore://')) {
+      const starred = bookmarksStore.isBookmarked(url)
+      add({
+        label: starred ? 'Remove Bookmark' : 'Bookmark Tab',
+        click: () => {
+          bookmarksStore.toggle(url, tab.wc.getTitle(), tab.favicon)
+        }
+      })
+    }
+    menu.popup({ window: w.win })
+  })
+
+  ipcMain.handle('menu:space-context', (e, spaceId: string) => {
+    const w = chromeWindow(e)
+    const space = w?.tabs.spaceById(spaceId)
+    if (!w || !space) return
+    const menu = new Menu()
+    const add = (opts: Electron.MenuItemConstructorOptions): void => {
+      menu.append(new MenuItem(opts))
+    }
+    add({ label: 'Rename…', click: () => w.sendToChrome('spaces:begin-rename', spaceId) })
+    add({
+      label: 'Accent',
+      submenu: [
+        {
+          label: 'Follow Browser',
+          type: 'radio',
+          checked: !space.accent,
+          click: () => w.tabs.setSpaceAccent(spaceId, null)
+        },
+        ...(Object.keys(ACCENTS) as AccentId[]).map((id) => ({
+          label: ACCENTS[id].name,
+          type: 'radio' as const,
+          checked: space.accent === id,
+          click: () => w.tabs.setSpaceAccent(spaceId, id)
+        }))
+      ]
+    })
+    add({
+      label: 'Separate Logins',
+      type: 'checkbox',
+      checked: space.profile === 'separate',
+      click: () => {
+        void (async () => {
+          const toSeparate = space.profile !== 'separate'
+          const r = await dialog.showMessageBox(w.win, {
+            type: 'question',
+            buttons: [toSeparate ? 'Use Separate Logins' : 'Use Shared Logins', 'Cancel'],
+            defaultId: 0,
+            cancelId: 1,
+            message: toSeparate
+              ? `Give “${space.name}” its own logins?`
+              : `Switch “${space.name}” back to shared logins?`,
+            detail: toSeparate
+              ? 'This space gets its own cookies — sign in to a site here without affecting other spaces. Its tabs will reload.'
+              : 'This space will share cookies and logins with the rest of Offshore. Its tabs will reload.'
+          })
+          if (r.response === 0) w.tabs.setSpaceProfile(spaceId, toSeparate ? 'separate' : 'shared')
+        })()
+      }
+    })
+    add({ type: 'separator' })
+    add({
+      label: 'Delete Space…',
+      enabled: w.tabs.spaces.length > 1,
+      click: () => void confirmDeleteSpace(w, spaceId)
+    })
+    menu.popup({ window: w.win })
+  })
+
+  ipcMain.handle('menu:bookmark-context', (e, nodeId: string) => {
+    const w = chromeWindow(e)
+    const node = bookmarksStore.byId(nodeId)
+    if (!w || !node) return
+    const menu = new Menu()
+    const add = (opts: Electron.MenuItemConstructorOptions): void => {
+      menu.append(new MenuItem(opts))
+    }
+    if (node.type === 'bookmark' && node.url) {
+      const url = node.url
+      add({ label: 'Open in New Tab', click: () => w.tabs.createTab(url) })
+      add({ label: 'Open in Background', click: () => w.tabs.createTab(url, { activate: false }) })
+      add({ type: 'separator' })
+    }
+    add({ label: 'Rename…', click: () => (settingsStore.get().tabOrientation === 'horizontal'
+          ? w.tabs.createTab(internalPageUrl('settings') + '#bookmarks')
+          : w.sendToChrome('bookmarks:begin-rename', nodeId)) })
+    add({
+      label: 'New Folder',
+      click: () => {
+        const folder = bookmarksStore.createFolder('New Folder', node.parentId)
+        w.sendToChrome('bookmarks:begin-rename', folder.id)
+      }
+    })
+    add({ type: 'separator' })
+    const childCount = bookmarksStore.list().filter((n) => n.parentId === node.id).length
+    add({
+      label: 'Delete',
+      click: () => {
+        void (async () => {
+          if (node.type === 'folder' && childCount > 0) {
+            const r = await dialog.showMessageBox(w.win, {
+              type: 'question',
+              buttons: ['Delete', 'Cancel'],
+              defaultId: 1,
+              cancelId: 1,
+              message: `Delete “${node.title}” and everything inside it?`
+            })
+            if (r.response !== 0) return
+          }
+          bookmarksStore.remove(nodeId)
+        })()
+      }
+    })
+    menu.popup({ window: w.win })
+  })
+
   // ---- omnibox ----
   ipcMain.handle('omnibox:suggest', (e, input: string) =>
-    isTrustedSender(e) ? buildSuggestions(input) : []
+    isTrustedSender(e) ? buildSuggestions(input, chromeWindow(e)) : []
   )
+
+  // ---- palette actions ----
+  ipcMain.handle('action:run', (e, id: ActionId) => {
+    const w = chromeWindow(e)
+    if (!w) return
+    if (!ACTION_DEFS.some((a) => a.id === id)) return
+    runAction(w, id)
+  })
 
   // ---- chrome layout ----
   ipcMain.handle('chrome:insets', (e, insets: Insets) => chromeWindow(e)?.setInsets(insets))
   ipcMain.handle('chrome:overlay', (e, open: boolean) => chromeWindow(e)?.setOverlay(open))
+  ipcMain.handle('chrome:focus-page', (e) => chromeWindow(e)?.tabs.activeTab?.wc.focus())
+  ipcMain.handle('chrome:set-collapsed', (e, collapsed: boolean) =>
+    chromeWindow(e)?.setCollapsed(collapsed)
+  )
 
   // ---- find in page ----
   ipcMain.handle('find:start', (e, text: string, opts: { findNext: boolean; forward: boolean }) => {
@@ -104,18 +517,31 @@ export function setupIpc(): void {
     chromeWindow(e)?.tabs.activeTab?.wc.stopFindInPage('clearSelection')
   })
 
-  // ---- bookmarks ----
+  // ---- bookmarks (v2 tree) ----
   ipcMain.handle('bookmarks:list', (e) => (isTrustedSender(e) ? bookmarksStore.list() : []))
-  ipcMain.handle('bookmarks:toggle', (e, url: string, title: string) => {
+  ipcMain.handle('bookmarks:toggle', (e, url: string, title: string, favicon?: string) => {
     if (!isTrustedSender(e)) return false
-    const result = bookmarksStore.toggle(url, title)
-    for (const w of windows) w.tabs.pushState()
-    return result
+    return bookmarksStore.toggle(url, title, favicon)
   })
-  ipcMain.handle('bookmarks:remove', (e, idOrUrl: string) => {
+  ipcMain.handle('bookmarks:add-folder', (e, title: string, parentId: string | null) => {
+    if (!isTrustedSender(e)) return null
+    return bookmarksStore.createFolder(title, parentId)
+  })
+  ipcMain.handle('bookmarks:update', (e, id: string, patch: { title?: string; url?: string }) => {
     if (!isTrustedSender(e)) return
-    bookmarksStore.remove(idOrUrl)
-    for (const w of windows) w.tabs.pushState()
+    bookmarksStore.update(id, patch)
+  })
+  ipcMain.handle('bookmarks:move', (e, id: string, parentId: string | null, index: number) => {
+    if (!isTrustedSender(e)) return
+    bookmarksStore.move(id, parentId, index)
+  })
+  ipcMain.handle('bookmarks:remove', (e, id: string) => {
+    if (!isTrustedSender(e)) return
+    bookmarksStore.remove(id)
+  })
+  ipcMain.handle('bookmarks:set-last-folder', (e, id: string | null) => {
+    if (!isTrustedSender(e)) return
+    bookmarksStore.setLastFolder(id)
   })
 
   // ---- settings ----
@@ -130,6 +556,88 @@ export function setupIpc(): void {
     if (!isTrustedSender(e)) return false
     return adblock.toggleSite(prettyHost(url))
   })
+
+  // ---- popups ----
+  ipcMain.on('gesture:activity', (e) => {
+    if (pageEntry(e.sender.id)) noteGesture(e.sender.id)
+  })
+  ipcMain.handle('popups:get-blocked', (e, tabId: number) =>
+    chromeWindow(e) ? blockedPopups(tabId) : []
+  )
+  ipcMain.handle('popups:open', (e, tabId: number, url: string) => {
+    const w = chromeWindow(e)
+    if (!w) return
+    w.tabs.openBlockedPopup(tabId, url)
+    clearBlocked(tabId)
+    w.tabs.pushState()
+  })
+  ipcMain.handle('popups:allow-site', (e, tabId: number) => {
+    const w = chromeWindow(e)
+    const tab = w?.tabs.byId(tabId)
+    if (!w || !tab) return
+    const host = prettyHost(tab.wc.getURL())
+    if (host) allowPopupsForSite(host)
+    clearBlocked(tabId)
+    w.tabs.pushState()
+  })
+
+  // ---- passwords ----
+  ipcMain.on('passwords:candidate', (e, payload: { username?: unknown; password?: unknown }) => {
+    const sender = validatedPageSender(e)
+    if (!sender) return
+    if (!settingsStore.get().passwords.enabled || !passwordVault.available()) return
+    const username = String(payload?.username ?? '').slice(0, 256)
+    const password = String(payload?.password ?? '')
+    if (!password || password.length > 512) return
+    const { entry, origin } = sender
+    const host = origin.hostname.replace(/^www\./, '')
+    const w = entry.ownerWindow
+    const tabId = entry.kind === 'tab' ? e.sender.id : w.tabs.activeTabId
+    const offer = passwordVault.considerCandidate(
+      origin.origin,
+      host,
+      username,
+      password,
+      tabId,
+      entry.partition
+    )
+    if (offer) {
+      const payload: PasswordOffer = {
+        offerId: offer.offerId,
+        tabId: offer.tabId,
+        host: offer.host,
+        username: offer.username,
+        kind: offer.kind
+      }
+      w.sendToChrome('passwords:offer', payload)
+    }
+  })
+  ipcMain.handle('passwords:resolve-offer', (e, offerId: string, action: 'save' | 'never' | 'dismiss') => {
+    if (!chromeWindow(e)) return
+    passwordVault.resolveOffer(offerId, action)
+  })
+  ipcMain.handle('passwords:status', (e) => {
+    if (!isTrustedSender(e)) return { available: false, canTouchId: false }
+    return passwordVault.status()
+  })
+  ipcMain.handle('passwords:list', (e) => (isTrustedSender(e) ? passwordVault.list() : []))
+  ipcMain.handle('passwords:reveal', (e, id: string) =>
+    isTrustedSender(e) ? passwordVault.reveal(id) : null
+  )
+  ipcMain.handle('passwords:copy', (e, id: string) =>
+    isTrustedSender(e) ? passwordVault.copy(id) : false
+  )
+  ipcMain.handle('passwords:delete', (e, id: string) => {
+    if (isTrustedSender(e)) passwordVault.delete(id)
+  })
+  ipcMain.handle('passwords:never-list', (e) => (isTrustedSender(e) ? passwordVault.neverList() : []))
+  ipcMain.handle('passwords:remove-never', (e, origin: string) => {
+    if (isTrustedSender(e)) passwordVault.removeNever(origin)
+  })
+
+  // ---- weather brief ----
+  ipcMain.handle('brief:weather', (e) => (isTrustedSender(e) ? fetchWeather() : null))
+  ipcMain.handle('brief:geocode', (e, q: string) => (isTrustedSender(e) ? geocode(q) : []))
 
   // ---- extensions ----
   ipcMain.handle('extensions:list', (e) => (isTrustedSender(e) ? listExtensions() : []))
@@ -157,9 +665,54 @@ export function setupIpc(): void {
     }
   })
 
+  // ---- downloads ----
+  ipcMain.handle('downloads:open', (e, id: string) => {
+    if (chromeWindow(e)) openDownload(String(id))
+  })
+  ipcMain.handle('downloads:reveal', (e, id: string) => {
+    if (chromeWindow(e)) revealDownload(String(id))
+  })
+
   // ---- misc ----
+  ipcMain.handle('app:info', (e) => (isTrustedSender(e) ? { version: app.getVersion() } : null))
   ipcMain.handle('history:clear', (e) => {
     if (isTrustedSender(e)) historyStore.clear()
+  })
+  // Site-info popover: wipe one origin's cookies/storage in the active tab's jar
+  ipcMain.handle('privacy:clear-site', async (e) => {
+    const w = chromeWindow(e)
+    const tab = w?.tabs.activeTab
+    if (!tab) return false
+    let origin: string
+    try {
+      origin = new URL(tab.wc.getURL()).origin
+    } catch {
+      return false
+    }
+    if (!/^https?:/.test(origin)) return false
+    try {
+      await tab.wc.session.clearStorageData({ origin })
+      const cookies = await tab.wc.session.cookies.get({ url: origin })
+      for (const c of cookies) {
+        await tab.wc.session.cookies.remove(origin, c.name).catch(() => {})
+      }
+      tab.wc.reload()
+      return true
+    } catch (err) {
+      console.warn('[privacy] site clear failed:', err)
+      return false
+    }
+  })
+  ipcMain.handle('privacy:clear-site-data', async (e) => {
+    if (!isTrustedSender(e)) return
+    for (const ses of preparedSessions()) {
+      try {
+        await ses.clearStorageData({})
+        await ses.clearCache()
+      } catch (err) {
+        console.warn('[privacy] clear failed for a session:', err)
+      }
+    }
   })
   ipcMain.handle('shell:open-external', (e, url: string) => {
     if (isTrustedSender(e) && /^https?:\/\//.test(url)) void shell.openExternal(url)
@@ -189,4 +742,26 @@ export function setupIpc(): void {
       if (w.tabs.byId(tabId)) w.tabs.pushState()
     }
   }
+}
+
+async function confirmDeleteSpace(w: OffshoreWindow, spaceId: string): Promise<void> {
+  const space = w.tabs.spaceById(spaceId)
+  if (!space || w.tabs.spaces.length < 2) return
+  const tabs = w.tabs.tabsIn(spaceId)
+  const realTabs = tabs.filter((t) => {
+    const u = t.wc.getURL()
+    return u && !u.startsWith('offshore://') && !u.includes('/start.html')
+  })
+  if (realTabs.length) {
+    const r = await dialog.showMessageBox(w.win, {
+      type: 'question',
+      buttons: ['Delete Space', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      message: `Delete “${space.name}”?`,
+      detail: `Its ${realTabs.length === 1 ? 'open tab' : `${realTabs.length} open tabs`} will close. Reopen them with ⌘⇧T.`
+    })
+    if (r.response !== 0) return
+  }
+  w.tabs.deleteSpace(spaceId)
 }

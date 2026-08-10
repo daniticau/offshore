@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Test Login</title>
+  </head>
+  <body>
+    <h1>Test login page (dev harness only)</h1>
+    <form id="f" onsubmit="event.preventDefault(); document.getElementById('out').textContent = 'submitted:' + document.getElementById('u').value">
+      <input id="u" type="email" name="email" placeholder="email" />
+      <input id="p" type="password" name="password" placeholder="password" />
+      <button id="go" type="submit">Sign in</button>
+    </form>
+    <div id="out"></div>
+  </body>
+</html>

@@ -1,20 +1,31 @@
 import React, { useEffect, useRef, useState } from 'react'
-import type { Bookmark, Settings, TabInfo, TabsState } from '@shared/types'
-import { offshore, prettyHost } from './api'
+import type { BookmarkNode, DownloadEntry, SpaceInfo, Settings, TabInfo, TabsState } from '@shared/types'
+import { offshore } from './api'
 import type { DownloadToast, FindState } from './App'
+import { BookmarkEditPopover, BookmarksBar, BookmarksSection } from './Bookmarks'
+import { Omnibox } from './Omnibox'
+import { SiteInfo } from './SiteInfo'
+import { PopupChip } from './PasswordBanner'
+import { SpaceSwitcher } from './SpaceSwitcher'
 import {
+  IconAlert,
   IconAudio,
   IconBack,
+  IconBookmarkTray,
   IconClose,
+  IconCode,
   IconDownload,
+  IconFinder,
   IconForward,
   IconGear,
+  IconMore,
   IconMuted,
   IconPlus,
   IconReload,
-  IconSearch,
   IconShield,
   IconShieldFilled,
+  IconSlop,
+  IconSplit,
   IconStar,
   IconStarFilled,
   IconStop,
@@ -41,15 +52,50 @@ export interface ChromeProps {
   shieldOff: boolean
   find: FindState
   downloads: DownloadToast[]
-  onOpenPalette: (seed: string) => void
+  bookmarks: BookmarkNode[]
+  renameSpaceId: string | null
+  renameBookmarkId: string | null
+  bookmarkEdit: BookmarkNode | null
+  downloadsPanelOpen: boolean
+  popupPanelOpen: boolean
+  hasExtensions: boolean
+  accentFor: (space: SpaceInfo) => string
+  omniboxFocusNonce: number
+  onOmniboxOverlay: (need: boolean) => void
+  onNavigate: (input: string) => void
   onNewTab: () => void
+  siteInfoOpen: boolean
+  onToggleSiteInfo: (open: boolean) => void
   onFindQuery: (text: string, findNext: boolean, forward?: boolean) => void
   onCloseFind: () => void
   onToggleShield: () => void
-  onToggleBookmark: () => void
+  onEditBookmark: () => void
+  onCloseBookmarkEdit: () => void
+  onRenameSpaceDone: () => void
+  onRenameBookmarkDone: () => void
+  onToggleDownloadsPanel: (open: boolean) => void
+  onTogglePopupPanel: (open: boolean) => void
 }
 
 // ---------------- shared bits ----------------
+
+/** Internal pages carry their own marks; the wave stays the badge of a fresh tab.
+ * A favicon that fails to load falls back to the glyph — never the broken-image box. */
+export function TabGlyph({ tab, size = 13 }: { tab: TabInfo; size?: number }): React.JSX.Element {
+  const [broken, setBroken] = useState(false)
+  useEffect(() => setBroken(false), [tab.favicon])
+  const u = tab.displayUrl
+  const glyph =
+    u.startsWith('offshore://settings') ? (
+      <IconGear size={size} />
+    ) : tab.title === 'Problem loading page' ? (
+      <IconAlert size={size} />
+    ) : (
+      <IconWave size={size} />
+    )
+  if (!tab.favicon || broken || u.startsWith('offshore://')) return glyph
+  return <img src={tab.favicon} alt="" onError={() => setBroken(true)} />
+}
 
 function NavButtons({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element {
   return (
@@ -60,7 +106,7 @@ function NavButtons({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element {
         onClick={() => void offshore.tabs.back()}
         title="Back (⌘[)"
       >
-        <IconBack size={17} />
+        <IconBack size={16} />
       </button>
       <button
         className="chrome-btn"
@@ -68,7 +114,7 @@ function NavButtons({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element {
         onClick={() => void offshore.tabs.forward()}
         title="Forward (⌘])"
       >
-        <IconForward size={17} />
+        <IconForward size={16} />
       </button>
       <button
         className="chrome-btn"
@@ -77,7 +123,7 @@ function NavButtons({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element {
         }
         title={activeTab?.isLoading ? 'Stop' : 'Reload (⌘R)'}
       >
-        {activeTab?.isLoading ? <IconStop size={15} /> : <IconReload size={14} />}
+        {activeTab?.isLoading ? <IconStop size={14} /> : <IconReload size={13} />}
       </button>
     </div>
   )
@@ -89,6 +135,7 @@ function ShieldButton({
   onToggleShield
 }: Pick<ChromeProps, 'activeTab' | 'shieldOff' | 'onToggleShield'>): React.JSX.Element | null {
   if (!activeTab || !/^https?:/.test(activeTab.url)) return null
+  if (activeTab.displayUrl.startsWith('offshore://')) return null
   const count = activeTab.blockedCount
   return (
     <button
@@ -100,7 +147,7 @@ function ShieldButton({
           : `Shield blocked ${count} request${count === 1 ? '' : 's'} — click to allow this site`
       }
     >
-      {shieldOff ? <IconShield size={15} /> : <IconShieldFilled size={15} />}
+      {shieldOff ? <IconShield size={14} /> : <IconShieldFilled size={14} />}
       {!shieldOff && count > 0 && <span className="shield-count">{count > 99 ? '99+' : count}</span>}
     </button>
   )
@@ -108,61 +155,155 @@ function ShieldButton({
 
 function StarButton({
   activeTab,
-  onToggleBookmark
-}: Pick<ChromeProps, 'activeTab' | 'onToggleBookmark'>): React.JSX.Element | null {
+  onEditBookmark
+}: Pick<ChromeProps, 'activeTab' | 'onEditBookmark'>): React.JSX.Element | null {
   if (!activeTab || !/^https?:/.test(activeTab.url)) return null
+  if (activeTab.displayUrl.startsWith('offshore://')) return null
+  const starred = activeTab.isBookmarked
   return (
     <button
-      className={`chrome-btn star ${activeTab.isBookmarked ? 'starred' : ''}`}
-      onClick={onToggleBookmark}
-      title={activeTab.isBookmarked ? 'Remove bookmark' : 'Bookmark this page (⌘D)'}
+      className={`chrome-btn star ${starred ? 'starred' : ''}`}
+      onClick={() => {
+        if (starred) void offshore.bookmarks.toggle(activeTab.url, activeTab.title)
+        else onEditBookmark()
+      }}
+      title={starred ? 'Remove bookmark' : 'Bookmark this page (⌘D)'}
     >
-      {activeTab.isBookmarked ? <IconStarFilled size={15} /> : <IconStar size={15} />}
+      {starred ? <IconStarFilled size={14} /> : <IconStar size={14} />}
     </button>
   )
 }
 
-function OmniboxPill({
-  activeTab,
-  onOpenPalette,
-  compact
-}: {
-  activeTab?: TabInfo
-  onOpenPalette: (seed: string) => void
-  compact?: boolean
-}): React.JSX.Element {
-  const label = activeTab ? prettyHost(activeTab.displayUrl || activeTab.url) : ''
-  const isEmpty = !label || label === 'offshore://start'
+function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Element {
+  const { activeTab } = props
   return (
-    <button
-      className={`omnibox-pill no-drag ${compact ? 'compact' : ''}`}
-      onClick={() => onOpenPalette(activeTab && !isEmpty ? activeTab.displayUrl : '')}
-      title="Search or enter address (⌘L)"
-    >
-      {isEmpty ? (
-        <IconSearch size={14} />
-      ) : (
-        <>
-          {activeTab?.favicon ? (
-            <img className="pill-favicon" src={activeTab.favicon} alt="" />
-          ) : (
-            <IconWave size={14} />
-          )}
-          <span className="pill-host">{label}</span>
-        </>
+    <div className={`omnibox-wrap ${props.compact ? 'compact' : ''}`}>
+      <Omnibox
+        activeTab={activeTab}
+        compact={props.compact}
+        focusNonce={props.omniboxFocusNonce}
+        onOverlayNeed={props.onOmniboxOverlay}
+        onNavigate={props.onNavigate}
+        onSiteInfo={() => props.onToggleSiteInfo(!props.siteInfoOpen)}
+      />
+      {props.siteInfoOpen && activeTab && (
+        <SiteInfo
+          tab={activeTab}
+          settings={props.settings}
+          shieldOff={props.shieldOff}
+          onToggleShield={props.onToggleShield}
+          onClose={() => props.onToggleSiteInfo(false)}
+        />
       )}
+    </div>
+  )
+}
+
+function SlopChip({ activeTab, settings }: { activeTab?: TabInfo; settings: Settings }): React.JSX.Element | null {
+  if (!settings.slopDetector || !activeTab?.slopScore || activeTab.slopScore < 25) return null
+  return (
+    <span
+      className="chrome-btn slop-chip"
+      title={`Reads like AI-generated filler (slop score ${activeTab.slopScore}/100).\nDetected locally with plain heuristics — no AI involved, nothing leaves your Mac.`}
+    >
+      <IconSlop size={14} />
+    </span>
+  )
+}
+
+function DownloadsPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const [items, setItems] = useState<DownloadEntry[]>([])
+  useEffect(() => {
+    void offshore.downloads.list().then((l) => setItems(l ?? []))
+  }, [])
+  const fmtSize = (n: number): string => {
+    if (n <= 0) return ''
+    if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  }
+  return (
+    <div className="dl-panel surface-card no-drag" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="dl-panel-head">
+        <span>Downloads</span>
+        {items.length > 0 && (
+          <button
+            className="dl-clear"
+            onClick={() => {
+              void offshore.downloads.clear().then(() => setItems([]))
+            }}
+          >
+            Clear
+          </button>
+        )}
+        <button className="chrome-btn" onClick={onClose}>
+          <IconClose size={12} />
+        </button>
+      </div>
+      {items.length === 0 && <div className="dl-empty">Nothing downloaded yet.</div>}
+      {items.map((d) => (
+        <div
+          key={d.id}
+          className={`dl-item ${d.state}`}
+          title={d.state === 'completed' ? 'Open' : d.state}
+          onClick={() => {
+            if (d.state === 'completed') void offshore.downloads.open(d.id)
+          }}
+        >
+          <IconDownload size={13} />
+          <span className="dl-item-name">{d.filename}</span>
+          <span className="dl-item-meta">
+            {d.state === 'completed'
+              ? fmtSize(d.totalBytes || d.receivedBytes)
+              : d.state === 'progressing'
+                ? d.totalBytes > 0
+                  ? `${Math.round((d.receivedBytes / d.totalBytes) * 100)}%`
+                  : '…'
+                : d.state}
+          </span>
+          {d.state === 'completed' && (
+            <button
+              className="dl-reveal"
+              title="Show in Finder"
+              onClick={(e) => {
+                e.stopPropagation()
+                void offshore.downloads.reveal(d.id)
+              }}
+            >
+              <IconFinder size={12} />
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SplitButton({ tabsState }: { tabsState: TabsState }): React.JSX.Element {
+  const on = tabsState.splitPair !== null
+  return (
+    <button
+      className={`chrome-btn ${on ? 'active' : ''}`}
+      title={on ? 'Exit split view' : 'Split view with the next tab'}
+      onClick={() => void offshore.tabs.toggleSplit()}
+    >
+      <IconSplit size={14} />
     </button>
   )
 }
 
-function FindBar({ find, onFindQuery, onCloseFind }: Pick<ChromeProps, 'find' | 'onFindQuery' | 'onCloseFind'>): React.JSX.Element | null {
+function FindBar({
+  find,
+  onFindQuery,
+  onCloseFind,
+  floating
+}: Pick<ChromeProps, 'find' | 'onFindQuery' | 'onCloseFind'> & { floating?: boolean }): React.JSX.Element | null {
   const inputRef = useRef<HTMLInputElement>(null)
   React.useEffect(() => {
     if (find.open) inputRef.current?.focus()
   }, [find.open])
   if (!find.open) return null
   return (
-    <div className="find-bar no-drag">
+    <div className={`find-bar no-drag ${floating ? 'floating' : ''}`}>
       <input
         ref={inputRef}
         value={find.text}
@@ -179,25 +320,46 @@ function FindBar({ find, onFindQuery, onCloseFind }: Pick<ChromeProps, 'find' | 
         </span>
       )}
       <button className="chrome-btn" onClick={onCloseFind}>
-        <IconClose size={13} />
+        <IconClose size={12} />
       </button>
     </div>
   )
 }
 
-function Downloads({ downloads }: { downloads: DownloadToast[] }): React.JSX.Element | null {
+function Downloads({ downloads, compact }: { downloads: DownloadToast[]; compact?: boolean }): React.JSX.Element | null {
   if (!downloads.length) return null
+  const items = compact ? downloads.slice(-1) : downloads
   return (
-    <div className="downloads no-drag">
-      {downloads.map((d) => {
+    <div className={`downloads no-drag ${compact ? 'compact' : ''}`}>
+      {items.map((d) => {
         const pct = d.totalBytes > 0 ? Math.round((d.receivedBytes / d.totalBytes) * 100) : null
+        const done = d.state === 'completed'
         return (
-          <div key={d.id} className="download-toast" title={d.filename}>
-            <IconDownload size={13} />
+          <div
+            key={d.id}
+            className={`download-toast ${done ? 'done' : ''}`}
+            title={done ? `${d.filename} — click to open` : d.filename}
+            onClick={() => {
+              if (done) void offshore.downloads.open(d.id)
+            }}
+          >
+            <IconDownload size={12} />
             <span className="dl-name">{d.filename}</span>
             <span className="dl-state">
-              {d.state === 'completed' ? 'Done' : d.state === 'progressing' ? (pct != null ? `${pct}%` : '…') : d.state}
+              {done ? 'Done' : d.state === 'progressing' ? (pct != null ? `${pct}%` : '…') : d.state}
             </span>
+            {done && (
+              <button
+                className="dl-reveal"
+                title="Show in Finder"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void offshore.downloads.reveal(d.id)
+                }}
+              >
+                <IconFinder size={12} />
+              </button>
+            )}
           </div>
         )
       })}
@@ -205,60 +367,50 @@ function Downloads({ downloads }: { downloads: DownloadToast[] }): React.JSX.Ele
   )
 }
 
-function BookmarkStrip(): React.JSX.Element | null {
-  const [bms, setBms] = useState<Bookmark[]>([])
-  useEffect(() => {
-    void offshore.bookmarks.list().then((b) => setBms(b as Bookmark[]))
-    return offshore.on('bookmarks:changed', ((b: Bookmark[]) => setBms(b)) as never)
-  }, [])
-  if (!bms.length) return null
-  return (
-    <div className="bm-strip no-drag">
-      {bms.slice(0, 8).map((b) => (
-        <button
-          key={b.id}
-          className="bm-dot"
-          title={`${b.title}\n${b.url}`}
-          onClick={() => void offshore.tabs.create(b.url)}
-        >
-          {(prettyHost(b.url)[0] || '•').toUpperCase()}
-        </button>
-      ))}
-    </div>
-  )
-}
+// ---------------- drag reorder (commit on drop) ----------------
 
-// ---------------- tab items ----------------
-
-function useDragReorder(tabs: TabInfo[]): {
+function useDragReorder(ids: number[]): {
   dragId: number | null
-  onDragStart: (id: number) => void
+  order: number[] | null
+  onDragStart: (e: React.DragEvent, id: number) => void
   onDragOver: (e: React.DragEvent, id: number) => void
   onDrop: () => void
 } {
   const [dragId, setDragId] = useState<number | null>(null)
-  const orderRef = useRef<number[]>([])
+  const [order, setOrder] = useState<number[] | null>(null)
 
   return {
     dragId,
-    onDragStart: (id) => {
+    order,
+    onDragStart: (e, id) => {
       setDragId(id)
-      orderRef.current = tabs.map((t) => t.id)
+      setOrder(ids)
+      e.dataTransfer.setData('offshore/tab-id', String(id))
+      e.dataTransfer.effectAllowed = 'move'
     },
     onDragOver: (e, overId) => {
       e.preventDefault()
       if (dragId == null || overId === dragId) return
-      const order = orderRef.current
-      const from = order.indexOf(dragId)
-      const to = order.indexOf(overId)
-      if (from === -1 || to === -1) return
-      order.splice(from, 1)
-      order.splice(to, 0, dragId)
-      void offshore.tabs.reorder([...order])
+      setOrder((prev) => {
+        const cur = prev ?? ids
+        const from = cur.indexOf(dragId)
+        const to = cur.indexOf(overId)
+        if (from === -1 || to === -1 || from === to) return cur
+        const next = [...cur]
+        next.splice(from, 1)
+        next.splice(to, 0, dragId)
+        return next
+      })
     },
-    onDrop: () => setDragId(null)
+    onDrop: () => {
+      if (order) void offshore.tabs.reorder(order)
+      setDragId(null)
+      setOrder(null)
+    }
   }
 }
+
+// ---------------- tab items ----------------
 
 function TabItemVertical({
   tab,
@@ -273,7 +425,7 @@ function TabItemVertical({
     <div
       className={`tab-item ${active ? 'active' : ''} ${drag.dragId === tab.id ? 'dragging' : ''}`}
       draggable
-      onDragStart={() => drag.onDragStart(tab.id)}
+      onDragStart={(e) => drag.onDragStart(e, tab.id)}
       onDragOver={(e) => drag.onDragOver(e, tab.id)}
       onDragEnd={drag.onDrop}
       onDrop={drag.onDrop}
@@ -281,10 +433,14 @@ function TabItemVertical({
       onAuxClick={(e) => {
         if (e.button === 1) void offshore.tabs.close(tab.id)
       }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        void offshore.menu.tabContext(tab.id)
+      }}
       title={tab.title}
     >
       <span className="tab-favicon">
-        {tab.favicon ? <img src={tab.favicon} alt="" /> : <IconWave size={14} />}
+        <TabGlyph tab={tab} size={13} />
       </span>
       <span className="tab-title">{tab.isLoading && !tab.title ? 'Loading…' : tab.title}</span>
       {(tab.audible || tab.muted) && (
@@ -296,7 +452,7 @@ function TabItemVertical({
           }}
           title={tab.muted ? 'Unmute' : 'Mute'}
         >
-          {tab.muted ? <IconMuted size={12} /> : <IconAudio size={12} />}
+          {tab.muted ? <IconMuted size={11} /> : <IconAudio size={11} />}
         </button>
       )}
       <button
@@ -307,48 +463,129 @@ function TabItemVertical({
         }}
         title="Close tab (⌘W)"
       >
-        <IconClose size={12} />
+        <IconClose size={11} />
       </button>
     </div>
   )
+}
+
+/** Space-scoped tab list with a direction-aware slide on space switch. */
+function useSpacePane(tabsState: TabsState): { dir: number } {
+  const prevIdxRef = useRef(0)
+  const idx = Math.max(
+    0,
+    tabsState.spaces.findIndex((s) => s.id === tabsState.activeSpaceId)
+  )
+  const dir = Math.sign(idx - prevIdxRef.current) || 1
+  prevIdxRef.current = idx
+  return { dir }
+}
+
+function spaceTabsOf(tabsState: TabsState): TabInfo[] {
+  return tabsState.tabs.filter((t) => t.spaceId === tabsState.activeSpaceId)
+}
+
+function orderedTabs(tabs: TabInfo[], order: number[] | null): TabInfo[] {
+  if (!order) return tabs
+  const byId = new Map(tabs.map((t) => [t.id, t]))
+  const out: TabInfo[] = []
+  for (const id of order) {
+    const t = byId.get(id)
+    if (t) {
+      out.push(t)
+      byId.delete(id)
+    }
+  }
+  out.push(...byId.values())
+  return out
 }
 
 // ---------------- vertical sidebar ----------------
 
 export function Sidebar(props: ChromeProps): React.JSX.Element {
   const { tabsState, activeTab, downloads, find } = props
-  const drag = useDragReorder(tabsState.tabs)
+  const spaceTabs = spaceTabsOf(tabsState)
+  const drag = useDragReorder(spaceTabs.map((t) => t.id))
+  const { dir } = useSpacePane(tabsState)
+  const shown = orderedTabs(spaceTabs, drag.order)
+
   return (
     <div className="sidebar drag">
       <div className="traffic-spacer" />
       <div className="sidebar-toolbar no-drag">
         <NavButtons activeTab={activeTab} />
         <div className="toolbar-spring" />
+        {activeTab && (
+          <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
+        )}
+        <SlopChip activeTab={activeTab} settings={props.settings} />
         <ShieldButton {...props} />
         <StarButton {...props} />
+        <SplitButton tabsState={tabsState} />
       </div>
-      <OmniboxPill activeTab={activeTab} onOpenPalette={props.onOpenPalette} />
+      <OmniboxWrap {...props} />
       <FindBar find={find} onFindQuery={props.onFindQuery} onCloseFind={props.onCloseFind} />
-      <BookmarkStrip />
+      {props.bookmarkEdit && (
+        <div className="bm-edit-anchor">
+          <BookmarkEditPopover
+            node={props.bookmarkEdit}
+            nodes={props.bookmarks}
+            onClose={props.onCloseBookmarkEdit}
+          />
+        </div>
+      )}
+      {props.settings.bookmarksBar && (
+        <BookmarksSection
+          nodes={props.bookmarks}
+          renameId={props.renameBookmarkId}
+          onRenameDone={props.onRenameBookmarkDone}
+        />
+      )}
       <button className="new-tab-btn no-drag" onClick={props.onNewTab} title="New tab (⌘T)">
-        <IconPlus size={14} />
+        <span className="tab-favicon">
+          <IconPlus size={13} />
+        </span>
         <span>New Tab</span>
       </button>
-      <div className="tab-list no-drag">
-        {tabsState.tabs.map((tab) => (
+      <div
+        className="tab-list no-drag space-pane"
+        key={tabsState.activeSpaceId}
+        style={{ '--dir': dir } as React.CSSProperties}
+      >
+        {shown.map((tab) => (
           <TabItemVertical key={tab.id} tab={tab} active={tab.id === tabsState.activeTabId} drag={drag} />
         ))}
       </div>
       <Downloads downloads={downloads} />
+      <SpaceSwitcher
+        spaces={tabsState.spaces}
+        activeSpaceId={tabsState.activeSpaceId}
+        renameId={props.renameSpaceId}
+        onRenameDone={props.onRenameSpaceDone}
+        accentFor={props.accentFor}
+      />
       <div className="sidebar-footer no-drag">
-        <browser-action-list partition="persist:offshore" />
+        {props.hasExtensions && <browser-action-list partition="persist:offshore" />}
         <div className="toolbar-spring" />
+        <div className="dl-anchor dl-anchor-up">
+          <button
+            className={`chrome-btn ${props.downloadsPanelOpen ? 'active' : ''}`}
+            title="Downloads"
+            onClick={() => props.onToggleDownloadsPanel(!props.downloadsPanelOpen)}
+          >
+            <IconDownload size={14} />
+          </button>
+          {props.downloadsPanelOpen && <DownloadsPanel onClose={() => props.onToggleDownloadsPanel(false)} />}
+        </div>
         <button
           className="chrome-btn"
           title="Settings (⌘,)"
           onClick={() => void offshore.tabs.create('offshore://settings')}
         >
-          <IconGear size={15} />
+          <IconGear size={14} />
+        </button>
+        <button className="chrome-btn" title="More" onClick={() => void offshore.menu.appContext()}>
+          <IconMore size={14} />
         </button>
       </div>
     </div>
@@ -359,31 +596,73 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
 
 export function TopBar(props: ChromeProps): React.JSX.Element {
   const { tabsState, activeTab, downloads, find } = props
-  const drag = useDragReorder(tabsState.tabs)
+  const spaceTabs = spaceTabsOf(tabsState)
+  const drag = useDragReorder(spaceTabs.map((t) => t.id))
+  const { dir } = useSpacePane(tabsState)
+  const shown = orderedTabs(spaceTabs, drag.order)
+  const [closingIds, setClosingIds] = useState<Set<number>>(new Set())
+
+  // only genuinely new tabs get the slide-in — space switches must not replay it
+  const allIds = tabsState.tabs.map((t) => t.id)
+  const prevAllIds = useRef<Set<number>>(new Set(allIds))
+  const enteringIds = new Set(allIds.filter((id) => !prevAllIds.current.has(id)))
+  useEffect(() => {
+    prevAllIds.current = new Set(allIds)
+  })
+
+  // Helium-quick close: collapse the tab (120ms), then actually close it
+  const closeAnimated = (id: number): void => {
+    setClosingIds((prev) => new Set(prev).add(id))
+    setTimeout(() => {
+      void offshore.tabs.close(id)
+      setClosingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }, 110)
+  }
+
   return (
     <div className="topbar drag">
       <div className="topbar-tabs-row">
         <div className="traffic-spacer-h" />
-        <div className="tab-strip no-drag">
-          {tabsState.tabs.map((tab) => (
+        <SpaceSwitcher
+          spaces={tabsState.spaces}
+          activeSpaceId={tabsState.activeSpaceId}
+          renameId={props.renameSpaceId}
+          onRenameDone={props.onRenameSpaceDone}
+          accentFor={props.accentFor}
+          compact
+        />
+        <div
+          className="tab-strip no-drag space-pane"
+          key={tabsState.activeSpaceId}
+          style={{ '--dir': dir } as React.CSSProperties}
+        >
+          {shown.map((tab) => (
             <div
               key={tab.id}
               className={`htab ${tab.id === tabsState.activeTabId ? 'active' : ''} ${
                 drag.dragId === tab.id ? 'dragging' : ''
-              }`}
+              } ${closingIds.has(tab.id) ? 'closing' : ''} ${enteringIds.has(tab.id) ? 'entering' : ''}`}
               draggable
-              onDragStart={() => drag.onDragStart(tab.id)}
+              onDragStart={(e) => drag.onDragStart(e, tab.id)}
               onDragOver={(e) => drag.onDragOver(e, tab.id)}
               onDragEnd={drag.onDrop}
               onDrop={drag.onDrop}
               onClick={() => void offshore.tabs.activate(tab.id)}
               onAuxClick={(e) => {
-                if (e.button === 1) void offshore.tabs.close(tab.id)
+                if (e.button === 1) closeAnimated(tab.id)
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                void offshore.menu.tabContext(tab.id)
               }}
               title={tab.title}
             >
               <span className="tab-favicon">
-                {tab.favicon ? <img src={tab.favicon} alt="" /> : <IconWave size={13} />}
+                <TabGlyph tab={tab} size={12} />
               </span>
               <span className="tab-title">{tab.title || 'New Tab'}</span>
               {(tab.audible || tab.muted) && (
@@ -394,41 +673,78 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
                     void offshore.tabs.mute(tab.id, !tab.muted)
                   }}
                 >
-                  {tab.muted ? <IconMuted size={11} /> : <IconAudio size={11} />}
+                  {tab.muted ? <IconMuted size={10} /> : <IconAudio size={10} />}
                 </button>
               )}
               <button
                 className="tab-close"
                 onClick={(e) => {
                   e.stopPropagation()
-                  void offshore.tabs.close(tab.id)
+                  closeAnimated(tab.id)
                 }}
               >
-                <IconClose size={11} />
+                <IconClose size={10} />
               </button>
             </div>
           ))}
           <button className="htab-new" onClick={props.onNewTab} title="New tab (⌘T)">
-            <IconPlus size={14} />
+            <IconPlus size={13} />
           </button>
         </div>
       </div>
       <div className="topbar-toolbar-row no-drag">
         <NavButtons activeTab={activeTab} />
-        <OmniboxPill activeTab={activeTab} onOpenPalette={props.onOpenPalette} compact />
+        <OmniboxWrap {...props} compact />
+        {activeTab && (
+          <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
+        )}
+        <SlopChip activeTab={activeTab} settings={props.settings} />
         <ShieldButton {...props} />
         <StarButton {...props} />
-        <browser-action-list partition="persist:offshore" />
-        <FindBar find={find} onFindQuery={props.onFindQuery} onCloseFind={props.onCloseFind} />
-        <Downloads downloads={downloads} />
+        <SplitButton tabsState={tabsState} />
+        <button
+          className={`chrome-btn ${props.settings.bookmarksBar ? 'active' : ''}`}
+          title={props.settings.bookmarksBar ? 'Hide bookmarks bar' : 'Show bookmarks bar'}
+          onClick={() => void offshore.settings.set({ bookmarksBar: !props.settings.bookmarksBar })}
+        >
+          <IconBookmarkTray size={14} />
+        </button>
+        {props.hasExtensions && <browser-action-list partition="persist:offshore" />}
+        <Downloads downloads={downloads} compact />
+        <div className="dl-anchor">
+          <button
+            className={`chrome-btn ${props.downloadsPanelOpen ? 'active' : ''}`}
+            title="Downloads"
+            onClick={() => props.onToggleDownloadsPanel(!props.downloadsPanelOpen)}
+          >
+            <IconDownload size={14} />
+          </button>
+          {props.downloadsPanelOpen && <DownloadsPanel onClose={() => props.onToggleDownloadsPanel(false)} />}
+        </div>
         <button
           className="chrome-btn"
-          title="Settings (⌘,)"
-          onClick={() => void offshore.tabs.create('offshore://settings')}
+          title="Developer Tools (⌥⌘I)"
+          onClick={() => void offshore.tabs.devtools()}
         >
-          <IconGear size={15} />
+          <IconCode size={14} />
         </button>
+        <button className="chrome-btn" title="More" onClick={() => void offshore.menu.appContext()}>
+          <IconMore size={14} />
+        </button>
+        <FindBar find={find} onFindQuery={props.onFindQuery} onCloseFind={props.onCloseFind} floating />
       </div>
+      {props.settings.bookmarksBar && props.bookmarks.length > 0 && (
+        <BookmarksBar nodes={props.bookmarks} />
+      )}
+      {props.bookmarkEdit && (
+        <div className="bm-edit-anchor-top">
+          <BookmarkEditPopover
+            node={props.bookmarkEdit}
+            nodes={props.bookmarks}
+            onClose={props.onCloseBookmarkEdit}
+          />
+        </div>
+      )}
     </div>
   )
 }

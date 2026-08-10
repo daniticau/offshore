@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Test Popups</title>
+  </head>
+  <body>
+    <h1>Popup test page (dev harness only)</h1>
+    <button id="open" onclick="window.open('https://example.com/', '_blank', 'width=500,height=400,popup')">
+      Open popup
+    </button>
+    <script>
+      // drive-by popup with no user gesture — should be blocked
+      setTimeout(() => {
+        window.open('https://example.org/', '_blank', 'width=500,height=400,popup')
+      }, 400)
+    </script>
+  </body>
+</html>
