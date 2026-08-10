@@ -159,9 +159,7 @@ function buildSuggestions(input: string, w?: OffshoreWindow): Suggestion[] {
 function runAction(w: OffshoreWindow, id: ActionId): void {
   switch (id) {
     case 'new-tab':
-      w.tabs.createTab()
-      w.win.webContents.focus()
-      w.sendToChrome('omnibox:focus')
+      w.openNewTab()
       break
     case 'close-tab': {
       const active = w.tabs.activeTab
@@ -300,11 +298,7 @@ export function setupIpc(): void {
     if (!w) return
     const s = settingsStore.get()
     const menu = Menu.buildFromTemplate([
-      { label: 'New Tab', accelerator: 'Cmd+T', click: () => {
-        w.tabs.createTab()
-        w.win.webContents.focus()
-        w.sendToChrome('omnibox:focus')
-      } },
+      { label: 'New Tab', accelerator: 'Cmd+T', click: () => w.openNewTab() },
       { label: 'New Window', accelerator: 'Cmd+N', click: () => void import('./windows').then((m) => m.createWindow()) },
       { label: 'New Space', accelerator: 'Cmd+Alt+N', click: () => {
         const space = w.tabs.createSpace()

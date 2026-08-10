@@ -225,9 +225,11 @@ export function HomeCanvas({
     return () => clearInterval(t)
   }, [])
 
+  // Only take the cursor when there is a pill to take it into — otherwise the
+  // toolbar omnibox owns it and this would yank focus out from under it.
   useEffect(() => {
-    if (autoFocus) inputRef.current?.focus()
-  }, [autoFocus])
+    if (autoFocus && searchPill && !editing) inputRef.current?.focus()
+  }, [autoFocus, searchPill, editing])
 
   useEffect(() => {
     if (editSignal > 0) setEditing(true)

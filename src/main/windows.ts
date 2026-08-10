@@ -189,6 +189,22 @@ export class OffshoreWindow implements TabHost {
     if (!this.win.isDestroyed()) this.win.webContents.send(channel, ...args)
   }
 
+  /**
+   * A new tab, cursor already in whichever search box the layout puts in front
+   * of you: the omnibox in horizontal mode, where it sits right above the
+   * page; the new tab page's own centre pill in vertical mode, where the
+   * omnibox is tucked away in the sidebar.
+   */
+  openNewTab(): void {
+    const tab = this.tabs.createTab()
+    if (settingsStore.get().tabOrientation === 'vertical') {
+      tab.wc.focus()
+    } else {
+      this.win.webContents.focus()
+      this.sendToChrome('omnibox:focus')
+    }
+  }
+
   onTabsChanged(): void {
     serializeSession()
   }

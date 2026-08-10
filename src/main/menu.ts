@@ -52,12 +52,8 @@ export function installMenu(): void {
         {
           label: 'New Tab',
           accelerator: 'Cmd+T',
-          click: withActive((w) => {
-            w.tabs.createTab()
-            // Cursor lands in the omnibox: type, hit enter, gone
-            w.win.webContents.focus()
-            w.sendToChrome('omnibox:focus')
-          })
+          // Cursor lands in the omnibox, or in the page's pill in vertical mode
+          click: withActive((w) => w.openNewTab())
         },
         { label: 'New Window', accelerator: 'Cmd+N', click: () => void createWindow() },
         {

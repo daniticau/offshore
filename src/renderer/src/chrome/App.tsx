@@ -76,6 +76,10 @@ function ContentFrame({ children }: { children?: React.ReactNode }): React.JSX.E
  * editing widgets here and editing them on a new tab are one thing. Typing in
  * the pill conjures the first tab; the window only closes when the human
  * closes it.
+ *
+ * The pill follows the same rule as a new tab: it appears in vertical layout,
+ * where the omnibox is tucked away in the sidebar, and stays away in
+ * horizontal layout, where the omnibox sits right above with the cursor in it.
  */
 function EmptyHome({
   settings,
@@ -84,6 +88,7 @@ function EmptyHome({
   settings: Settings
   onPatch(patch: Partial<Settings>): void
 }): React.JSX.Element {
+  const vertical = settings.tabOrientation === 'vertical'
   return (
     <HomeCanvas
       className="no-drag"
@@ -91,7 +96,8 @@ function EmptyHome({
       onPatch={onPatch}
       onSubmit={(input) => void offshore.tabs.create(input)}
       fetchWeather={() => offshore.brief.weather()}
-      autoFocus
+      searchPill={vertical}
+      autoFocus={vertical}
     />
   )
 }
@@ -344,6 +350,19 @@ export function App(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [omniboxNonce])
 
+  // Closing the last tab lands on the home screen. In horizontal layout that
+  // screen has no pill, so the omnibox takes the cursor; in vertical layout
+  // the pill is right there on the screen and focuses itself.
+  // starts true so a launch that restores tabs never yanks focus to the omnibox
+  const wasEmpty = useRef(true)
+  const spaceIsEmpty = tabsState.tabs.every((t) => t.spaceId !== tabsState.activeSpaceId)
+  useEffect(() => {
+    if (spaceIsEmpty && !wasEmpty.current && mode === 'horizontal') {
+      setOmniboxNonce((n) => n + 1)
+    }
+    wasEmpty.current = spaceIsEmpty
+  }, [spaceIsEmpty, mode])
+
   // ---- overlay (content hidden while a chrome surface must float over it) ----
   const overlayOpen =
     omniboxOverlay ||
@@ -383,9 +402,15 @@ export function App(): React.JSX.Element {
     void offshore.tabs.navigate(null, input)
   }, [])
 
+  /**
+   * A new tab hands the cursor to whichever search box the layout puts in
+   * front of you: the omnibox in horizontal mode, the page's own pill in
+   * vertical mode.
+   */
   const newTab = useCallback(() => {
     void offshore.tabs.create().then(() => {
-      setOmniboxNonce((n) => n + 1)
+      if (stateRef.current.settings.tabOrientation === 'vertical') void offshore.chrome.focusPage()
+      else setOmniboxNonce((n) => n + 1)
     })
   }, [])
 
