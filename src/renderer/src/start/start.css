@@ -32,7 +32,9 @@ body,
   position: absolute;
   inset: 0;
   display: grid;
-  grid-template-rows: 1fr auto 1fr;
+  /* minmax(0, 1fr) so a tall widget stack scrolls inside its half instead of
+     growing the row and shoving the pill off centre */
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
   justify-items: center;
   z-index: 2;
 }
@@ -46,7 +48,14 @@ body,
   gap: 14px;
   width: 100%;
   max-width: 1040px;
+  max-height: 100%;
   padding: 16px var(--sp-7) 28px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.start-center::-webkit-scrollbar {
+  display: none;
 }
 
 /* ---------- search pill ---------- */
@@ -88,6 +97,13 @@ body,
   color: var(--ink-faint);
   opacity: 0.5;
 }
+/* new tab: no pill, but the same hole in the middle, so the widgets sit
+   exactly where they sit on the zero-tab screen */
+.start-search-gap {
+  grid-row: 2;
+  height: 56px;
+}
+
 /* invisible twin of the input — its width is what the pill grows to */
 .start-measure {
   position: absolute;

@@ -163,6 +163,13 @@ export interface HomeCanvasProps {
   /** A query or URL was committed in the search pill. */
   onSubmit(input: string): void
   fetchWeather(): Promise<BriefWeather | null>
+  /**
+   * Show the centred search pill. On for the zero-tab window, where there is
+   * no tab to type into; off for a new tab, where the toolbar omnibox already
+   * has the cursor. Either way the pill's row is held, so the widgets land in
+   * exactly the same place on both screens.
+   */
+  searchPill?: boolean
   /** Bump to enter widget edit mode from outside (context menu, menu bar). */
   editSignal?: number
   autoFocus?: boolean
@@ -186,6 +193,7 @@ export function HomeCanvas({
   onPatch: patch,
   onSubmit,
   fetchWeather,
+  searchPill = true,
   editSignal = 0,
   autoFocus = false,
   className = ''
@@ -193,7 +201,11 @@ export function HomeCanvas({
   const [now, setNow] = useState(new Date())
   const [editing, setEditing] = useState(false)
   const [selected, setSelected] = useState<WidgetKey | null>(null)
-  const [drag, setDrag] = useState<{ key: WidgetKey; dx: number; dy: number } | null>(null)
+  const [drag, setDrag] = useState<{
+    key: WidgetKey
+    dx: number
+    dy: number
+  } | null>(null)
   const [previewOrder, setPreviewOrder] = useState<WidgetKey[] | null>(null)
   const [previewAlign, setPreviewAlign] = useState<WidgetAlign | null>(null)
   const [text, setText] = useState('')
@@ -264,8 +276,8 @@ export function HomeCanvas({
 
   const widgets: NewTabWidgets = settings.newTabWidgets ?? DEFAULT_SETTINGS.newTabWidgets
   const layout = settings.newTabWidgetLayout ?? {}
-  const baseOrder = (settings.newTabWidgetOrder?.length ? settings.newTabWidgetOrder : ALL_WIDGETS).filter((k) =>
-    ALL_WIDGETS.includes(k)
+  const baseOrder = (settings.newTabWidgetOrder?.length ? settings.newTabWidgetOrder : ALL_WIDGETS).filter(
+    (k) => ALL_WIDGETS.includes(k)
   )
   const fullOrder: WidgetKey[] = [...baseOrder, ...ALL_WIDGETS.filter((k) => !baseOrder.includes(k))]
   const order = previewOrder ?? fullOrder
@@ -281,13 +293,25 @@ export function HomeCanvas({
   const wantsWeather = widgets.weather || widgets.forecast || widgets.sun
   const weather = useWeather(wantsWeather, hasLocation, fetchWeather)
 
-  const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  const time = now.toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit'
+  })
   const acc = resolveAccentColors(settings.appearance ?? DEFAULT_SETTINGS.appearance, isDark)
 
   const dateText = (style: string): string => {
-    if (style === 'short') return now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+    if (style === 'short')
+      return now.toLocaleDateString([], {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric'
+      })
     if (style === 'numeric') return now.toLocaleDateString()
-    return now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })
+    return now.toLocaleDateString([], {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric'
+    })
   }
 
   const renderWidget = (key: WidgetKey, style: string): React.ReactNode => {
@@ -297,7 +321,11 @@ export function HomeCanvas({
       case 'date':
         return <div className="date">{dateText(style)}</div>
       case 'greeting':
-        return <div className={style === 'plain' ? 'greet-plain' : 'brief-line greet'}>{greeting(now.getHours())}.</div>
+        return (
+          <div className={style === 'plain' ? 'greet-plain' : 'brief-line greet'}>
+            {greeting(now.getHours())}.
+          </div>
+        )
       case 'weather':
         return weather ? (
           <WeatherNow weather={weather} style={style} />
@@ -394,7 +422,10 @@ export function HomeCanvas({
       newTabWidgetOrder: previewOrder ?? fullOrder,
       newTabWidgetLayout: {
         ...layout,
-        [key]: { ...layoutFor(key), align: previewAlign ?? layoutFor(key).align }
+        [key]: {
+          ...layoutFor(key),
+          align: previewAlign ?? layoutFor(key).align
+        }
       }
     })
     endDrag()
@@ -410,7 +441,9 @@ export function HomeCanvas({
   }
 
   const setStyle = (key: WidgetKey, style: string): void => {
-    patch({ newTabWidgetLayout: { ...layout, [key]: { ...layoutFor(key), style } } })
+    patch({
+      newTabWidgetLayout: { ...layout, [key]: { ...layoutFor(key), style } }
+    })
   }
 
   // press and hold empty space to start editing, like the home screen
@@ -430,7 +463,9 @@ export function HomeCanvas({
     <div
       ref={hostRef}
       className={`start ${editing ? 'editing' : ''} ${className}`}
-      style={{ background: `linear-gradient(180deg, ${acc.tintTop} 0%, ${acc.tintBottom} 100%)` }}
+      style={{
+        background: `linear-gradient(180deg, ${acc.tintTop} 0%, ${acc.tintBottom} 100%)`
+      }}
       onPointerDown={startHold}
       onPointerUp={cancelHold}
       onPointerMove={cancelHold}
@@ -473,7 +508,14 @@ export function HomeCanvas({
                 className={`widget-slot align-${align} ${editing ? 'editable' : ''} ${dragging ? 'dragging' : ''} ${
                   selected === key ? 'selected' : ''
                 }`}
-                style={dragging ? { transform: `translate(${drag.dx}px, ${drag.dy}px)`, zIndex: 5 } : undefined}
+                style={
+                  dragging
+                    ? {
+                        transform: `translate(${drag.dx}px, ${drag.dy}px)`,
+                        zIndex: 5
+                      }
+                    : undefined
+                }
                 onPointerDown={(e) => onWidgetPointerDown(e, key)}
                 onPointerMove={(e) => onWidgetPointerMove(e, key)}
                 onPointerUp={(e) => onWidgetPointerUp(e, key)}
@@ -517,40 +559,49 @@ export function HomeCanvas({
           })}
         </div>
 
-        <div className="start-search" style={pillWidth ? { width: pillWidth } : undefined}>
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="M21 21l-4.35-4.35" />
-          </svg>
-          <input
-            ref={inputRef}
-            value={text}
-            placeholder="Search or type a URL"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            tabIndex={editing ? -1 : 0}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && submit()}
-          />
-          <span className="start-measure" ref={mirrorRef} aria-hidden="true">
-            {text}
-          </span>
-        </div>
+        {!searchPill && <div className="start-search-gap" />}
+
+        {searchPill && (
+          <div className="start-search" style={pillWidth ? { width: pillWidth } : undefined}>
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.35-4.35" />
+            </svg>
+            <input
+              ref={inputRef}
+              value={text}
+              placeholder="Search or type a URL"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              tabIndex={editing ? -1 : 0}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && submit()}
+            />
+            <span className="start-measure" ref={mirrorRef} aria-hidden="true">
+              {text}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className={`we-tray ${editing ? 'on' : ''}`} aria-hidden={!editing}>
         {availableKeys.length > 0 ? (
           availableKeys.map((key) => (
-            <button key={key} className="we-tray-add" tabIndex={editing ? 0 : -1} onClick={() => addWidget(key)}>
+            <button
+              key={key}
+              className="we-tray-add"
+              tabIndex={editing ? 0 : -1}
+              onClick={() => addWidget(key)}
+            >
               <span className="we-tray-badge">+</span>
               {WIDGET_LABELS[key]}
             </button>

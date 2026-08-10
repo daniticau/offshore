@@ -15,8 +15,9 @@ const internal = (window as unknown as { offshoreInternal?: InternalApi }).offsh
 
 /**
  * The new tab page — a thin shell around HomeCanvas, which the zero-tab window
- * renders too. Everything visible lives there; this only wires up settings,
- * weather, and where a submitted query goes (this tab navigates in place).
+ * renders too. No search pill here: opening a tab puts the cursor in the
+ * toolbar omnibox, so the page keeps only the widgets. Everything visible
+ * lives in HomeCanvas; this wires up settings, weather, and navigation.
  */
 function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
@@ -43,6 +44,7 @@ function App(): React.JSX.Element {
       onPatch={patch}
       onSubmit={(input) => void internal?.open(input)}
       fetchWeather={async () => (await internal?.brief.weather()) ?? null}
+      searchPill={false}
       editSignal={editSignal}
     />
   )
