@@ -8,6 +8,10 @@ files:
   - "!**/.DS_Store"
 asar: true
 npmRebuild: false
+# castLabs Electron for Content Security lives in its own releases repo —
+# without this mirror, electron-builder 404s against upstream electron/electron
+electronDownload:
+  mirror: https://github.com/castlabs/electron-releases/releases/download/
 mac:
   icon: build/icon.icns
   category: public.app-category.productivity
