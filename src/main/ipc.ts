@@ -2,6 +2,7 @@ import {
   Menu,
   MenuItem,
   app,
+  clipboard,
   dialog,
   ipcMain,
   shell,
@@ -92,9 +93,26 @@ export function broadcast(channel: string, ...args: unknown[]): void {
   for (const w of windows) w.sendToChrome(channel, ...args)
 }
 
+/**
+ * What the omnibox opens with: the sites you go back to, most-used first, then
+ * bookmarks to fill out the list. No query yet — this is the empty-input state.
+ */
+function defaultSuggestions(): Suggestion[] {
+  const out: Suggestion[] = []
+  const seen = new Set<string>()
+  const push = (s: Suggestion): void => {
+    if (seen.has(s.url)) return
+    seen.add(s.url)
+    out.push(s)
+  }
+  if (settingsStore.get().keepHistory) for (const h of historyStore.top(6)) push(h)
+  for (const b of bookmarksStore.top(6)) push(b)
+  return out.slice(0, 6)
+}
+
 function buildSuggestions(input: string, w?: OffshoreWindow): Suggestion[] {
   const q = input.trim()
-  if (!q) return []
+  if (!q) return defaultSuggestions()
   const ql = q.toLowerCase()
   const settings = settingsStore.get()
   const out: Suggestion[] = []
@@ -516,6 +534,10 @@ export function setupIpc(): void {
   ipcMain.handle('chrome:set-collapsed', (e, collapsed: boolean) =>
     chromeWindow(e)?.setCollapsed(collapsed)
   )
+  ipcMain.handle('chrome:copy-text', (e, text: string) => {
+    if (!isTrustedSender(e) || typeof text !== 'string' || !text) return
+    clipboard.writeText(text)
+  })
 
   // ---- find in page ----
   ipcMain.handle('find:start', (e, text: string, opts: { findNext: boolean; forward: boolean }) => {

@@ -4,9 +4,11 @@ import { offshore, prettyHost } from './api'
 import {
   IconArrowUpRight,
   IconBolt,
+  IconCheck,
   IconClock,
   IconGlobe,
   IconGear,
+  IconLink,
   IconSearch,
   IconStarFilled,
   IconTune,
@@ -40,6 +42,12 @@ function hintFor(s: Suggestion): string {
   }
 }
 
+/** How a url reads in a suggestion row: "x.com/home" — no scheme, no www. */
+function displayPath(url: string): string {
+  if (!url || !/^https?:/i.test(url)) return ''
+  return url.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '')
+}
+
 /** The completable form of a suggestion: "youtube.com/…" — no scheme, no www. */
 function completionOf(s: Suggestion): string | null {
   if (s.kind !== 'url' && s.kind !== 'bookmark' && s.kind !== 'history' && s.kind !== 'internal') {
@@ -59,6 +67,8 @@ export interface OmniboxProps {
   onNavigate: (input: string) => void
   /** Site-info panel toggle — shown as the tune button when a site is loaded. */
   onSiteInfo?: () => void
+  /** Page chips (shield, star, …) shown at the bar's trailing edge. */
+  actions?: React.ReactNode
 }
 
 /**
@@ -66,7 +76,15 @@ export interface OmniboxProps {
  * here on every new tab; suggestions drop down underneath; the top match
  * type-completes ahead of the cursor like a classic omnibox.
  */
-export function Omnibox({ activeTab, compact, focusNonce, onOverlayNeed, onNavigate, onSiteInfo }: OmniboxProps): React.JSX.Element {
+export function Omnibox({
+  activeTab,
+  compact,
+  focusNonce,
+  onOverlayNeed,
+  onNavigate,
+  onSiteInfo,
+  actions
+}: OmniboxProps): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState('')
   const [typed, setTyped] = useState('')
@@ -75,12 +93,17 @@ export function Omnibox({ activeTab, compact, focusNonce, onOverlayNeed, onNavig
   const inputRef = useRef<HTMLInputElement>(null)
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastLen = useRef(0)
+  const [copied, setCopied] = useState(false)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => void (copyTimer.current && clearTimeout(copyTimer.current)), [])
 
   const isStart = !activeTab || activeTab.displayUrl === 'offshore://start' || !activeTab.url
   // Chrome-style trim when idle: hide the boring https:// (http:// stays visible — it's a warning)
   const idleValue = isStart ? '' : activeTab.displayUrl.replace(/^https:\/\//i, '').replace(/\/$/, '')
 
-  const dropdownOpen = editing && typed.trim().length > 0 && suggestions.length > 0
+  // The list is up the moment the bar takes focus — top sites before you type a
+  // character, live matches after. Every browser worth using does this.
+  const dropdownOpen = editing && suggestions.length > 0
   useEffect(() => {
     onOverlayNeed(dropdownOpen)
   }, [dropdownOpen, onOverlayNeed])
@@ -114,14 +137,10 @@ export function Omnibox({ activeTab, compact, focusNonce, onOverlayNeed, onNavig
     []
   )
 
+  /** Empty input is a real query here: it asks for the top-sites list. */
   const fetchSuggestions = (raw: string, grew: boolean): void => {
     if (debounce.current) clearTimeout(debounce.current)
     debounce.current = setTimeout(() => {
-      if (!raw.trim()) {
-        setSuggestions([])
-        setSelected(0)
-        return
-      }
       void offshore.omnibox.suggest(raw).then((sugs) => {
         setSuggestions(sugs)
         setSelected(0)
@@ -186,6 +205,22 @@ export function Omnibox({ activeTab, compact, focusNonce, onOverlayNeed, onNavig
 
   const shownValue = editing ? value : idleValue
   const showFavicon = !editing && !isStart && activeTab?.favicon
+  const onPage = !editing && /^https?:/.test(activeTab?.url ?? '') && !!onSiteInfo
+  // The page controls sit at the trailing edge in both layouts — the star lives
+  // in the address bar, the way Chromium parks it. The sidebar pill drops its
+  // leading icon so the host reads flush left (Arc); the compact topbar pill
+  // keeps its leading tune button and only gains the trailing cluster.
+  const trailingActions = onPage
+  const leadingTune = onPage && !!compact
+
+  const copyLink = (): void => {
+    const url = activeTab?.url
+    if (!url) return
+    void offshore.chrome.copyText(url)
+    setCopied(true)
+    if (copyTimer.current) clearTimeout(copyTimer.current)
+    copyTimer.current = setTimeout(() => setCopied(false), 1100)
+  }
   // internal pages wear their own marks; the wave is the badge of a fresh tab
   const idleGlyph = activeTab?.displayUrl.startsWith('offshore://settings') ? (
     <IconGear size={13} />
@@ -194,12 +229,16 @@ export function Omnibox({ activeTab, compact, focusNonce, onOverlayNeed, onNavig
   )
 
   return (
-    <div className={`omnibox no-drag ${compact ? 'compact' : ''} ${editing ? 'editing' : ''}`}>
-      {!editing && /^https?:/.test(activeTab?.url ?? '') && onSiteInfo ? (
+    <div
+      className={`omnibox no-drag ${compact ? 'compact' : ''} ${editing ? 'editing' : ''} ${
+        trailingActions ? 'has-actions' : ''
+      }`}
+    >
+      {leadingTune ? (
         <button className="omni-tune" title="Site information" onClick={onSiteInfo}>
           <IconTune size={14} />
         </button>
-      ) : (
+      ) : trailingActions ? null : (
         <span className="omni-icon">
           {showFavicon ? (
             <img src={activeTab.favicon} alt="" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
@@ -234,10 +273,31 @@ export function Omnibox({ activeTab, compact, focusNonce, onOverlayNeed, onNavig
         onChange={onChange}
         onKeyDown={onKeyDown}
       />
+      {trailingActions && (
+        <div className="omni-actions">
+          {actions}
+          <button
+            className={`omni-act ${copied ? 'done' : ''}`}
+            title={copied ? 'Copied' : 'Copy link'}
+            onClick={copyLink}
+          >
+            {copied ? <IconCheck size={14} /> : <IconLink size={14} />}
+          </button>
+          {/* the topbar pill already wears the tune button on its leading edge */}
+          {!compact && (
+            <button className="omni-tune boxed" title="Site information" onClick={onSiteInfo}>
+              <IconTune size={14} />
+            </button>
+          )}
+        </div>
+      )}
       {dropdownOpen && (
         <div className="omni-dropdown surface-card">
           {suggestions.map((s, i) => {
             const Icon = KIND_ICON[s.kind] ?? IconGlobe
+            const path = displayPath(s.url)
+            const primary = s.kind === 'tab' ? s.text : s.title || (path || s.text)
+            const secondary = s.kind === 'action' || s.kind === 'search' || primary === path ? '' : path
             const hint = hintFor(s)
             return (
               <div
@@ -250,12 +310,23 @@ export function Omnibox({ activeTab, compact, focusNonce, onOverlayNeed, onNavig
                 }}
               >
                 <span className="s-icon">
-                  <Icon size={15} />
+                  {/^https?:/.test(s.url) ? (
+                    <Favicon
+                      url={s.url}
+                      stored={s.favicon}
+                      className="s-favicon"
+                      fallback={<Icon size={15} />}
+                    />
+                  ) : (
+                    <Icon size={15} />
+                  )}
                 </span>
-                <span className="s-text">{s.kind === 'tab' ? s.text : s.title || s.text}</span>
-                <span className="s-url">
-                  {s.kind === 'tab' || s.kind === 'action' ? hint : s.title ? s.text : hint}
-                </span>
+                <span className="s-text">{primary}</span>
+                {secondary && <span className="s-url">— {secondary}</span>}
+                <span className="s-fill" />
+                {(s.kind === 'tab' || s.kind === 'action' || s.kind === 'search') && (
+                  <span className="s-hint">{hint}</span>
+                )}
               </div>
             )
           })}

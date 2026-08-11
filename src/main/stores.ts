@@ -322,8 +322,20 @@ class BookmarksStore extends EventEmitter {
       kind: 'bookmark' as const,
       text: n.url!,
       url: n.url!,
-      title: n.title
+      title: n.title,
+      favicon: n.favicon
     }))
+  }
+
+  /** First few bookmarks in tree order — fills out the omnibox's opening list. */
+  top(limit: number): Suggestion[] {
+    const out: Suggestion[] = []
+    for (const n of this.file.data.nodes) {
+      if (n.type !== 'bookmark' || !n.url) continue
+      out.push({ kind: 'bookmark', text: n.url, url: n.url, title: n.title, favicon: n.favicon })
+      if (out.length === limit) break
+    }
+    return out
   }
 
   flush(): void {
@@ -395,6 +407,31 @@ class HistoryStore {
       url: e.url,
       title: e.title
     }))
+  }
+
+  /**
+   * The sites you actually go to, one row per host — what the omnibox shows the
+   * moment it opens, before a single character is typed.
+   */
+  top(limit: number): Suggestion[] {
+    const now = Date.now()
+    const best = new Map<string, { score: number; e: HistoryEntry }>()
+    for (const e of this.byUrl.values()) {
+      let host: string
+      try {
+        host = new URL(e.url).host
+      } catch {
+        continue
+      }
+      const recency = Math.max(0, 1 - (now - e.lastVisit) / (1000 * 60 * 60 * 24 * 30))
+      const score = e.visitCount * 2 + recency * 10
+      const cur = best.get(host)
+      if (!cur || score > cur.score) best.set(host, { score, e })
+    }
+    return [...best.values()]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(({ e }) => ({ kind: 'history' as const, text: e.url, url: e.url, title: e.title }))
   }
 
   clear(): void {

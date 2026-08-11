@@ -248,7 +248,11 @@ export function BookmarksSection({ nodes, renameId, onRenameDone }: BookmarksSec
 
 // ---------------- bookmarks bar (horizontal layout) ----------------
 
-/** Chrome-style bar under the toolbar: top-level items, folders drop a menu. */
+/**
+ * Chrome-style bar under the toolbar: top-level items, folders drop a menu.
+ * Clearing a bookmark's name leaves the favicon alone on the bar — the same
+ * trick Chromium allows, and the reason the bar can hold a couple of dozen.
+ */
 export function BookmarksBar({ nodes }: { nodes: BookmarkNode[] }): React.JSX.Element | null {
   const [openFolder, setOpenFolder] = useState<string | null>(null)
   const top = childrenOf(nodes, null)
@@ -277,7 +281,8 @@ export function BookmarksBar({ nodes }: { nodes: BookmarkNode[] }): React.JSX.El
         n.type === 'folder' ? (
           <div className="bm-bar-folder" key={n.id}>
             <button
-              className={`bm-bar-item ${openFolder === n.id ? 'open' : ''}`}
+              className={`bm-bar-item ${n.title.trim() ? '' : 'icon-only'} ${openFolder === n.id ? 'open' : ''}`}
+              title={n.title}
               onClick={() => setOpenFolder(openFolder === n.id ? null : n.id)}
               onContextMenu={(e) => {
                 e.preventDefault()
@@ -287,7 +292,7 @@ export function BookmarksBar({ nodes }: { nodes: BookmarkNode[] }): React.JSX.El
               <span className="bm-bar-foldericon">
                 <IconFolder size={12} />
               </span>
-              <span className="bm-bar-title">{n.title}</span>
+              {n.title.trim() && <span className="bm-bar-title">{n.title}</span>}
             </button>
             {openFolder === n.id && (
               <div className="bm-bar-menu surface-card" onMouseLeave={() => setOpenFolder(null)}>
@@ -306,7 +311,7 @@ export function BookmarksBar({ nodes }: { nodes: BookmarkNode[] }): React.JSX.El
                       onClick={() => openUrl(c.url)}
                     >
                       <BookmarkFavicon node={c} />
-                      <span className="bm-bar-title">{c.title}</span>
+                      <span className="bm-bar-title">{c.title || prettyHost(c.url ?? '')}</span>
                     </button>
                   )
                 )}
@@ -316,8 +321,8 @@ export function BookmarksBar({ nodes }: { nodes: BookmarkNode[] }): React.JSX.El
         ) : (
           <button
             key={n.id}
-            className="bm-bar-item"
-            title={n.url}
+            className={`bm-bar-item ${n.title.trim() ? '' : 'icon-only'}`}
+            title={n.title.trim() ? `${n.title}\n${n.url}` : n.url}
             onClick={() => openUrl(n.url)}
             onContextMenu={(e) => {
               e.preventDefault()
@@ -325,7 +330,7 @@ export function BookmarksBar({ nodes }: { nodes: BookmarkNode[] }): React.JSX.El
             }}
           >
             <BookmarkFavicon node={n} />
-            <span className="bm-bar-title">{n.title}</span>
+            {n.title.trim() && <span className="bm-bar-title">{n.title}</span>}
           </button>
         )
       )}

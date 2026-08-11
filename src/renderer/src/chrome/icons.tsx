@@ -162,6 +162,14 @@ export const IconFinder = svg(
   </>
 )
 
+export const IconLink = svg(
+  <>
+    <path d="M10 14a4.5 4.5 0 0 0 6.6.4l2.6-2.6a4.5 4.5 0 0 0-6.4-6.4L11.4 6.8" />
+    <path d="M14 10a4.5 4.5 0 0 0-6.6-.4l-2.6 2.6a4.5 4.5 0 0 0 6.4 6.4l1.4-1.4" />
+  </>
+)
+export const IconCheck = svg(<path d="M4.5 12.5l5 5 10-11" />)
+
 export const IconTune = svg(
   <>
     <path d="M4 8h10" />

@@ -176,6 +176,18 @@ function StarButton({
 
 function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Element {
   const { activeTab } = props
+  // The page chips ride inside the pill in both layouts: Arc-style in the
+  // sidebar, and in the topbar because the star belongs to the address bar.
+  const actions = (
+    <>
+      <SlopChip activeTab={activeTab} settings={props.settings} />
+      {activeTab && (
+        <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
+      )}
+      <ShieldButton {...props} />
+      <StarButton {...props} />
+    </>
+  )
   return (
     <div className={`omnibox-wrap ${props.compact ? 'compact' : ''}`}>
       <Omnibox
@@ -185,6 +197,7 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
         onOverlayNeed={props.onOmniboxOverlay}
         onNavigate={props.onNavigate}
         onSiteInfo={() => props.onToggleSiteInfo(!props.siteInfoOpen)}
+        actions={actions}
       />
       {props.siteInfoOpen && activeTab && (
         <SiteInfo
@@ -287,6 +300,35 @@ function SplitButton({ tabsState }: { tabsState: TabsState }): React.JSX.Element
       onClick={() => void offshore.tabs.toggleSplit()}
     >
       <IconSplit size={14} />
+    </button>
+  )
+}
+
+/**
+ * Chromium parks the profile beside the menu; in Offshore a profile is a space —
+ * its accent, its name, and (when it has separate logins) its own cookie jar.
+ * Clicking it opens that space's menu, which is where those settings already live.
+ */
+function ProfileButton({
+  tabsState,
+  accentFor
+}: Pick<ChromeProps, 'tabsState' | 'accentFor'>): React.JSX.Element | null {
+  const space = tabsState.spaces.find((s) => s.id === tabsState.activeSpaceId)
+  if (!space) return null
+  const separate = space.profile === 'separate'
+  const name = space.name.trim()
+  return (
+    <button
+      className={`profile-btn ${separate ? 'separate' : ''}`}
+      style={{ '--space-color': accentFor(space) } as React.CSSProperties}
+      title={`${name || 'Space'} — ${separate ? 'separate logins' : 'shared logins'}`}
+      onClick={() => void offshore.menu.spaceContext(space.id)}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        void offshore.menu.spaceContext(space.id)
+      }}
+    >
+      {(name[0] ?? '•').toUpperCase()}
     </button>
   )
 }
@@ -549,17 +591,15 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
 
   return (
     <div className="sidebar drag">
-      <div className="traffic-spacer" />
-      <div className="sidebar-toolbar no-drag">
-        <NavButtons activeTab={activeTab} />
+      {/* The traffic lights share the nav row — the strip left of the arrows is
+          theirs, and stays draggable so the window still moves by its top edge. */}
+      <div className="sidebar-toolbar">
+        <div className="traffic-inline" />
         <div className="toolbar-spring" />
-        {activeTab && (
-          <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
-        )}
-        <SlopChip activeTab={activeTab} settings={props.settings} />
-        <ShieldButton {...props} />
-        <StarButton {...props} />
-        <SplitButton tabsState={tabsState} />
+        <NavButtons activeTab={activeTab} />
+        <button className="chrome-btn no-drag" title="More" onClick={() => void offshore.menu.appContext()}>
+          <IconMore size={14} />
+        </button>
       </div>
       <OmniboxWrap {...props} />
       <FindBar find={find} onFindQuery={props.onFindQuery} onCloseFind={props.onCloseFind} />
@@ -621,15 +661,13 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
           </button>
           {props.downloadsPanelOpen && <DownloadsPanel onClose={() => props.onToggleDownloadsPanel(false)} />}
         </div>
+        <SplitButton tabsState={tabsState} />
         <button
           className="chrome-btn"
           title="Settings (⌘,)"
           onClick={() => void offshore.tabs.create('offshore://settings')}
         >
           <IconGear size={14} />
-        </button>
-        <button className="chrome-btn" title="More" onClick={() => void offshore.menu.appContext()}>
-          <IconMore size={14} />
         </button>
       </div>
     </div>
@@ -715,45 +753,47 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
           </button>
         </div>
       </div>
+      {/* Chromium's toolbar order, kept exactly: navigation on the left, the
+          address bar (star and all) in the middle, then extensions, downloads,
+          bookmarks, devtools, the profile, and the menu. */}
       <div className="topbar-toolbar-row no-drag">
-        <NavButtons activeTab={activeTab} />
-        <OmniboxWrap {...props} compact />
-        {activeTab && (
-          <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
-        )}
-        <SlopChip activeTab={activeTab} settings={props.settings} />
-        <ShieldButton {...props} />
-        <StarButton {...props} />
-        <SplitButton tabsState={tabsState} />
-        <button
-          className={`chrome-btn ${props.settings.bookmarksBar ? 'active' : ''}`}
-          title={props.settings.bookmarksBar ? 'Hide bookmarks bar' : 'Show bookmarks bar'}
-          onClick={() => void offshore.settings.set({ bookmarksBar: !props.settings.bookmarksBar })}
-        >
-          <IconBookmarkTray size={14} />
-        </button>
-        {props.hasExtensions && <browser-action-list partition="persist:offshore" />}
-        <Downloads downloads={downloads} compact />
-        <div className="dl-anchor">
-          <button
-            className={`chrome-btn ${props.downloadsPanelOpen ? 'active' : ''}`}
-            title="Downloads"
-            onClick={() => props.onToggleDownloadsPanel(!props.downloadsPanelOpen)}
-          >
-            <IconDownload size={14} />
-          </button>
-          {props.downloadsPanelOpen && <DownloadsPanel onClose={() => props.onToggleDownloadsPanel(false)} />}
+        <div className="toolbar-cluster">
+          <NavButtons activeTab={activeTab} />
+          <SplitButton tabsState={tabsState} />
         </div>
-        <button
-          className="chrome-btn"
-          title="Developer Tools (⌥⌘I)"
-          onClick={() => void offshore.tabs.devtools()}
-        >
-          <IconCode size={14} />
-        </button>
-        <button className="chrome-btn" title="More" onClick={() => void offshore.menu.appContext()}>
-          <IconMore size={14} />
-        </button>
+        <OmniboxWrap {...props} compact />
+        <div className="toolbar-cluster trailing">
+          {props.hasExtensions && <browser-action-list partition="persist:offshore" />}
+          <Downloads downloads={downloads} compact />
+          <div className="dl-anchor">
+            <button
+              className={`chrome-btn ${props.downloadsPanelOpen ? 'active' : ''}`}
+              title="Downloads"
+              onClick={() => props.onToggleDownloadsPanel(!props.downloadsPanelOpen)}
+            >
+              <IconDownload size={14} />
+            </button>
+            {props.downloadsPanelOpen && <DownloadsPanel onClose={() => props.onToggleDownloadsPanel(false)} />}
+          </div>
+          <button
+            className={`chrome-btn ${props.settings.bookmarksBar ? 'active' : ''}`}
+            title={props.settings.bookmarksBar ? 'Hide bookmarks bar' : 'Show bookmarks bar'}
+            onClick={() => void offshore.settings.set({ bookmarksBar: !props.settings.bookmarksBar })}
+          >
+            <IconBookmarkTray size={14} />
+          </button>
+          <button
+            className="chrome-btn"
+            title="Developer Tools (⌥⌘I)"
+            onClick={() => void offshore.tabs.devtools()}
+          >
+            <IconCode size={14} />
+          </button>
+          <ProfileButton tabsState={tabsState} accentFor={props.accentFor} />
+          <button className="chrome-btn" title="More" onClick={() => void offshore.menu.appContext()}>
+            <IconMore size={14} />
+          </button>
+        </div>
         <FindBar find={find} onFindQuery={props.onFindQuery} onCloseFind={props.onCloseFind} floating />
       </div>
       {props.settings.bookmarksBar && props.bookmarks.length > 0 && (

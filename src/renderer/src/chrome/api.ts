@@ -57,6 +57,7 @@ export interface OffshoreApi {
     setOverlay(open: boolean): Promise<void>
     setCollapsed(collapsed: boolean): Promise<void>
     focusPage(): Promise<void>
+    copyText(text: string): Promise<void>
   }
   privacy: {
     clearSite(): Promise<boolean>

@@ -74,7 +74,8 @@ const api = {
       invoke('chrome:insets', insets),
     setOverlay: (open: boolean) => invoke('chrome:overlay', open),
     setCollapsed: (collapsed: boolean) => invoke('chrome:set-collapsed', collapsed),
-    focusPage: () => invoke('chrome:focus-page')
+    focusPage: () => invoke('chrome:focus-page'),
+    copyText: (text: string) => invoke('chrome:copy-text', text)
   },
   privacy: {
     clearSite: () => invoke('privacy:clear-site')

@@ -469,6 +469,8 @@ export interface Suggestion {
   /** what gets navigated to (url or search query url) */
   url: string
   title?: string
+  /** site icon we already have on file; the row falls back to the site's own */
+  favicon?: string
   /** kind 'tab': the tab to switch to */
   tabId?: number
   /** kind 'action': what to run */
