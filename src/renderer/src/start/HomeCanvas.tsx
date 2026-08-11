@@ -172,6 +172,12 @@ export interface HomeCanvasProps {
   searchPill?: boolean
   /** Bump to enter widget edit mode from outside (context menu, menu bar). */
   editSignal?: number
+  /**
+   * Right-click handler. A tab page leaves this alone — its menu comes from
+   * the WebContents. The zero-tab screen is chrome, which has no menu of its
+   * own, so it passes one in.
+   */
+  onContextMenu?(): void
   autoFocus?: boolean
   className?: string
 }
@@ -195,6 +201,7 @@ export function HomeCanvas({
   fetchWeather,
   searchPill = true,
   editSignal = 0,
+  onContextMenu,
   autoFocus = false,
   className = ''
 }: HomeCanvasProps): React.JSX.Element {
@@ -472,6 +479,15 @@ export function HomeCanvas({
       onPointerUp={cancelHold}
       onPointerMove={cancelHold}
       onPointerLeave={cancelHold}
+      onContextMenu={
+        onContextMenu
+          ? (e) => {
+              e.preventDefault()
+              cancelHold()
+              onContextMenu()
+            }
+          : undefined
+      }
     >
       {/* the edit chrome stays mounted and fades — mounting it on the click
           makes entering and leaving edit mode snap, which reads cheap */}

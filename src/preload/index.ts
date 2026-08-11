@@ -25,7 +25,8 @@ const SUBSCRIBABLE = new Set([
   'bookmarks:edit-current',
   'chrome:toggle-collapse',
   'passwords:offer',
-  'popups:blocked'
+  'popups:blocked',
+  'widgets:edit'
 ])
 
 const api = {
@@ -54,6 +55,7 @@ const api = {
   },
   menu: {
     appContext: () => invoke('menu:app-context'),
+    homeContext: () => invoke('menu:home-context'),
     tabContext: (tabId: number) => invoke('menu:tab-context', tabId),
     spaceContext: (spaceId: string) => invoke('menu:space-context', spaceId),
     bookmarkContext: (nodeId: string) => invoke('menu:bookmark-context', nodeId)

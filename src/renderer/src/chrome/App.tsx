@@ -83,10 +83,12 @@ function ContentFrame({ children }: { children?: React.ReactNode }): React.JSX.E
  */
 function EmptyHome({
   settings,
-  onPatch
+  onPatch,
+  editSignal
 }: {
   settings: Settings
   onPatch(patch: Partial<Settings>): void
+  editSignal: number
 }): React.JSX.Element {
   const vertical = settings.tabOrientation === 'vertical'
   return (
@@ -98,6 +100,8 @@ function EmptyHome({
       fetchWeather={() => offshore.brief.weather()}
       searchPill={vertical}
       autoFocus={vertical}
+      editSignal={editSignal}
+      onContextMenu={() => void offshore.menu.homeContext()}
     />
   )
 }
@@ -113,6 +117,7 @@ export function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [bookmarks, setBookmarks] = useState<BookmarkNode[]>([])
   const [omniboxNonce, setOmniboxNonce] = useState(0)
+  const [homeEditSignal, setHomeEditSignal] = useState(0)
   const [omniboxOverlay, setOmniboxOverlay] = useState(false)
   const [find, setFind] = useState<FindState>({ open: false, text: '', activeMatch: 0, matches: 0 })
   const [downloads, setDownloads] = useState<DownloadToast[]>([])
@@ -198,6 +203,7 @@ export function App(): React.JSX.Element {
   // ---- subscriptions ----
   useEffect(() => {
     const un: Array<() => void> = []
+    un.push(offshore.on('widgets:edit', (() => setHomeEditSignal((n) => n + 1)) as never))
     un.push(
       offshore.on('tabs:state', ((state: TabsState) => {
         if (prevSpaceId.current && state.activeSpaceId !== prevSpaceId.current) {
@@ -545,7 +551,7 @@ export function App(): React.JSX.Element {
       {/* Rounded backdrop + shadow behind the web content view; also the insets source */}
       <ContentFrame>
         {tabsState.tabs.filter((t) => t.spaceId === tabsState.activeSpaceId).length === 0 && (
-          <EmptyHome settings={settings} onPatch={patchSettings} />
+          <EmptyHome settings={settings} onPatch={patchSettings} editSignal={homeEditSignal} />
         )}
       </ContentFrame>
 

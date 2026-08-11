@@ -293,6 +293,22 @@ export function setupIpc(): void {
     w.tabs.pushState()
   })
 
+  /**
+   * Right-click on the zero-tab home screen. That screen lives in the chrome,
+   * not in a tab, so it never reaches the tab context menu — it asks for this
+   * one instead, and gets the same Edit Widgets the new tab page offers.
+   */
+  ipcMain.handle('menu:home-context', (e) => {
+    const w = chromeWindow(e)
+    if (!w) return
+    Menu.buildFromTemplate([
+      { label: 'Edit Widgets…', click: () => w.sendToChrome('widgets:edit') },
+      { type: 'separator' },
+      { label: 'New Tab', accelerator: 'Cmd+T', click: () => w.openNewTab() },
+      { label: 'Settings…', accelerator: 'Cmd+,', click: () => w.tabs.createTab(internalPageUrl('settings')) }
+    ]).popup({ window: w.win })
+  })
+
   ipcMain.handle('menu:app-context', (e) => {
     const w = chromeWindow(e)
     if (!w) return

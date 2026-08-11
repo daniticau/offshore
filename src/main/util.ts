@@ -99,8 +99,28 @@ export function resolveOmniboxInput(input: string, settings: Settings): string {
   return engine.searchUrl.replace('%s', encodeURIComponent(t))
 }
 
+/** Extension → MIME. Never inferred: a page served as text/plain renders as its own source. */
+const MIME: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  ico: 'image/x-icon',
+  woff2: 'font/woff2',
+  woff: 'font/woff',
+  ttf: 'font/ttf',
+  map: 'application/json; charset=utf-8'
+}
+
 /** Serve offshore:// requests. In dev, proxy to the vite dev server; in prod, serve built files. */
-export function handleOffshoreProtocol(request: Request): Promise<Response> | Response {
+export async function handleOffshoreProtocol(request: Request): Promise<Response> {
   const u = new URL(request.url)
   const page = u.hostname
   const dev = devRendererUrl()
@@ -108,11 +128,23 @@ export function handleOffshoreProtocol(request: Request): Promise<Response> | Re
     return new Response('Not found', { status: 404 })
   }
   const path = u.pathname === '/' || u.pathname === '' ? `/${page}.html` : u.pathname
-  if (dev) {
-    return net.fetch(`${dev}${path}`)
+  const type = MIME[path.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream'
+  try {
+    if (dev) {
+      return await net.fetch(`${dev}${path}`)
+    }
+    const rendererDist = join(__dirname, '../renderer')
+    const res = await net.fetch(pathToFileURL(join(rendererDist, path.replace(/^\//, ''))).toString())
+    // file:// responses take their type from a guess about the extension; state it
+    // outright so a bad guess can never turn a page into a wall of its own markup
+    const headers = new Headers(res.headers)
+    headers.set('content-type', type)
+    return new Response(res.body, { status: res.status, headers })
+  } catch {
+    // a missing or unreadable file must 404, not reject — a rejected handler
+    // surfaces as ERR_UNEXPECTED and takes the whole page down with it
+    return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain' } })
   }
-  const rendererDist = join(__dirname, '../renderer')
-  return net.fetch(pathToFileURL(join(rendererDist, path.replace(/^\//, ''))).toString())
 }
 
 export function prettyHost(url: string): string {

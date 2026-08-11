@@ -45,6 +45,7 @@ export interface OffshoreApi {
   }
   menu: {
     appContext(): Promise<void>
+    homeContext(): Promise<void>
     tabContext(tabId: number): Promise<void>
     spaceContext(spaceId: string): Promise<void>
     bookmarkContext(nodeId: string): Promise<void>
