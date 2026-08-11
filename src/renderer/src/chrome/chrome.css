@@ -46,7 +46,6 @@ body,
   --htab-h: 30px;
   --bm-row-h: 26px;
   --bm-max-h: 240px;
-  --banner-h: 50px;
   --topbar-h: calc(var(--topbar-pad) + var(--topbar-tabs-h) + var(--topbar-gap) + var(--topbar-toolbar-h));
   --bmbar-h: 30px;
 }
@@ -117,12 +116,7 @@ body,
   color: var(--accent-strong);
 }
 
-.shield {
-  color: var(--accent-strong);
-}
-.shield-off {
-  color: var(--ink-faint);
-}
+/* the popup chip's count; the adblock shield has no chip of its own any more */
 .shield-count {
   font-size: 10px;
   font-weight: 600;
@@ -154,7 +148,8 @@ body,
 .mode-vertical .content-frame {
   inset: var(--gutter) var(--gutter) var(--gutter) var(--sidebar-w);
 }
-.mode-vertical.collapsed .content-frame {
+.mode-vertical.collapsed .content-frame,
+.mode-vertical.chrome-hidden .content-frame {
   left: var(--gutter);
 }
 .mode-horizontal .content-frame {
@@ -168,11 +163,72 @@ body,
 .mode-horizontal.collapsed .content-frame {
   top: calc(var(--topbar-pad) + var(--topbar-tabs-h) + var(--gutter));
 }
-.mode-horizontal.has-banner .content-frame {
-  top: calc(var(--topbar-h) + var(--banner-h) + var(--gutter));
+.mode-horizontal.chrome-hidden .content-frame {
+  top: var(--gutter);
 }
-.mode-horizontal.has-bmbar.has-banner .content-frame {
-  top: calc(var(--topbar-h) + var(--bmbar-h) + var(--banner-h) + var(--gutter));
+
+/*
+ * ---------- ⌘S: hidden, and the peek that brings it back ----------
+ *
+ * Hidden means hidden: the bar is off the window and the page has the room. A
+ * peek slides it back in *over* the page — the content card is not touched, so
+ * the page never resizes and nothing behind the bar reflows. (Being over the
+ * page is why a peek joins the freeze machinery in App.tsx: the chrome draws
+ * under the views, so the view has to step aside behind a still of itself.)
+ *
+ * A page in full screen owns every pixel; the chrome stands right down, and the
+ * hover zones that would summon it are not rendered at all.
+ */
+.mode-vertical.chrome-hidden .sidebar {
+  transform: translateX(calc(-1 * var(--sidebar-w) - 24px));
+}
+.mode-vertical.chrome-hidden.peeking .sidebar {
+  transform: translateX(0);
+  z-index: 40;
+  /* over the page now, so it carries its own surface rather than borrowing the
+     window's — plus the shadow that says it is in front of something */
+  background: linear-gradient(180deg, var(--tint-top), var(--tint-bottom)), var(--surface);
+  backdrop-filter: blur(26px) saturate(1.15);
+  box-shadow:
+    inset -0.5px 0 0 var(--frame-ring),
+    18px 0 48px rgba(9, 52, 70, 0.22);
+}
+.mode-horizontal.chrome-hidden .topbar {
+  transform: translateY(calc(-1 * var(--topbar-h) - 16px));
+}
+.mode-horizontal.chrome-hidden.has-bmbar .topbar {
+  transform: translateY(calc(-1 * (var(--topbar-h) + var(--bmbar-h)) - 16px));
+}
+.mode-horizontal.chrome-hidden.peeking .topbar {
+  transform: translateY(0);
+  z-index: 40;
+  background: linear-gradient(180deg, var(--tint-top), var(--tint-bottom)), var(--surface);
+  backdrop-filter: blur(26px) saturate(1.15);
+  box-shadow:
+    inset 0 -0.5px 0 var(--frame-ring),
+    0 18px 48px rgba(9, 52, 70, 0.22);
+}
+/* the window still has to be draggable with no bar to drag it by */
+.hidden-drag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--gutter);
+  z-index: 2;
+}
+
+/*
+ * Full screen: nothing of ours, anywhere, however hard you push at an edge. The
+ * content card stays in the tree — it is where the insets are measured from, and
+ * a card that isn't laid out measures zero, which would hand the page a view of
+ * no width the moment full screen ended.
+ */
+.content-fullscreen .sidebar,
+.content-fullscreen .topbar,
+.content-fullscreen .downloads,
+.content-fullscreen .find-bar {
+  display: none;
 }
 
 /* ---------- zero-tab home screen ---------- */
@@ -374,6 +430,12 @@ body,
   flex-shrink: 0;
   max-width: 60%;
 }
+/* a query row has no address beside it, so the words get the whole line */
+.omni-suggestion.query .s-text {
+  max-width: none;
+  min-width: 0;
+  font-weight: 500;
+}
 .s-url {
   margin-left: -5px;
   white-space: nowrap;
@@ -423,6 +485,20 @@ body,
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
     0 3px 10px rgba(14, 92, 122, 0.12);
+}
+/* The ✕ on that row closes the search, never the tab — so it is shown outright
+   rather than on hover: it is the way out of the search, and it should look it. */
+.new-tab-btn {
+  padding-right: calc((var(--row-h) - var(--tab-btn)) / 2);
+}
+.new-tab-btn .nt-close {
+  margin-left: auto;
+  opacity: 0.75;
+  transform: none;
+  pointer-events: auto;
+}
+.new-tab-btn .nt-close:hover {
+  opacity: 1;
 }
 
 .tab-list {
@@ -983,93 +1059,139 @@ browser-action-list {
   background: var(--hover);
 }
 
-/* ---------- password banner ---------- */
+/* ---------- password dialog ---------- */
 
-.banner-side {
-  position: absolute;
-  top: calc(var(--traffic-h) + var(--btn-h) + var(--omnibox-h) + 24px);
-  left: var(--chrome-pad);
-  width: calc(var(--sidebar-w) - var(--chrome-pad) * 2);
-  z-index: 80;
+/*
+ * A password is worth stopping for, so it stops the window: the page dims back,
+ * the dialog lands in the middle of it, and the answer is where you are already
+ * looking. Clicking the dimmed page means "not now" — the offer keeps for five
+ * minutes either way, so nothing is lost by ignoring it.
+ */
+.pw-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(9, 40, 54, 0.28);
+  backdrop-filter: blur(2px) saturate(0.9);
+  animation: pw-scrim-in 160ms var(--ease-out);
 }
-.banner-row {
-  position: absolute;
-  top: var(--topbar-h);
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(460px, calc(100vw - 40px));
-  z-index: 80;
-  padding: 4px 0;
+@media (prefers-color-scheme: dark) {
+  .pw-scrim {
+    background: rgba(0, 0, 0, 0.44);
+  }
 }
-.password-banner {
-  animation: banner-in 180ms var(--ease-out);
-}
-@keyframes banner-in {
+@keyframes pw-scrim-in {
   from {
     opacity: 0;
-    transform: translateY(-6px);
+  }
+}
+.pw-modal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(340px, calc(100vw - 64px));
+  padding: 22px 22px 16px;
+  border-radius: var(--radius-xl);
+  text-align: center;
+  box-shadow: var(--shadow-pop);
+  animation: pw-modal-in 200ms var(--ease-spring);
+}
+@keyframes pw-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
   }
 }
 .pw-icon {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 12px;
+  border-radius: 50%;
+  background: var(--press);
   color: var(--accent-strong);
   flex-shrink: 0;
 }
-.pw-text {
-  flex: 1;
-  min-width: 0;
-}
 .pw-title {
-  font-size: 12.5px;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
 }
 .pw-sub {
-  font-size: 11px;
+  margin-top: 3px;
+  font-size: 12.5px;
   color: var(--ink-soft);
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.pw-save {
+.pw-note {
+  margin-top: 10px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-faint);
+}
+.pw-actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  margin-top: 18px;
+}
+.pw-save,
+.pw-not-now {
+  flex: 1;
+  height: 32px;
   border: none;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: default;
+  transition:
+    background var(--dur) var(--ease-out),
+    filter var(--dur) var(--ease-out);
+}
+.pw-save {
   background: var(--accent);
   color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 5px 12px;
-  border-radius: var(--radius-sm);
-  cursor: default;
-  flex-shrink: 0;
 }
 .pw-save:hover {
   filter: brightness(1.06);
 }
-.pw-never {
-  border: none;
-  background: transparent;
-  color: var(--ink-soft);
-  font-size: 12px;
-  font-weight: 500;
-  padding: 5px 8px;
-  border-radius: var(--radius-xs);
-  cursor: default;
-  flex-shrink: 0;
+.pw-save:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
 }
-.pw-never:hover {
+.pw-not-now {
   background: var(--press);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 0.5px var(--glass-border);
 }
-.pw-dismiss {
+.pw-not-now:hover {
+  background: var(--hover);
+}
+.pw-never {
+  margin-top: 8px;
   border: none;
   background: transparent;
   color: var(--ink-faint);
+  font-family: inherit;
   font-size: 12px;
-  padding: 4px 6px;
+  font-weight: 500;
+  padding: 6px 10px;
   border-radius: var(--radius-xs);
   cursor: default;
-  flex-shrink: 0;
 }
-.pw-dismiss:hover {
-  color: var(--ink);
+.pw-never:hover {
+  color: var(--ink-soft);
+  background: var(--press);
 }
 
 /* ---------- horizontal top bar ---------- */
@@ -1084,6 +1206,8 @@ browser-action-list {
   flex-direction: column;
   padding: var(--topbar-pad) var(--gutter) 0;
   gap: var(--topbar-gap);
+  /* the same slide the sidebar has, for ⌘S and its edge peek */
+  transition: transform 190ms var(--ease-out);
 }
 .has-bmbar .topbar {
   height: calc(var(--topbar-h) + var(--bmbar-h));
@@ -1647,23 +1771,49 @@ browser-action-list {
   background: var(--press);
   color: var(--ink);
 }
-/* copy-link stays out of the way until you reach for the pill — the host needs
-   the room more than a button you press once in a while */
-.omni-copy {
-  display: none;
-}
-.omnibox:hover .omni-copy,
-.omni-copy.done {
+/*
+ * Copy link, parked on the address's leading edge — the thing you copy is right
+ * there next to it. Idle it is nothing at all: zero width, so the host still
+ * reads flush left the way Arc's does. Bring the pointer into the bar and it
+ * unrolls into place; it stays out while you are typing, when there is no
+ * address to copy yet.
+ */
+.omni-copy-lead {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0;
+  min-width: 0;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--ink-soft);
+  opacity: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+  cursor: default;
+  transition:
+    width var(--dur) var(--ease-out),
+    opacity var(--dur) var(--ease-out),
+    background var(--dur) var(--ease-out),
+    color var(--dur) var(--ease-out);
 }
-.omni-act.done {
+.omnibox:hover .omni-copy-lead,
+.omni-copy-lead.done {
+  width: 24px;
+  min-width: 24px;
+  opacity: 1;
+  margin-right: 2px;
+}
+.omni-copy-lead:hover {
+  background: var(--press);
+  color: var(--ink);
+}
+.omni-act.done,
+.omni-copy-lead.done {
   color: var(--accent-strong);
-}
-/* the shield keeps its count, so it may run wider than the square buttons */
-.omni-actions .shield {
-  width: auto;
-  padding: 0 2px;
-  gap: 1px;
 }
 /* the tune button is the anchor of the cluster — a soft rounded square */
 .omni-tune.boxed {

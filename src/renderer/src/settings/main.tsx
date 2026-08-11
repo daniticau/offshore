@@ -974,6 +974,21 @@ function App(): React.JSX.Element {
                   <Toggle on={settings.keepHistory} onChange={(v) => patch({ keepHistory: v })} />
                 </div>
                 <div className="row">
+                  <div className="row-title">
+                    Suggestions from {SEARCH_ENGINES[settings.searchEngine].name}
+                    <div className="row-sub">
+                      Finishes what you type in the address bar. It is the one thing here that
+                      sends a half-typed word anywhere: the query goes out from Offshore itself,
+                      with no cookies and nothing that says who asked. Turn it off and the address
+                      bar only ever offers your own tabs, bookmarks and history.
+                    </div>
+                  </div>
+                  <Toggle
+                    on={settings.searchSuggestions}
+                    onChange={(v) => patch({ searchSuggestions: v })}
+                  />
+                </div>
+                <div className="row">
                   <div className="row-title">Clear browsing history</div>
                   <button
                     className="danger"

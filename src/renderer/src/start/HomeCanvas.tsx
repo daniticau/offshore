@@ -291,12 +291,20 @@ export interface HomeCanvasProps {
   onSubmit(input: string): void
   fetchWeather(): Promise<BriefWeather | null>
   /**
-   * Show the centred search pill. On for a new tab, which is a page you can
-   * search from; off for the zero-tab window, which is just the home screen
+   * Does this screen have a search at all? On for a new tab, which is a page you
+   * can search from; off for the zero-tab window, which is just the home screen
    * sitting there. Either way the pill's row is held, so the widgets land in
    * exactly the same place on both screens.
    */
   searchPill?: boolean
+  /**
+   * Is that search in front of you right now? It arrives with the tab and goes
+   * away when you click past it, leaving the home screen it was standing on —
+   * the tab stays exactly where it is.
+   */
+  searchOpen?: boolean
+  /** The search was clicked away, escaped, or edit mode took the screen. */
+  onDismissSearch?(): void
   /** Bump to enter widget edit mode from outside (context menu, menu bar). */
   editSignal?: number
   /**
@@ -326,6 +334,8 @@ export function HomeCanvas({
   onSubmit,
   fetchWeather,
   searchPill = true,
+  searchOpen = true,
+  onDismissSearch,
   editSignal = 0,
   onContextMenu,
   autoFocus = false,
@@ -377,11 +387,42 @@ export function HomeCanvas({
     return () => clearInterval(t)
   }, [])
 
+  const showSearch = searchPill && searchOpen && !editing
+  const dismissRef = useRef(onDismissSearch)
+  dismissRef.current = onDismissSearch
+
   // Only take the cursor when there is a pill to take it into — otherwise the
   // toolbar omnibox owns it and this would yank focus out from under it.
   useEffect(() => {
-    if (autoFocus && searchPill && !editing) inputRef.current?.focus()
-  }, [autoFocus, searchPill, editing])
+    if (autoFocus && showSearch) inputRef.current?.focus()
+  }, [autoFocus, showSearch])
+
+  /*
+   * Escape puts the search away. It is the one panel on this page, so it is the
+   * only thing Escape can mean — and it leaves the home screen behind rather
+   * than the tab, which is the whole point of it being a panel.
+   */
+  useEffect(() => {
+    if (!showSearch) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        dismissRef.current?.()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showSearch])
+
+  // editing the widgets is a different job — the search gets out of the way
+  useEffect(() => {
+    if (editing) dismissRef.current?.()
+  }, [editing])
+
+  // a dismissed search comes back empty, the way a closed one should
+  useEffect(() => {
+    if (!showSearch) setText('')
+  }, [showSearch])
 
   useEffect(() => {
     if (editSignal > 0) setEditing(true)
@@ -760,6 +801,12 @@ export function HomeCanvas({
     })
   }
 
+  /** Anything that isn't the search itself puts the search away. */
+  const onHostPointerDown = (e: React.PointerEvent): void => {
+    if (showSearch && !(e.target as HTMLElement).closest('.start-search')) dismissRef.current?.()
+    startHold(e)
+  }
+
   // press and hold empty space to start editing, like the home screen
   const startHold = (e: React.PointerEvent): void => {
     if (editing) return
@@ -788,7 +835,7 @@ export function HomeCanvas({
       style={{
         background: `linear-gradient(180deg, ${acc.tintTop} 0%, ${acc.tintBottom} 100%)`
       }}
-      onPointerDown={startHold}
+      onPointerDown={onHostPointerDown}
       onPointerUp={cancelHold}
       onPointerMove={cancelHold}
       onPointerLeave={cancelHold}
@@ -832,6 +879,9 @@ export function HomeCanvas({
           }}
         >
           <div className="grid-band" style={bandStyle} />
+
+          {/* half a step back while the search is in front of it */}
+          {searchPill && <div className={`start-dim ${showSearch ? 'on' : ''}`} />}
 
           {drag && <div className="drop-ghost" style={boxStyle(drag.target)} />}
 
@@ -927,9 +977,16 @@ export function HomeCanvas({
 
           {/* sits in the band it holds, rather than wherever the pane's middle
               happens to be — which is not the same place once edit mode has
-              pulled the board in */}
+              pulled the board in.
+
+              It stays mounted and animates in and out: the widgets behind it
+              never move, so putting it away really does just leave the home
+              screen standing there. */}
           {searchPill && (
-            <div className="start-search" style={{ top: pillTop, ...(pillWidth ? { width: pillWidth } : {}) }}>
+            <div
+              className={`start-search ${showSearch ? 'on' : ''}`}
+              style={{ top: pillTop, ...(pillWidth ? { width: pillWidth } : {}) }}
+            >
               <svg
                 width="18"
                 height="18"
@@ -949,7 +1006,8 @@ export function HomeCanvas({
                 spellCheck={false}
                 autoCapitalize="off"
                 autoCorrect="off"
-                tabIndex={editing ? -1 : 0}
+                tabIndex={showSearch ? 0 : -1}
+                aria-hidden={!showSearch}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && submit()}
               />

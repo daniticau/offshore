@@ -34,9 +34,16 @@ import {
   pageEntry
 } from './popups'
 import { openDownload, preparedSessions, revealDownload } from './sessions'
+import { searchSuggestions } from './suggest'
 import { bookmarksStore, downloadsStore, historyStore, settingsStore } from './stores'
 import { devRendererUrl, internalPageUrl, prettyHost, resolveOmniboxInput } from './util'
-import { windowForChromeContents, windows, type Insets, type OffshoreWindow } from './windows'
+import {
+  windowForChromeContents,
+  windowForTab,
+  windows,
+  type Insets,
+  type OffshoreWindow
+} from './windows'
 
 function chromeWindow(e: IpcMainInvokeEvent | IpcMainEvent): OffshoreWindow | undefined {
   return windowForChromeContents(e.sender.id)
@@ -112,7 +119,39 @@ function defaultSuggestions(): Suggestion[] {
   return out.slice(0, 6)
 }
 
-function buildSuggestions(input: string, w?: OffshoreWindow): Suggestion[] {
+/** How many rows the dropdown will ever show. */
+const SUGGESTION_MAX = 8
+
+/**
+ * The dropdown's contents, in Chromium's order of usefulness: a tab you already
+ * have open, then where this input would actually go, then the pages you know,
+ * then — filling whatever room is left — what the engine thinks you are typing.
+ */
+async function buildSuggestions(input: string, w?: OffshoreWindow): Promise<Suggestion[]> {
+  const local = localSuggestions(input, w)
+  const q = input.trim()
+  const settings = settingsStore.get()
+  if (!settings.searchSuggestions || q.length < 2 || local.length >= SUGGESTION_MAX) return local
+
+  const words = await searchSuggestions(q, settings.searchEngine)
+  if (!words.length) return local
+  const engine = SEARCH_ENGINES[settings.searchEngine] ?? SEARCH_ENGINES.duckduckgo
+  const taken = new Set(local.map((s) => s.text.trim().toLowerCase()))
+  const out = [...local]
+  for (const word of words) {
+    if (out.length >= SUGGESTION_MAX) break
+    if (taken.has(word.toLowerCase())) continue
+    taken.add(word.toLowerCase())
+    out.push({
+      kind: 'search',
+      text: word,
+      url: engine.searchUrl.replace('%s', encodeURIComponent(word))
+    })
+  }
+  return out
+}
+
+function localSuggestions(input: string, w?: OffshoreWindow): Suggestion[] {
   const q = input.trim()
   if (!q) return defaultSuggestions()
   const ql = q.toLowerCase()
@@ -169,11 +208,13 @@ function buildSuggestions(input: string, w?: OffshoreWindow): Suggestion[] {
 
   for (const b of bookmarksStore.search(ql, 3)) push(b)
   for (const m of tabMatches.filter((t) => !t.strong).slice(0, 2)) push(m.s)
-  if (settingsStore.get().keepHistory) {
+  if (settings.keepHistory) {
     for (const h of historyStore.search(ql, 6)) push(h)
   }
 
-  return out.slice(0, 8)
+  // What you have been to outranks what the engine guesses, but it never takes
+  // the whole list: a couple of rows are always kept back for the type-ahead.
+  return out.slice(0, settings.searchSuggestions ? SUGGESTION_MAX - 3 : SUGGESTION_MAX)
 }
 
 function runAction(w: OffshoreWindow, id: ActionId): void {
@@ -203,7 +244,7 @@ function runAction(w: OffshoreWindow, id: ActionId): void {
       break
     }
     case 'toggle-sidebar':
-      w.sendToChrome('chrome:toggle-collapse')
+      w.sendToChrome('chrome:toggle-hidden')
       break
     case 'open-settings':
       w.tabs.createTab(internalPageUrl('settings'))
@@ -501,6 +542,21 @@ export function setupIpc(): void {
   ipcMain.handle('omnibox:suggest', (e, input: string) =>
     isTrustedSender(e) ? buildSuggestions(input, chromeWindow(e)) : []
   )
+
+  /**
+   * The home screen's search, opened and closed from either side: the chrome's
+   * ✕ passes the tab it means, the page passes nothing and means itself.
+   */
+  ipcMain.handle('home:set-search', (e, open: boolean, tabId?: number) => {
+    if (!isTrustedSender(e)) return
+    const chrome = chromeWindow(e)
+    if (chrome) {
+      chrome.tabs.setHomeSearch(typeof tabId === 'number' ? tabId : null, !!open)
+      return
+    }
+    const w = windowForTab(e.sender.id)
+    w?.tabs.setHomeSearch(e.sender.id, !!open)
+  })
 
   // ---- palette actions ----
   ipcMain.handle('action:run', (e, id: ActionId) => {

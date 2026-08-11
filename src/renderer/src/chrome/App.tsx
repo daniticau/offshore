@@ -11,7 +11,7 @@ import { DEFAULT_SETTINGS, accentColors, resolveAccentColors } from '@shared/typ
 import { HomeCanvas } from '../start/HomeCanvas'
 import { accentVars, useIsDark } from '../theme/useTheme'
 import { offshore, prettyHost } from './api'
-import { PasswordBanner } from './PasswordBanner'
+import { PasswordDialog } from './PasswordDialog'
 import { playSound, setSoundsEnabled } from './sounds'
 import { Sidebar, TopBar } from './Tabs'
 
@@ -112,10 +112,10 @@ function ContentFrame({ children }: { children?: React.ReactNode }): React.JSX.E
  * editing widgets here and editing them on a new tab are one thing. The window
  * only closes when the human closes it.
  *
- * The one difference from a new tab is the search pill: there is none here.
- * Nothing is open, so there is nothing to search from — the omnibox is right
- * there when you want to go somewhere, and opening a tab is what puts a pill
- * in front of you.
+ * The one difference from a new tab is the search: there is none in front of
+ * this one. Nothing is open, so there is nothing to search from — the omnibox is
+ * right there when you want to go somewhere, and opening a tab is what puts a
+ * search panel in front of you.
  */
 function EmptyHome({
   settings,
@@ -147,6 +147,7 @@ export function App(): React.JSX.Element {
     spaces: [],
     activeSpaceId: '',
     splitPair: null,
+    contentFullscreen: false,
     devtools: null
   })
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
@@ -170,6 +171,10 @@ export function App(): React.JSX.Element {
   const [passwordOffer, setPasswordOffer] = useState<PasswordOffer | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [collapsing, setCollapsing] = useState(false)
+  /** ⌘S hide mode: the pointer is at the edge asking for the chrome back. */
+  const [peekHover, setPeekHover] = useState(false)
+  /** The address bar has the cursor — a peek must not slip away underneath it. */
+  const [omniboxEditing, setOmniboxEditing] = useState(false)
 
   const pinnedRef = useRef(false)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -197,30 +202,16 @@ export function App(): React.JSX.Element {
 
   const collapse = useCallback(() => {
     setCollapsing(true)
-    setTimeout(() => {
-      setCollapsed(true)
-      void offshore.chrome.setCollapsed(true)
-    }, 190)
+    setTimeout(() => setCollapsed(true), 190)
   }, [])
 
   const reveal = useCallback(() => {
     setCollapsed(false)
-    void offshore.chrome.setCollapsed(false)
     requestAnimationFrame(() => requestAnimationFrame(() => setCollapsing(false)))
   }, [])
 
   const collapsedRef = useRef(false)
   collapsedRef.current = collapsed || collapsing
-
-  const toggleCollapsed = useCallback(() => {
-    if (collapsedRef.current) {
-      pinnedRef.current = true
-      reveal()
-    } else {
-      pinnedRef.current = false
-      collapse()
-    }
-  }, [collapse, reveal])
 
   const cancelHideTimer = useCallback(() => {
     if (hideTimer.current) {
@@ -229,14 +220,90 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
+  // ---- ⌘S: the chrome is away until you ask for it ----
+
+  /*
+   * Hidden is a mode, not a moment: it survives the window, the layout and the
+   * relaunch, because "hide the sidebar" means hide it, not hide it until
+   * something happens. What comes back at the edge is a peek — the chrome slides
+   * in *over* the page, and the page's own size never changes, so nothing on
+   * screen reflows on the way in or out. That is the whole trick: the content
+   * card is resized once, when you press ⌘S, and not again until you press it.
+   */
+  const hidden = settings.chromeHidden
+  const contentFullscreen = tabsState.contentFullscreen
+  // things living in the chrome that must not vanish mid-use
+  const peekPinned =
+    omniboxEditing ||
+    find.open ||
+    renameSpaceId !== null ||
+    renameBookmarkId !== null ||
+    bookmarkEdit !== null ||
+    downloadsPanelOpen ||
+    popupPanelOpen ||
+    siteInfoOpen ||
+    appMenuOpen ||
+    profileMenuOpen
+  const peeking = hidden && !contentFullscreen && (peekHover || peekPinned)
+
+  const toggleHidden = useCallback(() => {
+    const next = !stateRef.current.settings.chromeHidden
+    patchSettings({ chromeHidden: next })
+    setPeekHover(false)
+    // dynamic density's own tuck-away has nothing left to hide
+    cancelHideTimer()
+    pinnedRef.current = false
+    setCollapsed(false)
+    setCollapsing(false)
+  }, [patchSettings, cancelHideTimer])
+
+  /*
+   * A beat before the peek. Sweeping the pointer past the window's left edge on
+   * the way somewhere else is not a request for the sidebar, and a bar that
+   * appears every time you cross a pixel column is worse than no bar at all.
+   */
+  const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const armPeek = useCallback(() => {
+    if (peekTimer.current) clearTimeout(peekTimer.current)
+    peekTimer.current = setTimeout(() => setPeekHover(true), 110)
+  }, [])
+  const cancelPeek = useCallback(() => {
+    if (peekTimer.current) {
+      clearTimeout(peekTimer.current)
+      peekTimer.current = null
+    }
+  }, [])
+  useEffect(() => () => cancelPeek(), [cancelPeek])
+
+  /** The traffic lights belong to whatever bar is on screen — and go with it. */
+  useEffect(() => {
+    void offshore.chrome.setCollapsed((hidden && !peeking) || collapsed || contentFullscreen)
+  }, [hidden, peeking, collapsed, contentFullscreen])
+
   // reset on layout/density switches
   useEffect(() => {
     pinnedRef.current = false
     cancelHideTimer()
     setCollapsed(false)
     setCollapsing(false)
-    void offshore.chrome.setCollapsed(false)
   }, [mode, density, cancelHideTimer])
+
+  /*
+   * One search at a time. Reaching for the address bar on a new tab is not a
+   * request for two of them, so the home screen's own panel steps aside — the
+   * same thing clicking past it does, because it is the same thing.
+   */
+  useEffect(() => {
+    if (!omniboxEditing) return
+    const { tabsState: ts } = stateRef.current
+    const active = ts.tabs.find((t) => t.id === ts.activeTabId)
+    if (active?.homeSearch) void offshore.home.setSearch(false, active.id)
+  }, [omniboxEditing])
+
+  // a page going full screen takes the pointer with it; no peek survives that
+  useEffect(() => {
+    if (contentFullscreen) setPeekHover(false)
+  }, [contentFullscreen])
 
   // ---- subscriptions ----
   useEffect(() => {
@@ -370,12 +437,12 @@ export function App(): React.JSX.Element {
 
   useEffect(() => {
     const un1 = offshore.on('bookmarks:edit-current', (() => editBookmark()) as never)
-    const un2 = offshore.on('chrome:toggle-collapse', (() => toggleCollapsed()) as never)
+    const un2 = offshore.on('chrome:toggle-hidden', (() => toggleHidden()) as never)
     return () => {
       un1()
       un2()
     }
-  }, [editBookmark, toggleCollapsed])
+  }, [editBookmark, toggleHidden])
 
   // reveal chrome for interactions that live in it
   useEffect(() => {
@@ -416,6 +483,10 @@ export function App(): React.JSX.Element {
     siteInfoOpen ||
     appMenuOpen ||
     profileMenuOpen ||
+    passwordOffer !== null ||
+    // a peeking bar hangs over the page like any other panel, so it comes in the
+    // same way: the page's picture takes its place and nothing appears to move
+    peeking ||
     (mode === 'horizontal' && (bookmarkEdit !== null || popupPanelOpen))
   useEffect(() => {
     void offshore.chrome.setOverlay(overlayOpen)
@@ -461,8 +532,26 @@ export function App(): React.JSX.Element {
     void offshore.tabs.navigate(null, input)
   }, [])
 
-  /** A new tab hands the cursor to its own pill, ready to type into. */
+  /**
+   * A new tab hands the cursor to its own search, ready to type into.
+   *
+   * If the tab you are on is already a blank one whose search you put away, that
+   * search is what you are asking for — a second empty tab would be no use to
+   * anyone. So the button conjures it back instead of making another tab.
+   */
   const newTab = useCallback(() => {
+    const { tabsState: ts } = stateRef.current
+    const active = ts.tabs.find((t) => t.id === ts.activeTabId)
+    const blank =
+      active &&
+      active.spaceId === ts.activeSpaceId &&
+      active.displayUrl.startsWith('offshore://start') &&
+      !active.canGoBack &&
+      !active.canGoForward
+    if (blank && !active.homeSearch) {
+      void offshore.home.setSearch(true, active.id)
+      return
+    }
     void offshore.tabs.create().then(() => void offshore.chrome.focusPage())
   }, [])
 
@@ -506,9 +595,10 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
-  // dynamic density: auto-hide when the pointer leaves the chrome
+  // dynamic density: auto-hide when the pointer leaves the chrome. With the
+  // chrome hidden outright there is nothing left for it to tuck away.
   const onChromeMouseLeave = useCallback(() => {
-    if (density !== 'dynamic' || pinnedRef.current || collapsedRef.current) return
+    if (density !== 'dynamic' || hidden || pinnedRef.current || collapsedRef.current) return
     const { tabsState: ts } = stateRef.current
     void ts
     cancelHideTimer()
@@ -524,7 +614,7 @@ export function App(): React.JSX.Element {
         passwordOffer !== null
       if (!busy) collapse()
     }, 1000)
-  }, [density, overlayOpen, find.open, renameSpaceId, renameBookmarkId, bookmarkEdit, passwordOffer, collapse, cancelHideTimer])
+  }, [density, hidden, overlayOpen, find.open, renameSpaceId, renameBookmarkId, bookmarkEdit, passwordOffer, collapse, cancelHideTimer])
 
   const chromeProps = {
     tabsState,
@@ -543,6 +633,9 @@ export function App(): React.JSX.Element {
     accentFor,
     omniboxFocusNonce: omniboxNonce,
     onOmniboxOverlay: setOmniboxOverlay,
+    onOmniboxEditing: setOmniboxEditing,
+    // a peek lasts as long as the pointer is in the bar it summoned
+    onPeekLeave: peeking ? () => setPeekHover(false) : undefined,
     onNavigate,
     onNewTab: newTab,
     onFindQuery: findQuery,
@@ -563,13 +656,17 @@ export function App(): React.JSX.Element {
     onPatchSettings: patchSettings
   }
 
+  const edgeZone = contentFullscreen ? false : hidden ? !peeking : collapsed
+
   const classes = [
     'chrome',
     `mode-${mode}`,
     `density-${density}`,
     collapsed ? 'collapsed' : '',
     collapsing ? 'collapsing' : '',
-    passwordOffer ? 'has-banner' : '',
+    hidden ? 'chrome-hidden' : '',
+    peeking ? 'peeking' : '',
+    contentFullscreen ? 'content-fullscreen' : '',
     settings.bookmarksBar && bookmarks.length > 0 ? 'has-bmbar' : ''
   ]
     .filter(Boolean)
@@ -615,23 +712,29 @@ export function App(): React.JSX.Element {
       {/* stands in for the page views while a panel needs their space */}
       <PageFreeze frames={freeze} />
 
-      {passwordOffer && mode === 'horizontal' && (
-        <div className="banner-row no-drag">
-          <PasswordBanner offer={passwordOffer} onResolve={() => setPasswordOffer(null)} />
-        </div>
-      )}
-      {passwordOffer && mode === 'vertical' && (
-        <div className="banner-side no-drag">
-          <PasswordBanner offer={passwordOffer} onResolve={() => setPasswordOffer(null)} />
-        </div>
+      {/* one dialog, in the middle, in both layouts */}
+      {passwordOffer && (
+        <PasswordDialog offer={passwordOffer} onResolve={() => setPasswordOffer(null)} />
       )}
 
-      {collapsed && mode === 'vertical' && (
-        <div className="edge-zone edge-zone-left" onMouseEnter={reveal} />
+      {/*
+        The strip of window the page view doesn't cover — the only place the
+        chrome can still feel the pointer. It is gone while the bar is actually
+        peeking (the bar is there to be clicked instead), and gone in full
+        screen, where the page has the whole window and nothing of ours may
+        slide in over it.
+      */}
+      {edgeZone && (
+        <div
+          className={`edge-zone edge-zone-${mode === 'vertical' ? 'left' : 'top'} no-drag`}
+          onMouseEnter={hidden ? armPeek : reveal}
+          onMouseLeave={hidden ? cancelPeek : undefined}
+        />
       )}
-      {collapsed && mode === 'horizontal' && (
-        <div className="edge-zone edge-zone-top" onMouseEnter={reveal} />
-      )}
+
+      {/* Hidden chrome leaves no bar to drag the window by; the gutter above the
+          page stands in for the title bar, the way a title bar always could. */}
+      {hidden && !contentFullscreen && <div className="hidden-drag drag" />}
 
       {devshot && (
         <img

@@ -24,7 +24,7 @@ const SUBSCRIBABLE = new Set([
   'spaces:begin-rename',
   'bookmarks:begin-rename',
   'bookmarks:edit-current',
-  'chrome:toggle-collapse',
+  'chrome:toggle-hidden',
   'passwords:offer',
   'popups:blocked',
   'widgets:edit'
@@ -66,6 +66,10 @@ const api = {
   },
   omnibox: {
     suggest: (input: string) => invoke('omnibox:suggest', input)
+  },
+  home: {
+    /** Put the new tab's search panel up, or dismiss it and leave the home page. */
+    setSearch: (open: boolean, tabId?: number) => invoke('home:set-search', open, tabId)
   },
   extensions: {
     has: () => invoke('extensions:has')

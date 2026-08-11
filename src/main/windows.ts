@@ -135,6 +135,11 @@ export class OffshoreWindow implements TabHost {
     })
     this.win.on('resized', () => this.onTabsChanged())
     this.win.on('moved', () => this.onTabsChanged())
+    // The content size changes a beat after the window does on the way into and
+    // out of full screen; without these the page view keeps the old bounds and
+    // leaves a live strip of chrome showing along an edge.
+    this.win.on('enter-full-screen', () => this.tabs.layout())
+    this.win.on('leave-full-screen', () => this.tabs.layout())
 
     const dev = devRendererUrl()
     if (dev) {

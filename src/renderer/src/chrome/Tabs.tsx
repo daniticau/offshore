@@ -5,7 +5,7 @@ import type { DownloadToast, FindState } from './App'
 import { BookmarkEditPopover, BookmarksBar, BookmarksSection } from './Bookmarks'
 import { Omnibox } from './Omnibox'
 import { SiteInfo } from './SiteInfo'
-import { PopupChip } from './PasswordBanner'
+import { PopupChip } from './PasswordDialog'
 import { SpaceSwitcher } from './SpaceSwitcher'
 import { AppMenu, ProfileMenu } from './Menus'
 import {
@@ -23,8 +23,6 @@ import {
   IconMuted,
   IconPlus,
   IconReload,
-  IconShield,
-  IconShieldFilled,
   IconSidebar,
   IconSlop,
   IconSplit,
@@ -64,6 +62,10 @@ export interface ChromeProps {
   accentFor: (space: SpaceInfo) => string
   omniboxFocusNonce: number
   onOmniboxOverlay: (need: boolean) => void
+  /** The address bar took or gave up the cursor. */
+  onOmniboxEditing: (editing: boolean) => void
+  /** Set while a hidden bar is peeking: the pointer leaving it puts it away. */
+  onPeekLeave?: () => void
   onNavigate: (input: string) => void
   onNewTab: () => void
   siteInfoOpen: boolean
@@ -133,30 +135,6 @@ function NavButtons({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element {
         {activeTab?.isLoading ? <IconStop size={15} /> : <IconReload size={14} />}
       </button>
     </div>
-  )
-}
-
-function ShieldButton({
-  activeTab,
-  shieldOff,
-  onToggleShield
-}: Pick<ChromeProps, 'activeTab' | 'shieldOff' | 'onToggleShield'>): React.JSX.Element | null {
-  if (!activeTab || !/^https?:/.test(activeTab.url)) return null
-  if (activeTab.displayUrl.startsWith('offshore://')) return null
-  const count = activeTab.blockedCount
-  return (
-    <button
-      className={`chrome-btn shield ${shieldOff ? 'shield-off' : ''}`}
-      onClick={onToggleShield}
-      title={
-        shieldOff
-          ? 'Shield is off for this site — click to re-enable'
-          : `Shield blocked ${count} request${count === 1 ? '' : 's'} — click to allow this site`
-      }
-    >
-      {shieldOff ? <IconShield size={14} /> : <IconShieldFilled size={14} />}
-      {!shieldOff && count > 0 && <span className="shield-count">{count > 99 ? '99+' : count}</span>}
-    </button>
   )
 }
 
@@ -237,13 +215,15 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
   const { activeTab } = props
   // The page chips ride inside the pill in both layouts: Arc-style in the
   // sidebar, and in the topbar because the star belongs to the address bar.
+  // The shield is NOT one of them: a count of requests nobody asked for is not
+  // news, so it lives in the site panel behind the tune button, where you go
+  // when you actually want to know. Blocking itself is unchanged.
   const actions = (
     <>
       <SlopChip activeTab={activeTab} settings={props.settings} />
       {activeTab && (
         <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
       )}
-      <ShieldButton {...props} />
       {/* the top toolbar carries its own star, where Chromium keeps it; the
           sidebar has no toolbar to put one in, so its pill keeps this one */}
       {!props.compact && <StarButton {...props} />}
@@ -256,6 +236,7 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
         compact={props.compact}
         focusNonce={props.omniboxFocusNonce}
         onOverlayNeed={props.onOmniboxOverlay}
+        onEditingChange={props.onOmniboxEditing}
         onNavigate={props.onNavigate}
         onSiteInfo={() => props.onToggleSiteInfo(!props.siteInfoOpen)}
         actions={actions}
@@ -758,6 +739,7 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
     activeTab && activeTab.spaceId === tabsState.activeSpaceId && isBlankTab(activeTab)
       ? activeTab.id
       : null
+  const searchUp = blankId != null && activeTab?.homeSearch === true
   const spaceTabs = spaceTabsOf(tabsState).filter((t) => t.id !== blankId)
   const drag = useDragReorder(spaceTabs.map((t) => t.id))
   const { dir } = useSpacePane(tabsState)
@@ -765,7 +747,7 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
   const motion = useTabMotion(tabsState, blankId)
 
   return (
-    <div className="sidebar drag">
+    <div className="sidebar drag" onMouseLeave={props.onPeekLeave}>
       {/* The traffic lights share the nav row — the strip left of the arrows is
           theirs, and stays draggable so the window still moves by its top edge. */}
       <div className="sidebar-toolbar">
@@ -792,15 +774,34 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
           onRenameDone={props.onRenameBookmarkDone}
         />
       )}
+      {/*
+        The blank tab you are looking at wears this row. It only counts as "the
+        tab you are on" while its search is up, though: dismiss the search and
+        you are just looking at the home screen, so the row goes quiet again and
+        pressing it brings the search back rather than piling up another tab.
+      */}
       <button
-        className={`new-tab-btn no-drag ${blankId != null ? 'active' : ''}`}
+        className={`new-tab-btn no-drag ${searchUp ? 'active' : ''}`}
         onClick={props.onNewTab}
-        title="New tab (⌘T)"
+        title={searchUp ? 'Search this tab' : 'New tab (⌘T)'}
       >
         <span className="tab-favicon">
           {blankId != null ? <IconWave size={13} /> : <IconPlus size={13} />}
         </span>
         <span>New Tab</span>
+        {searchUp && (
+          <span
+            className="tab-close nt-close"
+            role="button"
+            title="Put the search away"
+            onClick={(e) => {
+              e.stopPropagation()
+              void offshore.home.setSearch(false, blankId ?? undefined)
+            }}
+          >
+            <IconClose size={11} />
+          </span>
+        )}
       </button>
       <div
         className="tab-list no-drag space-pane"
@@ -977,7 +978,7 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
   const ontoSplit = useRef(false)
 
   return (
-    <div className="topbar drag">
+    <div className="topbar drag" onMouseLeave={props.onPeekLeave}>
       <div className="topbar-tabs-row">
         <div className="traffic-spacer-h" />
         <SpaceSwitcher

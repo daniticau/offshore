@@ -129,7 +129,7 @@ export function installMenu(): void {
         {
           label: 'Toggle Sidebar',
           accelerator: 'Cmd+S',
-          click: withActive((w) => w.sendToChrome('chrome:toggle-collapse'))
+          click: withActive((w) => w.sendToChrome('chrome:toggle-hidden'))
         },
         {
           label: 'Switch Tab Layout',

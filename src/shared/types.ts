@@ -28,6 +28,11 @@ export interface TabInfo {
   isBookmarked: boolean
   /** 0–100 heuristic "reads like AI slop" score for the loaded page */
   slopScore?: number
+  /**
+   * A home screen with its search still up. Only ever true for a blank new tab:
+   * the search is a panel over the home page, and dismissing it leaves the page.
+   */
+  homeSearch?: boolean
 }
 
 export interface TabsState {
@@ -37,6 +42,11 @@ export interface TabsState {
   activeSpaceId: string
   /** Two tab ids sharing the content area, when split view is on */
   splitPair: [number, number] | null
+  /**
+   * A page has taken the whole window (a video gone full screen). The chrome
+   * gets out of the way entirely while this is true — no strip, no edge to hover.
+   */
+  contentFullscreen: boolean
   /** Where DevTools are right now, so the toolbar can offer the other place */
   devtools: DevToolsState | null
 }
@@ -399,6 +409,14 @@ export interface Settings {
   restoreSession: boolean
   /** Remember visited pages so they can come back as omnibox suggestions. Off by default. */
   keepHistory: boolean
+  /**
+   * Ask the search engine what you might be typing. It is the one thing in
+   * Offshore that sends a half-typed word anywhere, so it says so out loud in
+   * Settings — and it goes through main with no cookies attached.
+   */
+  searchSuggestions: boolean
+  /** ⌘S: the chrome is tucked away until you ask for it at the edge. */
+  chromeHidden: boolean
   /** Show bookmarks in the chrome: sidebar tree (vertical) / bar under the toolbar (horizontal). */
   bookmarksBar: boolean
   /** What the new-tab page shows. Time and date by default; the rest is opt-in. */
@@ -641,11 +659,35 @@ export function weatherCondition(code: number): { label: string; icon: WeatherIc
 
 // ---------------- Constants ----------------
 
-export const SEARCH_ENGINES: Record<SearchEngineId, { name: string; searchUrl: string }> = {
-  duckduckgo: { name: 'DuckDuckGo', searchUrl: 'https://duckduckgo.com/?q=%s' },
-  google: { name: 'Google', searchUrl: 'https://www.google.com/search?q=%s' },
-  brave: { name: 'Brave Search', searchUrl: 'https://search.brave.com/search?q=%s' },
-  startpage: { name: 'Startpage', searchUrl: 'https://www.startpage.com/sp/search?query=%s' }
+/**
+ * `suggestUrl` is the engine's own type-ahead endpoint. Each one answers with the
+ * OpenSearch shape — ["what you typed", ["first guess", "second guess", …]] —
+ * which is why one parser covers all four.
+ */
+export const SEARCH_ENGINES: Record<
+  SearchEngineId,
+  { name: string; searchUrl: string; suggestUrl: string }
+> = {
+  duckduckgo: {
+    name: 'DuckDuckGo',
+    searchUrl: 'https://duckduckgo.com/?q=%s',
+    suggestUrl: 'https://ac.duckduckgo.com/ac/?type=list&q=%s'
+  },
+  google: {
+    name: 'Google',
+    searchUrl: 'https://www.google.com/search?q=%s',
+    suggestUrl: 'https://suggestqueries.google.com/complete/search?client=firefox&q=%s'
+  },
+  brave: {
+    name: 'Brave Search',
+    searchUrl: 'https://search.brave.com/search?q=%s',
+    suggestUrl: 'https://search.brave.com/api/suggest?q=%s'
+  },
+  startpage: {
+    name: 'Startpage',
+    searchUrl: 'https://www.startpage.com/sp/search?query=%s',
+    suggestUrl: 'https://www.startpage.com/suggestions?format=opensearch&query=%s'
+  }
 }
 
 export const ADBLOCK_LISTS: AdblockListMeta[] = [
@@ -688,6 +730,8 @@ export const DEFAULT_SETTINGS: Settings = {
   ],
   restoreSession: true,
   keepHistory: false,
+  searchSuggestions: true,
+  chromeHidden: false,
   bookmarksBar: true,
   // Out of the box the home screen is the time, the search pill, and nothing
   // else. Every other widget is one press-and-hold away.

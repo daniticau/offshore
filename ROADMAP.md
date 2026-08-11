@@ -17,7 +17,7 @@ Notes from the founder (2026-08-06) — gripes with other browsers and what Offs
 
 - [x] **Full redesign on a token system** — light + dark themes, Newsreader/Inter bundled
   locally, dithered waves everywhere, refined padding, animations ≤200ms.
-- [x] **Toolbar density modes** — classic / compact / dynamic (auto-hiding chrome, ⌘S).
+- [x] **Toolbar density modes** — classic / compact / dynamic (chrome that tucks itself away).
 - [x] **Arc-style micro-sounds** — synthesized, behind a setting (default on, very quiet).
 - [x] **Onboarding** — 4 steps: hero, layout, search engine, theme (live retint). Skippable,
   re-runnable from Settings.
@@ -27,7 +27,7 @@ Notes from the founder (2026-08-06) — gripes with other browsers and what Offs
 - [x] **Widevine DRM** — castLabs Electron for Content Security; Netflix/Spotify playback, CDM
   auto-installed on first launch, `drm` test flow proves the key system answers.
 - [x] **Inline omnibox** — the palette became a real toolbar input: type-ahead completion,
-  dropdown suggestions, focus lands there on every new tab; the start page keeps zero inputs.
+  dropdown suggestions, focus lands there on every new tab.
 - [x] **AI slop detector** — deterministic prose heuristics in the page preload, 0–100 score,
   tiny toolbar badge. The core tenet, shipped without a model.
 - [x] **Chrome-style downloads panel**, bookmarks-bar quick toggle, last-tab keeps the window,
@@ -52,6 +52,22 @@ Notes from the founder (2026-08-06) — gripes with other browsers and what Offs
 - [x] **Session restore v2** — all windows, spaces, profiles, bounds; v1 files migrate.
 - [x] **Security pass** — `file://` no longer trusted for privileged IPC, internal bridge only
   exposed on Offshore's own pages, popups hardened, themed error pages.
+
+## Chrome polish (from Arc) — landed 2026-08-11
+
+- [x] **Address-bar type-ahead** — the engine's finish-my-sentence list under the omnibox, asked
+  for by main with no cookies and no referrer, behind one labelled toggle in Settings → Privacy.
+  Your own tabs/bookmarks/history still come first; the guesses only fill the room left over.
+- [x] **The home screen is the background** — the new tab's search became a panel that springs up
+  in front of the widgets and can be put away (click past it, Escape, or the ✕ on the New Tab
+  row) without closing the tab. Reaching for the omnibox puts it away too: one search at a time.
+- [x] **Password dialog, centred** — the save/update offer moved off the side of the chrome into
+  a dialog over a dimmed page (Save / Not now / Never for this site). No auto-dismiss.
+- [x] **Quieter address bar** — the blocked-request counter left the toolbar for the site panel;
+  copy-link moved to the address's leading edge and only shows up under the pointer.
+- [x] **⌘S is a real hide** — a persisted mode, not a moment. The page takes the room once; an
+  edge hover slides the bar back *over* the page (joining the freeze machinery), so the page is
+  never resized and nothing reflows. A page in full screen gets every pixel and no edge works.
 
 ## Ideas (non-AI by principle)
 

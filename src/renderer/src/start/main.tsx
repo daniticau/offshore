@@ -9,6 +9,10 @@ interface InternalApi {
   brief: { weather(): Promise<BriefWeather | null> }
   open(url: string): Promise<void>
   onEditWidgets?(cb: () => void): void
+  home?: {
+    setSearch(open: boolean): Promise<void>
+    onSearch(cb: (open: boolean) => void): void
+  }
 }
 
 const internal = (window as unknown as { offshoreInternal?: InternalApi }).offshoreInternal
@@ -16,12 +20,17 @@ const internal = (window as unknown as { offshoreInternal?: InternalApi }).offsh
 /**
  * The new tab page — a thin shell around HomeCanvas, which the zero-tab window
  * renders too. Same widgets, same settings; the tab is the half that carries
- * the search pill, and it opens with the cursor already in it, so a new tab is
- * a place you can start typing the moment it appears.
+ * the search, and it opens with the cursor already in it, so a new tab is a
+ * place you can start typing the moment it appears.
+ *
+ * Whether the search is up is main's to know, not this page's: the sidebar shows
+ * it too, and its ✕ is how you put it away from the other side. So the state
+ * lives on the tab, and this page follows it.
  */
 function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [editSignal, setEditSignal] = useState(0)
+  const [searchOpen, setSearchOpen] = useState(true)
 
   useEffect(() => {
     const load = (): void => {
@@ -37,6 +46,7 @@ function App(): React.JSX.Element {
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
     internal?.onEditWidgets?.(() => setEditSignal((n) => n + 1))
+    internal?.home?.onSearch(setSearchOpen)
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
@@ -60,6 +70,11 @@ function App(): React.JSX.Element {
       onSubmit={(input) => void internal?.open(input)}
       fetchWeather={async () => (await internal?.brief.weather()) ?? null}
       searchPill
+      searchOpen={searchOpen}
+      onDismissSearch={() => {
+        setSearchOpen(false)
+        void internal?.home?.setSearch(false)
+      }}
       autoFocus
       editSignal={editSignal}
     />

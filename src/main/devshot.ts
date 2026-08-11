@@ -163,6 +163,37 @@ export function setupDevshot(): void {
         JSON.stringify(w.tabs.activeTab?.view.getBounds())
       )
     }
+    /**
+     * OFFSHORE_SHOT_HOVER=<css selector>: put the pointer on something and
+     * photograph what that alone brings out, into hover.png — the peeking
+     * sidebar at the window's edge, the copy-link button in the address bar.
+     * React synthesises enter/leave from mouseover/mouseout, so that is what
+     * goes out; a bare mouseenter would never reach it.
+     */
+    const hover = process.env['OFFSHORE_SHOT_HOVER']
+    if (hover) {
+      w.sendToChrome('devshot:composite', null)
+      await delay(150)
+      const hit = await w.win.webContents
+        .executeJavaScript(
+          `(() => { const el = document.querySelector(${JSON.stringify(hover)})
+             if (!el) return false
+             el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: null }))
+             el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+             return true })()`
+        )
+        .catch((e) => `err: ${e}`)
+      console.log('[devshot] hover', hover, hit)
+      await delay(1400)
+      const shot = await w.win.webContents.capturePage()
+      writeFileSync(join(dir!, 'hover.png'), shot.toPNG())
+      console.log(
+        '[devshot] after hover — content:',
+        JSON.stringify(w.contentBounds()),
+        'page:',
+        JSON.stringify(w.tabs.activeTab?.view.getBounds())
+      )
+    }
     if (process.env['OFFSHORE_SHOT_PALETTE']) {
       w.sendToChrome('devshot:composite', null)
       w.sendToChrome('omnibox:focus')
@@ -175,6 +206,34 @@ export function setupDevshot(): void {
       console.log('[devshot] chrome diag', cd)
       const palette = await w.win.webContents.capturePage()
       writeFileSync(join(dir!, 'palette.png'), palette.toPNG())
+    }
+    /**
+     * OFFSHORE_SHOT_TYPE=<text>: put the cursor in the address bar the way ⌘L
+     * does, type that, and photograph the dropdown into omnibox.png.
+     */
+    const typed = process.env['OFFSHORE_SHOT_TYPE']
+    if (typed) {
+      w.sendToChrome('devshot:composite', null)
+      w.win.focus()
+      w.win.webContents.focus()
+      w.sendToChrome('omnibox:focus')
+      await delay(600)
+      await w.win.webContents
+        .executeJavaScript(
+          `(() => { const el = document.querySelector('.omni-input')
+             if (!el) return false
+             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(typed)})
+             el.dispatchEvent(new Event('input', { bubbles: true }))
+             return true })()`
+        )
+        .catch((e) => `err: ${e}`)
+      await delay(1400)
+      const rows = await w.win.webContents
+        .executeJavaScript(`document.querySelectorAll('.omni-suggestion').length`)
+        .catch(() => -1)
+      console.log('[devshot] omnibox rows:', rows)
+      const shot = await w.win.webContents.capturePage()
+      writeFileSync(join(dir!, 'omnibox.png'), shot.toPNG())
     }
     console.log('[devshot] wrote screenshots to', dir)
     app.exit(0)
@@ -198,7 +257,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=passwords|popups|spaces|headers|privacy
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -479,6 +538,175 @@ function setupTestFlows(): void {
       check('non-web urls yield no candidates', faviconCandidates('offshore://start', undefined).length === 0)
     }
 
+    /**
+     * The chrome's manners: type-ahead in the address bar, the new tab's search
+     * as a panel you can put away, ⌘S as a real hide, and a page in full screen
+     * getting the whole window to itself.
+     */
+    if (flow === 'chrome') {
+      const inChrome = <T,>(src: string): Promise<T> =>
+        w.win.webContents.executeJavaScript(src) as Promise<T>
+      const { settingsStore } = await import('./stores')
+
+      // 1. the address bar finishes what you type
+      const sugs = await inChrome<{ kind: string; text: string }[]>(
+        `window.offshore.omnibox.suggest('canv')`
+      )
+      say(`[flowtest] suggestions: ${JSON.stringify(sugs.map((s) => `${s.kind}:${s.text}`))}`)
+      check('the dropdown has something to show', sugs.length > 0)
+      const guesses = sugs.filter((s) => s.kind === 'search' && s.text.toLowerCase() !== 'canv')
+      check('engine type-ahead reaches the dropdown (needs network)', guesses.length > 0)
+
+      // 1b. …and the list really stands on the page in the sidebar layout, where
+      // it has to hang far past a 216px column to be worth reading at all
+      w.win.show()
+      w.win.focus()
+      w.win.webContents.focus()
+      // the real ⌘L path, so the bar takes the cursor the way it does for a human
+      w.sendToChrome('omnibox:focus')
+      await delay(600)
+      await inChrome(`(() => {
+        const el = document.querySelector('.omni-input')
+        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+        set.call(el, 'canv')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await delay(1200)
+      say(
+        `[flowtest] bar state: ${await inChrome<string>(
+          `JSON.stringify({ editing: !!document.querySelector('.omnibox.editing'), focused: document.activeElement?.className ?? '' })`
+        )}`
+      )
+      const drop = await inChrome<{ rows: number; width: number; frozen: boolean } | null>(`(() => {
+        const d = document.querySelector('.omni-dropdown')
+        if (!d) return null
+        return {
+          rows: d.querySelectorAll('.omni-suggestion').length,
+          width: Math.round(d.getBoundingClientRect().width),
+          frozen: !!document.querySelector('.page-freeze')
+        }
+      })()`)
+      say(`[flowtest] dropdown: ${JSON.stringify(drop)}`)
+      check('the dropdown is on screen while typing', !!drop && drop.rows > 0)
+      check('it hangs past the sidebar instead of being squeezed into it', (drop?.width ?? 0) > 320)
+      check('the page steps aside behind it', drop?.frozen === true)
+      await inChrome(
+        `document.querySelector('.omni-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`
+      )
+      await delay(500)
+
+      // 2. a new tab opens with its search in front of the home screen.
+      // (A clean profile opens on the welcome page, so ask for a real new tab.)
+      settingsStore.set({ onboarded: true })
+      const tab = w.tabs.createTab()
+      await delay(1800)
+      check('a new tab opens with the search up', tab.info().homeSearch === true)
+      check(
+        'the search panel is on the home screen',
+        (await tab.wc.executeJavaScript(`!!document.querySelector('.start-search.on')`)) === true
+      )
+
+      // 3. dismissing it leaves the tab, and the home screen, exactly there
+      const tabCount = w.tabs.tabs.length
+      w.tabs.setHomeSearch(tab.id, false)
+      await delay(500)
+      check('the tab is not closed', w.tabs.tabs.length === tabCount && !!w.tabs.byId(tab.id))
+      check(
+        'the search goes away',
+        (await tab.wc.executeJavaScript(`!document.querySelector('.start-search.on')`)) === true
+      )
+      check(
+        'the home screen stays',
+        (await tab.wc.executeJavaScript(`!!document.querySelector('.start-grid')`)) === true
+      )
+      check(
+        'the New Tab row stops standing in for the tab',
+        (await inChrome<boolean>(`!document.querySelector('.new-tab-btn.active')`)) === true
+      )
+      check(
+        'the row keeps a way back to the search',
+        (await inChrome<boolean>(`!!document.querySelector('.new-tab-btn')`)) === true
+      )
+
+      // 4. ⌘S hides the chrome outright
+      w.sendToChrome('chrome:toggle-hidden')
+      await delay(700)
+      check(
+        '⌘S enters hidden mode',
+        (await inChrome<boolean>(`document.querySelector('.chrome').classList.contains('chrome-hidden')`)) === true
+      )
+      check('hidden is remembered, not momentary', settingsStore.get().chromeHidden === true)
+      const barRight = await inChrome<number>(
+        `Math.round(document.querySelector('.sidebar').getBoundingClientRect().right)`
+      )
+      check('the sidebar is off the window', barRight <= 0, String(barRight))
+      const roomy = w.contentBounds()
+      say(`[flowtest] content with the chrome hidden: ${JSON.stringify(roomy)}`)
+      check('the page takes the room the sidebar had', roomy.x < 20, JSON.stringify(roomy))
+
+      // 5. the peek slides in over the page — and does not resize it
+      await inChrome(`(() => {
+        const z = document.querySelector('.edge-zone')
+        if (!z) return false
+        // React synthesises enter/leave from mouseover/mouseout
+        z.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: null }))
+        return true
+      })()`)
+      await delay(800)
+      check(
+        'the edge brings the sidebar back',
+        (await inChrome<boolean>(`document.querySelector('.chrome').classList.contains('peeking')`)) === true
+      )
+      const barLeft = await inChrome<number>(
+        `Math.round(document.querySelector('.sidebar').getBoundingClientRect().left)`
+      )
+      check('it comes all the way in', barLeft === 0, String(barLeft))
+      const peekBounds = w.contentBounds()
+      check(
+        'the page is not resized by a peek',
+        JSON.stringify(peekBounds) === JSON.stringify(roomy),
+        `${JSON.stringify(roomy)} → ${JSON.stringify(peekBounds)}`
+      )
+
+      // 6. a page in full screen gets the window to itself
+      w.setContentFullscreen(true)
+      w.tabs.layout()
+      w.tabs.pushState()
+      await delay(600)
+      check(
+        'the chrome hears about full screen',
+        (await inChrome<boolean>(`document.querySelector('.chrome').classList.contains('content-fullscreen')`)) === true
+      )
+      check(
+        'there is no edge left to summon it from',
+        (await inChrome<boolean>(`!document.querySelector('.edge-zone')`)) === true
+      )
+      check(
+        'the bar is gone, not merely parked off-screen',
+        (await inChrome<boolean>(
+          `getComputedStyle(document.querySelector('.sidebar')).display === 'none'`
+        )) === true
+      )
+      const [cw, ch] = w.win.getContentSize()
+      const fs = w.tabs.activeTab!.view.getBounds()
+      check(
+        'the page has every pixel',
+        fs.x === 0 && fs.y === 0 && fs.width === cw && fs.height === ch,
+        `${JSON.stringify(fs)} vs ${cw}×${ch}`
+      )
+      w.setContentFullscreen(false)
+      w.tabs.layout()
+      w.tabs.pushState()
+      await delay(400)
+      const back = w.tabs.activeTab!.view.getBounds()
+      check('leaving full screen gives the page a real size again', back.width > 100 && back.height > 100, JSON.stringify(back))
+
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
     if (flow === 'passwords') {
       // 1. load the test login page and submit credentials
       w.tabs.navigate(null, `${dev}/testlogin.html`)
@@ -495,13 +723,26 @@ function setupTestFlows(): void {
         return document.getElementById('out').textContent
       })()`)
       await delay(1000)
-      const bannerText = await w.win.webContents.executeJavaScript(
-        `document.querySelector('.password-banner')?.textContent ?? ''`
+      const dialogText = await w.win.webContents.executeJavaScript(
+        `document.querySelector('.pw-modal')?.textContent ?? ''`
       )
-      check('save banner appears', bannerText.includes('Save password'), bannerText)
-      check('banner names the user', bannerText.includes('dani@example.com'))
+      check('save dialog appears', dialogText.includes('Save this password'), dialogText)
+      check('dialog names the user', dialogText.includes('dani@example.com'))
+      const dialogCentred = await w.win.webContents.executeJavaScript(`(() => {
+        const el = document.querySelector('.pw-modal')
+        if (!el) return 'no dialog'
+        const r = el.getBoundingClientRect()
+        const dx = Math.abs((r.left + r.right) / 2 - window.innerWidth / 2)
+        const dy = Math.abs((r.top + r.bottom) / 2 - window.innerHeight / 2)
+        return dx < 3 && dy < 3 ? 'centred' : \`off by \${Math.round(dx)},\${Math.round(dy)}\`
+      })()`)
+      check('dialog sits in the middle of the window', dialogCentred === 'centred', dialogCentred)
+      const scrim = await w.win.webContents.executeJavaScript(
+        `!!document.querySelector('.pw-scrim')`
+      )
+      check('the page behind it is dimmed', scrim === true)
 
-      // 2. accept the offer from the chrome banner
+      // 2. accept the offer from the dialog
       await w.win.webContents.executeJavaScript(`document.querySelector('.pw-save')?.click()`)
       await delay(800)
       let vaultRaw = ''
@@ -525,6 +766,16 @@ function setupTestFlows(): void {
       const parsed = JSON.parse(filled)
       check('autofill username', parsed.u === 'dani@example.com', filled)
       check('autofill password', parsed.p === 'hunter2-secret')
+
+      // 4. submitting what we already hold must not ask again
+      await w.tabs.activeTab!.wc.executeJavaScript(
+        `document.getElementById('f').requestSubmit(), 0`
+      )
+      await delay(1000)
+      const askedAgain = await w.win.webContents.executeJavaScript(
+        `!!document.querySelector('.pw-modal')`
+      )
+      check('no second prompt for a password already saved', askedAgain === false)
     }
 
     if (flow === 'popups') {

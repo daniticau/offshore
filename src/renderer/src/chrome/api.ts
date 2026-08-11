@@ -57,6 +57,7 @@ export interface OffshoreApi {
     bookmarkContext(nodeId: string): Promise<void>
   }
   omnibox: { suggest(input: string): Promise<Suggestion[]> }
+  home: { setSearch(open: boolean, tabId?: number): Promise<void> }
   actions: { run(id: ActionId): Promise<void> }
   chrome: {
     setInsets(insets: Insets): Promise<void>

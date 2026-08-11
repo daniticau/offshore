@@ -77,6 +77,17 @@ const api = {
   /** Fires when the chrome asks the new-tab page to enter widget edit mode. */
   onEditWidgets: (cb: () => void) => {
     ipcRenderer.on('widgets:edit', () => cb())
+  },
+  /**
+   * The home screen's search panel. The page says when it has been dismissed so
+   * the sidebar's New Tab row can stop pretending to be a tab, and listens for
+   * the same news travelling the other way (the ✕ in the chrome).
+   */
+  home: {
+    setSearch: (open: boolean) => invoke('home:set-search', open),
+    onSearch: (cb: (open: boolean) => void) => {
+      ipcRenderer.on('home:search', (_e, open: boolean) => cb(!!open))
+    }
   }
 }
 

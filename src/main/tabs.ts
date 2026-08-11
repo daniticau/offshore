@@ -119,6 +119,12 @@ export class Tab {
   loadError?: string
   /** 0–100 heuristic slop score reported by the page preload */
   slopScore?: number
+  /**
+   * Is the home screen's search still up? A new tab opens with it in front of
+   * the widgets, and dismissing it leaves the home page there — the tab does not
+   * go anywhere. Only ever asked about while the tab is on offshore://start.
+   */
+  homeSearch = true
   /** True once this tab's document has been parsed at least once — see whenReady. */
   ready = false
   private readyWaiters: Array<() => void> = []
@@ -217,7 +223,8 @@ export class Tab {
       blockedCount: adblock.counts.get(this.id) ?? 0,
       blockedPopups: blockedPopupCount(this.id),
       isBookmarked: bookmarksStore.isBookmarked(effectiveUrl),
-      slopScore: this.slopScore
+      slopScore: this.slopScore,
+      homeSearch: this.homeSearch && (errorTarget ?? toDisplayUrl(url)).startsWith('offshore://start')
     }
   }
 }
@@ -439,6 +446,25 @@ export class TabManager {
     tab.loadError = undefined
     void tab.wc.loadURL(url).catch(() => {})
     tab.wc.focus()
+  }
+
+  /**
+   * Put the home screen's search up, or take it away.
+   *
+   * Both halves have to agree: the page draws the panel, the sidebar lights up
+   * the row that stands in for the tab. So this is the one place that moves the
+   * flag — whether the ask came from the ✕ in the chrome or from a click on the
+   * page's own backdrop.
+   */
+  setHomeSearch(id: number | null, open: boolean): void {
+    const tab = id == null ? this.activeTab : this.byId(id)
+    if (!tab || tab.homeSearch === open) return
+    tab.homeSearch = open
+    if (!tab.wc.isDestroyed()) {
+      tab.wc.send('home:search', open)
+      if (open) tab.wc.focus()
+    }
+    this.pushState()
   }
 
   // ---- spaces ----
@@ -1061,6 +1087,7 @@ export class TabManager {
       spaces,
       activeSpaceId: this.activeSpaceId,
       splitPair: this.splitPair,
+      contentFullscreen: this.host.isContentFullscreen(),
       devtools: this.devtoolsState()
     }
   }
@@ -1185,13 +1212,22 @@ export class TabManager {
 
     wc.on('audio-state-changed', () => this.pushState())
 
+    /*
+     * A page going full screen takes the whole window, chrome included: the view
+     * covers every last pixel, so there is no strip of sidebar left to hover and
+     * nothing of ours can slide in over the video. The chrome is told as well as
+     * relaid out — its own edge-hover zones have to stand down, or the pointer
+     * reaching a corner would summon a sidebar nobody asked for.
+     */
     wc.on('enter-html-full-screen', () => {
       this.host.setContentFullscreen(true)
       this.layout()
+      this.pushState()
     })
     wc.on('leave-html-full-screen', () => {
       this.host.setContentFullscreen(false)
       this.layout()
+      this.pushState()
     })
 
     wc.on('found-in-page', (_e, result) => {

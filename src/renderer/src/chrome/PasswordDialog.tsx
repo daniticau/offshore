@@ -1,50 +1,84 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { BlockedPopup, PasswordOffer, TabInfo } from '@shared/types'
 import { offshore, prettyHost } from './api'
 import { playSound } from './sounds'
 import { IconKey, IconPopupBlocked } from './icons'
 
-interface PasswordBannerProps {
+interface PasswordDialogProps {
   offer: PasswordOffer
   onResolve: () => void
 }
 
-/** "Save password for host?" — appears near the toolbar after a login. */
-export function PasswordBanner({ offer, onResolve }: PasswordBannerProps): React.JSX.Element {
+/**
+ * "Save password for host?" — a dialog in the middle of the window, over a page
+ * that has been dimmed out of the way.
+ *
+ * It used to be a banner pinned to the side of the chrome, where it collided
+ * with the tab strip and was easy to miss. A password is a decision worth
+ * stopping for, so it stops you: the answer is right where you are looking, and
+ * nothing happens until you give one. It never times out — a prompt that
+ * vanishes on its own asks you to notice it, which is backwards.
+ */
+export function PasswordDialog({ offer, onResolve }: PasswordDialogProps): React.JSX.Element {
+  const saveRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    const t = setTimeout(onResolve, 25_000)
-    return () => clearTimeout(t)
-  }, [onResolve])
+    saveRef.current?.focus()
+  }, [])
 
   const resolve = (action: 'save' | 'never' | 'dismiss'): void => {
     void offshore.passwords.resolveOffer(offer.offerId, action)
     if (action === 'save') playSound('password-saved')
     onResolve()
   }
+  const resolveRef = useRef(resolve)
+  resolveRef.current = resolve
+
+  // Escape means "not now" from wherever the cursor happens to be
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        resolveRef.current('dismiss')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const update = offer.kind === 'update'
 
   return (
-    <div className="password-banner banner no-drag">
-      <span className="pw-icon">
-        <IconKey size={15} />
-      </span>
-      <div className="pw-text">
-        <div className="pw-title">
-          {offer.kind === 'update' ? 'Update password?' : 'Save password?'}
-        </div>
+    <div className="pw-scrim no-drag" onMouseDown={() => resolve('dismiss')}>
+      <div
+        className="pw-modal surface-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label={update ? 'Update password' : 'Save password'}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <span className="pw-icon">
+          <IconKey size={22} />
+        </span>
+        <div className="pw-title">{update ? 'Update this password?' : 'Save this password?'}</div>
         <div className="pw-sub">
           {offer.username ? `${offer.username} · ` : ''}
           {offer.host}
         </div>
+        <div className="pw-note">
+          Kept on this Mac only, encrypted with your keychain. Nothing is synced anywhere.
+        </div>
+        <div className="pw-actions">
+          <button ref={saveRef} className="pw-save" onClick={() => resolve('save')}>
+            {update ? 'Update' : 'Save'}
+          </button>
+          <button className="pw-not-now" onClick={() => resolve('dismiss')}>
+            Not now
+          </button>
+        </div>
+        <button className="pw-never" onClick={() => resolve('never')}>
+          Never for this site
+        </button>
       </div>
-      <button className="pw-save" onClick={() => resolve('save')}>
-        {offer.kind === 'update' ? 'Update' : 'Save'}
-      </button>
-      <button className="pw-never" onClick={() => resolve('never')}>
-        Never
-      </button>
-      <button className="pw-dismiss" onClick={() => resolve('dismiss')} title="Not now">
-        ✕
-      </button>
     </div>
   )
 }

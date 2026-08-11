@@ -65,6 +65,11 @@ export interface OmniboxProps {
   focusNonce: number
   /** True while the dropdown needs to float over the page. */
   onOverlayNeed: (need: boolean) => void
+  /**
+   * True while the bar has the cursor. A hidden chrome peeking in for ⌘L has to
+   * know: the pointer is nowhere near it, so nothing else would keep it there.
+   */
+  onEditingChange?: (editing: boolean) => void
   onNavigate: (input: string) => void
   /** Site-info panel toggle — shown as the tune button when a site is loaded. */
   onSiteInfo?: () => void
@@ -82,6 +87,7 @@ export function Omnibox({
   compact,
   focusNonce,
   onOverlayNeed,
+  onEditingChange,
   onNavigate,
   onSiteInfo,
   actions
@@ -113,6 +119,9 @@ export function Omnibox({
   useEffect(() => {
     onOverlayNeed(dropdownOpen)
   }, [dropdownOpen, onOverlayNeed])
+  useEffect(() => {
+    onEditingChange?.(editing)
+  }, [editing, onEditingChange])
 
   // ⌘T / ⌘L / new-tab button: take the cursor
   useEffect(() => {
@@ -214,13 +223,18 @@ export function Omnibox({
 
   const shownValue = editing ? value : idleValue
   const showFavicon = !editing && !isStart && activeTab?.favicon
-  const onPage = !editing && /^https?:/.test(activeTab?.url ?? '') && !!onSiteInfo
-  // The page controls sit at the trailing edge in both layouts — the star lives
-  // in the address bar, the way Chromium parks it. The sidebar pill drops its
-  // leading icon so the host reads flush left (Arc); the compact topbar pill
-  // keeps its leading tune button and only gains the trailing cluster.
+  // Offshore's own pages have no site to tune and no link worth copying. (They
+  // are served over http in dev, so ask the display url, not the real one.)
+  const onPage =
+    !editing &&
+    /^https?:/.test(activeTab?.url ?? '') &&
+    !(activeTab?.displayUrl ?? '').startsWith('offshore://') &&
+    !!onSiteInfo
+  // The page controls sit at the trailing edge in both layouts — site settings
+  // and the star, the way Chromium parks them. Copy link is the exception: it
+  // belongs to the address itself, so it sits at the leading edge, right on top
+  // of where the link starts, and only shows up when the pointer is in the bar.
   const trailingActions = onPage
-  const leadingTune = onPage && !!compact
 
   const copyLink = (): void => {
     const url = activeTab?.url
@@ -243,11 +257,17 @@ export function Omnibox({
         trailingActions ? 'has-actions' : ''
       }`}
     >
-      {leadingTune ? (
-        <button className="omni-tune" title="Site information" onClick={onSiteInfo}>
-          <IconTune size={14} />
+      {trailingActions ? (
+        /* Sits in the address's own place: idle it takes no room at all, so the
+           host still reads flush left until you bring the pointer in here. */
+        <button
+          className={`omni-copy omni-copy-lead ${copied ? 'done' : ''}`}
+          title={copied ? 'Copied' : 'Copy link'}
+          onClick={copyLink}
+        >
+          {copied ? <IconCheck size={14} /> : <IconLink size={14} />}
         </button>
-      ) : trailingActions ? null : (
+      ) : (
         <span className="omni-icon">
           {showFavicon ? (
             <img src={activeTab.favicon} alt="" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
@@ -286,19 +306,9 @@ export function Omnibox({
       {trailingActions && (
         <div className="omni-actions">
           {actions}
-          <button
-            className={`omni-act omni-copy ${copied ? 'done' : ''}`}
-            title={copied ? 'Copied' : 'Copy link'}
-            onClick={copyLink}
-          >
-            {copied ? <IconCheck size={14} /> : <IconLink size={14} />}
+          <button className="omni-tune boxed" title="Site information" onClick={onSiteInfo}>
+            <IconTune size={14} />
           </button>
-          {/* the topbar pill already wears the tune button on its leading edge */}
-          {!compact && (
-            <button className="omni-tune boxed" title="Site information" onClick={onSiteInfo}>
-              <IconTune size={14} />
-            </button>
-          )}
         </div>
       )}
       {dropdownOpen && (
@@ -306,13 +316,16 @@ export function Omnibox({
           {suggestions.map((s, i) => {
             const Icon = KIND_ICON[s.kind] ?? IconGlobe
             const path = displayPath(s.url)
-            const primary = s.kind === 'tab' ? s.text : s.title || (path || s.text)
-            const secondary = s.kind === 'action' || s.kind === 'search' || primary === path ? '' : path
+            // A search reads as the words you would be searching for — never as
+            // the engine's query string, which is nobody's idea of a suggestion.
+            const query = s.kind === 'search'
+            const primary = s.kind === 'tab' || query ? s.text : s.title || (path || s.text)
+            const secondary = query || s.kind === 'action' || primary === path ? '' : path
             const hint = hintFor(s)
             return (
               <div
                 key={`${s.kind}-${s.url}-${s.tabId ?? ''}-${s.action ?? ''}-${i}`}
-                className={`omni-suggestion ${i === selected ? 'selected' : ''}`}
+                className={`omni-suggestion ${query ? 'query' : ''} ${i === selected ? 'selected' : ''}`}
                 onMouseEnter={() => setSelected(i)}
                 onMouseDown={(e) => {
                   e.preventDefault()
@@ -320,7 +333,8 @@ export function Omnibox({
                 }}
               >
                 <span className="s-icon">
-                  {/^https?:/.test(s.url) ? (
+                  {/* a query wears the magnifier, not the engine's favicon */}
+                  {/^https?:/.test(s.url) && !query ? (
                     <Favicon
                       url={s.url}
                       stored={s.favicon}
