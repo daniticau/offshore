@@ -11,7 +11,10 @@ import {
 import { join } from 'path'
 import type {
   AccentId,
+  DevToolsDock,
+  DevToolsState,
   FindResult,
+  PageFreezeFrame,
   SessionSpaceV2,
   SessionWindowV2,
   SpaceInfo,
@@ -44,6 +47,21 @@ import {
 import type { OffshoreWindow } from './windows'
 
 export { TAB_PARTITION, tabSession } from './sessions'
+
+/** How long we let a brand-new renderer get its first pixels up before giving up on it. */
+const COLD_SWAP_MS = 300
+/** Frames of slack between "the document is ready" and "the compositor has it". */
+const PAINT_GRACE_MS = 40
+/** Docked DevTools take a third of the content area, within these limits. */
+const DEVTOOLS_MIN = 260
+const DEVTOOLS_MAX = 720
+
+/** DevTools living inside the window: our view, so our bounds and our rules. */
+interface DockedDevTools {
+  tabId: number
+  view: WebContentsView
+  side: 'right' | 'bottom'
+}
 
 export interface Space {
   id: string
@@ -101,8 +119,11 @@ export class Tab {
   loadError?: string
   /** 0–100 heuristic slop score reported by the page preload */
   slopScore?: number
+  /** True once this tab's document has been parsed at least once — see whenReady. */
+  ready = false
+  private readyWaiters: Array<() => void> = []
 
-  constructor(initialUrl: string, partition: string) {
+  constructor(partition: string) {
     this.partition = partition
     this.view = new WebContentsView({
       webPreferences: {
@@ -115,7 +136,7 @@ export class Tab {
         additionalArguments: devOriginArgs()
       }
     })
-    this.setBackgroundForUrl(initialUrl)
+    this.applyBackground()
     const v = this.view as WebContentsView & { setBorderRadius?: (r: number) => void }
     if (typeof v.setBorderRadius === 'function') v.setBorderRadius(12)
   }
@@ -128,13 +149,44 @@ export class Tab {
     return this.view.webContents
   }
 
-  setBackgroundForUrl(url: string): void {
-    // Electron reads 8-digit hex as #AARRGGBB, not #RRGGBBAA. Use the 6-digit
-    // form for opaque colours so a stray alpha can never make the page view
-    // translucent — a translucent view over real page content aborts the
-    // compositor. Internal pages stay fully transparent so the chrome shows through.
-    const webBg = nativeTheme.shouldUseDarkColors ? '#10181E' : '#FFFFFF'
-    this.view.setBackgroundColor(isInternalUrl(url) ? '#00000000' : webBg)
+  /**
+   * Opaque, always, and exactly the colour of the .content-frame card the
+   * chrome paints underneath. A translucent page view has to be recomposited
+   * against the window's vibrancy every time the set of views changes, and
+   * adding, showing or removing one then costs a frame that comes out black in
+   * the middle of the window — the flash you get on every tab open and close.
+   * Internal pages are transparent documents, so they still look identical
+   * over this: same colour, same 12px radius as the card behind them.
+   *
+   * Electron reads 8-digit hex as #AARRGGBB, not #RRGGBBAA — stay 6-digit so a
+   * stray alpha can never make the view translucent again.
+   */
+  applyBackground(): void {
+    this.view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#10181E' : '#FFFFFF')
+  }
+
+  /** The document has been parsed; the compositor still needs a frame or two. */
+  markReady(): void {
+    if (this.ready) return
+    this.ready = true
+    const waiters = this.readyWaiters
+    this.readyWaiters = []
+    for (const fn of waiters) fn()
+  }
+
+  /** Resolves when the tab has something to show, or when we stop waiting for it. */
+  whenReady(timeoutMs: number): Promise<void> {
+    if (this.ready) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      let timer: NodeJS.Timeout | null = null
+      const fire = (): void => {
+        if (timer) clearTimeout(timer)
+        this.readyWaiters = this.readyWaiters.filter((f) => f !== fire)
+        resolve()
+      }
+      timer = setTimeout(fire, timeoutMs)
+      this.readyWaiters.push(fire)
+    })
   }
 
   info(): TabInfo {
@@ -179,8 +231,14 @@ export class TabManager {
   private closedTabs: { url: string; spaceId: string }[] = []
   private pushTimer: NodeJS.Timeout | null = null
   private pipTabId: number | null = null
+  /** Views parked off-screen while they raster; see present(). */
+  private staged = new Set<Tab>()
+  /** Bumped per swap so a superseded one never lands its views. */
+  private swapGen = 0
   /** Two tabs sharing the content area side by side (Helium-style split). */
   splitPair: [number, number] | null = null
+  /** DevTools docked beside the page, when they aren't off in their own window. */
+  private devtools: DockedDevTools | null = null
 
   constructor(host: TabHost) {
     this.host = host
@@ -226,7 +284,7 @@ export class TabManager {
   createTab(url?: string, opts: { activate?: boolean; index?: number; spaceId?: string } = {}): Tab {
     const space = this.spaceById(opts.spaceId ?? this.activeSpaceId) ?? this.activeSpace
     const target = url || internalPageUrl('start')
-    const tab = new Tab(target, this.partitionFor(space))
+    const tab = new Tab(this.partitionFor(space))
     tab.spaceId = space.id
     let index = opts.index
     if (index === undefined) {
@@ -253,19 +311,20 @@ export class TabManager {
     return tab
   }
 
-  activateTab(id: number): void {
+  activateTab(id: number, opts: { cover?: Tab; onSwapped?: () => void } = {}): void {
     const tab = this.byId(id)
-    if (!tab) return
+    if (!tab) {
+      opts.onSwapped?.()
+      return
+    }
     const prev = this.activeTab
     this.activeTabId = id
     if (tab.spaceId !== this.activeSpaceId) this.activeSpaceId = tab.spaceId
     const space = this.spaceById(tab.spaceId)
     if (space) space.lastActiveTabId = id
     if (this.splitPair && !this.inSplit(id)) this.splitPair = null
-    for (const t of this.tabs) {
-      t.view.setVisible((t.id === id || this.inSplit(t.id)) && !this.host.isOverlayOpen())
-    }
-    this.layout()
+    // Whatever is already on screen holds it until the incoming view has pixels.
+    this.present(opts.cover ?? (prev && prev.id !== id ? prev : null), opts.onSwapped)
     if (tab.partition === TAB_PARTITION) {
       try {
         extensionsRef.current?.selectTab(tab.wc)
@@ -289,17 +348,21 @@ export class TabManager {
     const url = tab.wc.getURL()
     if (url && !isInternalUrl(url)) this.closedTabs.push({ url, spaceId: tab.spaceId })
     const closedSpaceId = tab.spaceId
+    let handedOver = false
     if (this.activeTabId === id) {
       this.activeTabId = -1
       const spaceTabs = this.tabsIn(closedSpaceId)
       // nearest neighbor within the same space
       const following = spaceTabs.find((t) => this.tabs.indexOf(t) >= idx)
       const next = following ?? spaceTabs[spaceTabs.length - 1]
-      if (next) this.activateTab(next.id)
+      if (next) {
+        // The dying view keeps the screen until its replacement has painted, so
+        // closing a tab never uncovers a bare hole in the middle of the window.
+        handedOver = true
+        this.activateTab(next.id, { cover: tab, onSwapped: () => this.retire(tab) })
+      }
     }
-    this.host.win.contentView.removeChildView(tab.view)
-    adblock.dropTab(id)
-    tab.wc.close()
+    if (!handedOver) this.retire(tab)
     // Zero tabs is a real state: the chrome shows the home screen with a
     // centered search bar. The window only closes when the human closes it.
     if (this.tabs.length === 0 || this.tabsIn(closedSpaceId).length === 0) {
@@ -309,6 +372,20 @@ export class TabManager {
     this.host.onTabsChanged()
   }
 
+  /** Detach and destroy a view once nothing on screen still depends on it. */
+  private retire(tab: Tab): void {
+    this.staged.delete(tab)
+    // DevTools belong to the tab they inspect; they go when it does
+    if (this.devtools?.tabId === tab.id) this.teardownDock()
+    try {
+      this.host.win.contentView.removeChildView(tab.view)
+    } catch {
+      /* view already detached */
+    }
+    adblock.dropTab(tab.id)
+    if (!tab.wc.isDestroyed()) tab.wc.close()
+  }
+
   /** Remove a tab's view without close-bookkeeping (space rebuilds, moves). */
   private detachTab(tab: Tab): void {
     this.clearSplitIf(tab.id)
@@ -316,13 +393,7 @@ export class TabManager {
     if (idx !== -1) this.tabs.splice(idx, 1)
     if (this.pipTabId === tab.id) this.pipTabId = null
     if (this.activeTabId === tab.id) this.activeTabId = -1
-    try {
-      this.host.win.contentView.removeChildView(tab.view)
-    } catch {
-      /* view already detached */
-    }
-    adblock.dropTab(tab.id)
-    tab.wc.close()
+    this.retire(tab)
   }
 
   reopenClosedTab(): void {
@@ -366,7 +437,6 @@ export class TabManager {
       return
     }
     tab.loadError = undefined
-    tab.setBackgroundForUrl(url)
     void tab.wc.loadURL(url).catch(() => {})
     tab.wc.focus()
   }
@@ -558,34 +628,178 @@ export class TabManager {
 
   // ---- layout / state ----
 
-  layout(): void {
+  /** The whole content card, before DevTools takes its share of it. */
+  private contentArea(): Rectangle {
+    return this.host.isContentFullscreen() ? this.host.fullBounds() : this.host.contentBounds()
+  }
+
+  /**
+   * Where docked DevTools sit, or null when they shouldn't show at all: shut,
+   * off in their own window, or belonging to a tab you aren't looking at. They
+   * take a third of the content card and always leave the page a workable strip.
+   */
+  private devtoolsRect(): Rectangle | null {
+    const dt = this.devtools
+    if (!dt || dt.view.webContents.isDestroyed()) return null
+    if (this.host.isContentFullscreen()) return null
+    if (dt.tabId !== this.activeTabId && !this.inSplit(dt.tabId)) return null
+    const area = this.contentArea()
+    if (dt.side === 'bottom') {
+      const wanted = Math.min(DEVTOOLS_MAX, Math.max(DEVTOOLS_MIN, Math.round(area.height / 3)))
+      const height = Math.min(wanted, area.height - DEVTOOLS_MIN)
+      if (height <= 0) return null
+      return { x: area.x, y: area.y + area.height - height, width: area.width, height }
+    }
+    const wanted = Math.min(DEVTOOLS_MAX, Math.max(DEVTOOLS_MIN, Math.round(area.width / 3)))
+    const width = Math.min(wanted, area.width - DEVTOOLS_MIN)
+    if (width <= 0) return null
+    return { x: area.x + area.width - width, y: area.y, width, height: area.height }
+  }
+
+  /** What the page(s) get: the content card, less whatever DevTools took. */
+  private pageArea(): Rectangle {
+    const area = this.contentArea()
+    const dt = this.devtoolsRect()
+    if (!dt) return area
+    const gap = 6
+    if (this.devtools?.side === 'bottom') {
+      return { ...area, height: Math.max(0, dt.y - area.y - gap) }
+    }
+    return { ...area, width: Math.max(0, dt.x - area.x - gap) }
+  }
+
+  /** Park the docked DevTools view where it belongs, or take it off screen. */
+  private placeDevTools(): void {
+    const dt = this.devtools
+    if (!dt || dt.view.webContents.isDestroyed()) return
+    const rect = this.devtoolsRect()
+    if (!rect || this.host.isOverlayOpen()) {
+      dt.view.setVisible(false)
+      return
+    }
+    dt.view.setBounds(rect)
+    dt.view.setVisible(true)
+  }
+
+  /** Which views belong on screen right now, and where. */
+  private viewBounds(): Array<[Tab, Rectangle]> {
     const active = this.activeTab
-    if (!active) return
-    const bounds = this.host.isContentFullscreen() ? this.host.fullBounds() : this.host.contentBounds()
+    if (!active) return []
+    const bounds = this.pageArea()
     const pair = this.splitTabs()
     if (pair && !this.host.isContentFullscreen()) {
       const gap = 8
       const half = Math.max(0, Math.round((bounds.width - gap) / 2))
       const [left, right] = pair
-      left.view.setBounds({
-        x: Math.round(bounds.x),
-        y: Math.round(bounds.y),
-        width: half,
-        height: Math.max(0, Math.round(bounds.height))
-      })
-      right.view.setBounds({
-        x: Math.round(bounds.x) + half + gap,
-        y: Math.round(bounds.y),
-        width: Math.max(0, Math.round(bounds.width) - half - gap),
-        height: Math.max(0, Math.round(bounds.height))
-      })
+      return [
+        [
+          left,
+          {
+            x: Math.round(bounds.x),
+            y: Math.round(bounds.y),
+            width: half,
+            height: Math.max(0, Math.round(bounds.height))
+          }
+        ],
+        [
+          right,
+          {
+            x: Math.round(bounds.x) + half + gap,
+            y: Math.round(bounds.y),
+            width: Math.max(0, Math.round(bounds.width) - half - gap),
+            height: Math.max(0, Math.round(bounds.height))
+          }
+        ]
+      ]
+    }
+    return [
+      [
+        active,
+        {
+          x: Math.round(bounds.x),
+          y: Math.round(bounds.y),
+          width: Math.max(0, Math.round(bounds.width)),
+          height: Math.max(0, Math.round(bounds.height))
+        }
+      ]
+    ]
+  }
+
+  /** Same size, just parked to the left of the window where nobody can see it. */
+  private static offscreen(rect: Rectangle): Rectangle {
+    return { ...rect, x: -rect.width - 64 }
+  }
+
+  layout(): void {
+    for (const [tab, rect] of this.viewBounds()) {
+      tab.view.setBounds(this.staged.has(tab) ? TabManager.offscreen(rect) : rect)
+    }
+    this.placeDevTools()
+  }
+
+  /**
+   * Put the views that belong on screen on screen, without ever leaving a gap.
+   *
+   * A view with no live surface — one that has never painted, or that has been
+   * hidden long enough for the compositor to drop its frame — is made visible
+   * off to the side of the window first. It rasters out there while whatever is
+   * already on screen (`cover`) stays exactly where it is; only once it has
+   * something to show do we move it into place and drop the cover, both in the
+   * same tick. Opening a new tab over an old one therefore changes nothing on
+   * screen until the new page is genuinely ready to replace it.
+   */
+  private present(cover: Tab | null, onSwapped?: () => void): void {
+    const gen = ++this.swapGen
+    const rects = this.viewBounds()
+    const wanted = new Set(rects.map(([t]) => t))
+
+    if (this.host.isOverlayOpen()) {
+      for (const t of this.tabs) {
+        t.view.setVisible(false)
+        this.staged.delete(t)
+      }
+      if (cover && !wanted.has(cover)) cover.view.setVisible(false)
+      this.placeDevTools()
+      onSwapped?.()
       return
     }
-    active.view.setBounds({
-      x: Math.round(bounds.x),
-      y: Math.round(bounds.y),
-      width: Math.max(0, Math.round(bounds.width)),
-      height: Math.max(0, Math.round(bounds.height))
+
+    // anything neither wanted nor holding the screen goes away now
+    for (const t of this.tabs) {
+      if (wanted.has(t) || t === cover) continue
+      t.view.setVisible(false)
+      this.staged.delete(t)
+    }
+
+    const cold = rects.filter(([t]) => this.staged.has(t) || !t.view.getVisible())
+
+    const land = (): void => {
+      if (gen === this.swapGen) {
+        for (const [tab] of rects) this.staged.delete(tab)
+        // recomputed, not replayed: the window may have been resized while we waited
+        for (const [tab, rect] of this.viewBounds()) {
+          if (tab.wc.isDestroyed()) continue
+          tab.view.setBounds(rect)
+          tab.view.setVisible(true)
+        }
+        if (cover && !wanted.has(cover)) cover.view.setVisible(false)
+        this.placeDevTools()
+      }
+      onSwapped?.()
+    }
+
+    if (!cold.length) {
+      land()
+      return
+    }
+
+    for (const [tab, rect] of cold) {
+      this.staged.add(tab)
+      tab.view.setBounds(TabManager.offscreen(rect))
+      tab.view.setVisible(true)
+    }
+    void Promise.all(cold.map(([t]) => t.whenReady(COLD_SWAP_MS))).then(() => {
+      setTimeout(land, PAINT_GRACE_MS)
     })
   }
 
@@ -606,36 +820,172 @@ export class TabManager {
     if (this.inSplit(id)) this.splitPair = null
   }
 
-  /** Toggle a 50/50 split of the active tab with its neighbour (creating one if alone). */
+  /**
+   * Split the active tab with a fresh tab on its right.
+   *
+   * It used to grab whichever tab happened to be next in the strip, which is
+   * almost never the one you meant — you split *from* somewhere in order to go
+   * somewhere else. A new tab to the right is that, and nothing is disturbed.
+   */
   toggleSplit(): void {
     if (this.splitPair) {
-      this.splitPair = null
-      this.activateTab(this.activeTabId)
+      this.unsplit()
       return
     }
     const active = this.activeTab
     if (!active) return
-    const spaceTabs = this.tabsIn(active.spaceId)
-    let partner = spaceTabs[(spaceTabs.indexOf(active) + 1) % spaceTabs.length]
-    if (!partner || partner.id === active.id) {
-      partner = this.createTab(undefined, { spaceId: active.spaceId, activate: false })
-    }
+    const partner = this.createTab(undefined, {
+      spaceId: active.spaceId,
+      index: this.tabs.indexOf(active) + 1,
+      activate: false
+    })
     this.splitPair = [active.id, partner.id]
     // Re-assert activation: the extensions layer activates a freshly created
     // tab mid-createTab (before the pair exists), hiding the original half.
     this.activateTab(active.id)
   }
 
-  setActiveVisible(visible: boolean): void {
-    this.activeTab?.view.setVisible(visible)
-    const pair = this.splitTabs()
-    if (pair) for (const t of pair) t.view.setVisible(visible)
-    if (visible) this.layout()
+  /** Drop an existing tab into the split, taking over the half you're not in. */
+  splitWith(tabId: number): void {
+    const incoming = this.byId(tabId)
+    if (!incoming) return
+    const anchor =
+      this.splitPair && this.inSplit(this.activeTabId)
+        ? this.byId(this.splitPair.find((id) => id !== tabId) ?? this.activeTabId)
+        : this.activeTab
+    if (!anchor || anchor.id === incoming.id || anchor.spaceId !== incoming.spaceId) return
+    this.splitPair = [anchor.id, incoming.id]
+    this.activateTab(anchor.id)
+  }
+
+  /** Back to one page. The half you were last in is the one that stays. */
+  unsplit(): void {
+    if (!this.splitPair) return
+    const keep = this.inSplit(this.activeTabId) ? this.activeTabId : this.splitPair[0]
+    this.splitPair = null
+    this.activateTab(keep)
+  }
+
+  // ---- devtools ----
+
+  /**
+   * Note the order: a docked dock is authoritative. Electron's
+   * `isDevToolsOpened()` reports false whenever the front-end was given a host
+   * of our own, so it can only ever answer for DevTools in a real window.
+   */
+  devtoolsState(): DevToolsState | null {
+    const dt = this.devtools
+    if (dt && !dt.view.webContents.isDestroyed()) {
+      return { tabId: dt.tabId, docked: true, side: dt.side }
+    }
+    const floating = this.tabs.find((t) => !t.wc.isDestroyed() && t.wc.isDevToolsOpened())
+    return floating ? { tabId: floating.id, docked: false, side: 'right' } : null
+  }
+
+  /** ⌥⌘I: open DevTools wherever the settings say, or shut whatever is open. */
+  toggleDevTools(): void {
+    if (this.devtoolsState()) this.closeDevTools()
+    else this.openDevTools()
+  }
+
+  /**
+   * 'right'/'bottom' dock DevTools into a view of our own beside the page.
+   * Electron's own docking has no say over a WebContentsView — it would hand
+   * them a window regardless — so we give the front-end a host and place it
+   * ourselves, and pageArea() hands back what's left for the page.
+   */
+  openDevTools(dock?: DevToolsDock, id?: number): void {
+    const tab = id == null ? this.activeTab : this.byId(id)
+    if (!tab || tab.wc.isDestroyed()) return
+    const mode = dock ?? settingsStore.get().devtoolsDock
+    this.teardownDock()
+    for (const t of this.tabs) {
+      if (!t.wc.isDestroyed() && t.wc.isDevToolsOpened()) t.wc.closeDevTools()
+    }
+    if (mode === 'window') {
+      tab.wc.openDevTools({ mode: 'detach' })
+    } else {
+      const view = new WebContentsView()
+      // opaque like every other view over page content — see Tab.applyBackground
+      view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#202124' : '#FFFFFF')
+      this.host.win.contentView.addChildView(view)
+      view.setVisible(false)
+      this.devtools = { tabId: tab.id, view, side: mode }
+      tab.wc.setDevToolsWebContents(view.webContents)
+      tab.wc.openDevTools({ mode: 'detach' })
+    }
+    this.layout()
+    this.pushState()
+  }
+
+  closeDevTools(): void {
+    this.teardownDock()
+    for (const t of this.tabs) {
+      if (!t.wc.isDestroyed() && t.wc.isDevToolsOpened()) t.wc.closeDevTools()
+    }
+    this.layout()
+    this.pushState()
+  }
+
+  /** Move DevTools between the sidebar and a window of their own, same tab. */
+  setDevToolsDock(dock: DevToolsDock): void {
+    this.openDevTools(dock, this.devtoolsState()?.tabId)
+  }
+
+  /** Drop the docked view without touching layout — teardown paths use this. */
+  private teardownDock(): void {
+    const dt = this.devtools
+    this.devtools = null
+    if (!dt) return
+    const tab = this.byId(dt.tabId)
+    try {
+      if (tab && !tab.wc.isDestroyed()) tab.wc.closeDevTools()
+    } catch {
+      /* the tab is already going away */
+    }
+    try {
+      this.host.win.contentView.removeChildView(dt.view)
+    } catch {
+      /* view already detached */
+    }
+    if (!dt.view.webContents.isDestroyed()) dt.view.webContents.close()
+  }
+
+  /** Stills of whatever is on screen, so the chrome can stand in for it. */
+  async captureVisible(): Promise<PageFreezeFrame[]> {
+    const shots = await Promise.all(
+      this.viewBounds().map(async ([tab, rect]): Promise<PageFreezeFrame | null> => {
+        if (tab.wc.isDestroyed() || !tab.view.getVisible() || this.staged.has(tab)) return null
+        try {
+          const img = await tab.wc.capturePage()
+          if (img.isEmpty()) return null
+          return { tabId: tab.id, dataUrl: img.toDataURL(), bounds: rect }
+        } catch {
+          return null
+        }
+      })
+    )
+    return shots.filter((s): s is PageFreezeFrame => s !== null)
+  }
+
+  setActiveVisible(visible: boolean, onShown?: () => void): void {
+    // Coming back from an overlay is the same problem as a tab switch: the
+    // surface may be gone, so stage it rather than flashing an empty frame.
+    if (visible) this.present(null, onShown)
+    else {
+      this.swapGen++
+      for (const t of this.tabs) {
+        t.view.setVisible(false)
+        this.staged.delete(t)
+      }
+      this.placeDevTools()
+      onShown?.()
+    }
   }
 
   /** Re-apply theme-dependent backdrop colors (on theme change). */
   refreshBackgrounds(): void {
-    for (const t of this.tabs) t.setBackgroundForUrl(t.wc.getURL() || '')
+    for (const t of this.tabs) t.applyBackground()
   }
 
   private serializeUrl(tab: Tab): string {
@@ -710,7 +1060,8 @@ export class TabManager {
       activeTabId: this.activeTabId,
       spaces,
       activeSpaceId: this.activeSpaceId,
-      splitPair: this.splitPair
+      splitPair: this.splitPair,
+      devtools: this.devtoolsState()
     }
   }
 
@@ -727,16 +1078,17 @@ export class TabManager {
       clearTimeout(this.pushTimer)
       this.pushTimer = null
     }
+    this.swapGen++
+    this.teardownDock()
     for (const tab of this.tabs) {
       try {
-        this.host.win.contentView.removeChildView(tab.view)
-        tab.wc.close()
+        this.retire(tab)
       } catch {
         /* window is going away */
       }
-      adblock.dropTab(tab.id)
     }
     this.tabs = []
+    this.staged.clear()
   }
 
   // ---- wiring ----
@@ -768,7 +1120,10 @@ export class TabManager {
     })
 
     wc.on('did-start-loading', () => this.pushState())
-    wc.on('did-stop-loading', () => this.pushState())
+    wc.on('did-stop-loading', () => {
+      tab.markReady()
+      this.pushState()
+    })
 
     wc.on('did-navigate', (_e, url) => {
       tab.loadError = undefined
@@ -776,7 +1131,6 @@ export class TabManager {
       tab.favicon = undefined
       if (this.pipTabId === tab.id) this.pipTabId = null
       adblock.resetCount(tab.id)
-      tab.setBackgroundForUrl(url)
       if (!isInternalUrl(url) && settingsStore.get().keepHistory) historyStore.record(url)
       this.pushState()
       this.host.onTabsChanged()
@@ -799,6 +1153,7 @@ export class TabManager {
     })
 
     wc.on('dom-ready', () => {
+      tab.markReady()
       maybeAutofill(wc, tab.partition)
     })
 
@@ -809,6 +1164,7 @@ export class TabManager {
 
     wc.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
       if (!isMainFrame || errorCode === -3 || errorCode === 0) return
+      tab.markReady()
       tab.loadError = errorDescription
       const failed = validatedURL || wc.getURL()
       if (failed && !errorPageTarget(failed) && !isInternalUrl(failed)) {

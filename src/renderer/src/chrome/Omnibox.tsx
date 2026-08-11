@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { Suggestion, TabInfo } from '@shared/types'
 import { offshore, prettyHost } from './api'
+import { Favicon } from '../theme/Favicon'
 import {
   IconArrowUpRight,
   IconBolt,
@@ -99,7 +100,12 @@ export function Omnibox({
 
   const isStart = !activeTab || activeTab.displayUrl === 'offshore://start' || !activeTab.url
   // Chrome-style trim when idle: hide the boring https:// (http:// stays visible — it's a warning)
-  const idleValue = isStart ? '' : activeTab.displayUrl.replace(/^https:\/\//i, '').replace(/\/$/, '')
+  const editValue = isStart ? '' : activeTab.displayUrl.replace(/^https:\/\//i, '').replace(/\/$/, '')
+  // The sidebar pill is 200px wide with page controls in it — a full path would
+  // read as "en.wikiped…". It shows the host, Arc-style, and the whole url the
+  // moment you click in. The topbar has the room, so it keeps the full address.
+  const idleValue =
+    !compact && !isStart && /^https?:/.test(activeTab.url) ? prettyHost(activeTab.url) : editValue
 
   // The list is up the moment the bar takes focus — top sites before you type a
   // character, live matches after. Every browser worth using does this.
@@ -114,10 +120,12 @@ export function Omnibox({
     const el = inputRef.current
     if (!el) return
     setEditing(true)
-    setValue(idleValue)
+    setValue(editValue)
     setTyped('')
     setSuggestions([])
     setSelected(0)
+    lastLen.current = editValue.length
+    fetchSuggestions(editValue, false)
     requestAnimationFrame(() => {
       el.focus()
       el.select()
@@ -127,6 +135,7 @@ export function Omnibox({
 
   const endEditing = useCallback(
     (refocusPage: boolean) => {
+      if (debounce.current) clearTimeout(debounce.current)
       setEditing(false)
       setTyped('')
       setSuggestions([])
@@ -260,9 +269,10 @@ export function Omnibox({
         onFocus={(e) => {
           if (!editing) {
             setEditing(true)
-            setValue(idleValue)
+            setValue(editValue)
             setTyped('')
-            lastLen.current = idleValue.length
+            lastLen.current = editValue.length
+            fetchSuggestions(editValue, false)
             requestAnimationFrame(() => e.target.select())
           }
         }}
@@ -277,7 +287,7 @@ export function Omnibox({
         <div className="omni-actions">
           {actions}
           <button
-            className={`omni-act ${copied ? 'done' : ''}`}
+            className={`omni-act omni-copy ${copied ? 'done' : ''}`}
             title={copied ? 'Copied' : 'Copy link'}
             onClick={copyLink}
           >

@@ -7,11 +7,12 @@ import { Omnibox } from './Omnibox'
 import { SiteInfo } from './SiteInfo'
 import { PopupChip } from './PasswordBanner'
 import { SpaceSwitcher } from './SpaceSwitcher'
+import { AppMenu, ProfileMenu } from './Menus'
 import {
   IconAlert,
+  IconArrowUpRight,
   IconAudio,
   IconBack,
-  IconBookmarkTray,
   IconClose,
   IconCode,
   IconDownload,
@@ -24,6 +25,7 @@ import {
   IconReload,
   IconShield,
   IconShieldFilled,
+  IconSidebar,
   IconSlop,
   IconSplit,
   IconStar,
@@ -75,6 +77,11 @@ export interface ChromeProps {
   onRenameBookmarkDone: () => void
   onToggleDownloadsPanel: (open: boolean) => void
   onTogglePopupPanel: (open: boolean) => void
+  appMenuOpen: boolean
+  onToggleAppMenu: (open: boolean) => void
+  profileMenuOpen: boolean
+  onToggleProfileMenu: (open: boolean) => void
+  onPatchSettings: (patch: Partial<Settings>) => void
 }
 
 // ---------------- shared bits ----------------
@@ -106,7 +113,7 @@ function NavButtons({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element {
         onClick={() => void offshore.tabs.back()}
         title="Back (⌘[)"
       >
-        <IconBack size={16} />
+        <IconBack size={17} />
       </button>
       <button
         className="chrome-btn"
@@ -114,7 +121,7 @@ function NavButtons({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element {
         onClick={() => void offshore.tabs.forward()}
         title="Forward (⌘])"
       >
-        <IconForward size={16} />
+        <IconForward size={17} />
       </button>
       <button
         className="chrome-btn"
@@ -123,7 +130,7 @@ function NavButtons({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element {
         }
         title={activeTab?.isLoading ? 'Stop' : 'Reload (⌘R)'}
       >
-        {activeTab?.isLoading ? <IconStop size={14} /> : <IconReload size={13} />}
+        {activeTab?.isLoading ? <IconStop size={15} /> : <IconReload size={14} />}
       </button>
     </div>
   )
@@ -153,24 +160,76 @@ function ShieldButton({
   )
 }
 
+/**
+ * Chromium's star, and Chromium's rules for it: hollow until the page is saved,
+ * then filled in. In the toolbar it holds its place on a page that can't be
+ * bookmarked (greyed out, like Chrome); inside the sidebar pill it just goes.
+ */
 function StarButton({
   activeTab,
-  onEditBookmark
-}: Pick<ChromeProps, 'activeTab' | 'onEditBookmark'>): React.JSX.Element | null {
-  if (!activeTab || !/^https?:/.test(activeTab.url)) return null
-  if (activeTab.displayUrl.startsWith('offshore://')) return null
-  const starred = activeTab.isBookmarked
+  onEditBookmark,
+  size = 14,
+  toolbar
+}: Pick<ChromeProps, 'activeTab' | 'onEditBookmark'> & {
+  size?: number
+  toolbar?: boolean
+}): React.JSX.Element | null {
+  const usable =
+    !!activeTab && /^https?:/.test(activeTab.url) && !activeTab.displayUrl.startsWith('offshore://')
+  if (!usable && !toolbar) return null
+  const starred = usable && activeTab.isBookmarked
   return (
     <button
       className={`chrome-btn star ${starred ? 'starred' : ''}`}
+      disabled={!usable}
       onClick={() => {
+        if (!usable) return
         if (starred) void offshore.bookmarks.toggle(activeTab.url, activeTab.title)
         else onEditBookmark()
       }}
-      title={starred ? 'Remove bookmark' : 'Bookmark this page (⌘D)'}
+      title={
+        !usable
+          ? 'Nothing here to bookmark'
+          : starred
+            ? 'Remove bookmark'
+            : 'Bookmark this page (⌘D)'
+      }
     >
-      {starred ? <IconStarFilled size={14} /> : <IconStar size={14} />}
+      {starred ? <IconStarFilled size={size} /> : <IconStar size={size} />}
     </button>
+  )
+}
+
+/**
+ * DevTools, and the button that moves them. They dock beside the page by
+ * default, so the second button is always the *other* place they could be —
+ * out to a window when docked, back to the side when floating.
+ */
+function DevToolsButtons({
+  tabsState,
+  settings
+}: Pick<ChromeProps, 'tabsState' | 'settings'>): React.JSX.Element {
+  const dt = tabsState.devtools
+  const backTo = settings.devtoolsDock === 'window' ? 'right' : settings.devtoolsDock
+  return (
+    <>
+      <button
+        className={`chrome-btn ${dt ? 'active' : ''}`}
+        title={dt ? 'Close Developer Tools (⌥⌘I)' : 'Developer Tools (⌥⌘I)'}
+        onClick={() => void offshore.tabs.devtools()}
+      >
+        <IconCode size={16} />
+      </button>
+      {dt && (
+        <button
+          className="chrome-btn"
+          title={dt.docked ? 'Move DevTools to its own window' : 'Dock DevTools beside the page'}
+          onClick={() => void offshore.tabs.devtoolsDock(dt.docked ? 'window' : backTo)}
+        >
+          {dt.docked ? <IconArrowUpRight size={15} /> : <IconSidebar size={15} />}
+        </button>
+      )}
+    </>
   )
 }
 
@@ -185,7 +244,9 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
         <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
       )}
       <ShieldButton {...props} />
-      <StarButton {...props} />
+      {/* the top toolbar carries its own star, where Chromium keeps it; the
+          sidebar has no toolbar to put one in, so its pill keeps this one */}
+      {!props.compact && <StarButton {...props} />}
     </>
   )
   return (
@@ -296,10 +357,10 @@ function SplitButton({ tabsState }: { tabsState: TabsState }): React.JSX.Element
   return (
     <button
       className={`chrome-btn ${on ? 'active' : ''}`}
-      title={on ? 'Exit split view' : 'Split view with the next tab'}
+      title={on ? 'Exit split view (⇧⌘S)' : 'Split view with a new tab (⇧⌘S)'}
       onClick={() => void offshore.tabs.toggleSplit()}
     >
-      <IconSplit size={14} />
+      <IconSplit size={16} />
     </button>
   )
 }
@@ -307,29 +368,66 @@ function SplitButton({ tabsState }: { tabsState: TabsState }): React.JSX.Element
 /**
  * Chromium parks the profile beside the menu; in Offshore a profile is a space —
  * its accent, its name, and (when it has separate logins) its own cookie jar.
- * Clicking it opens that space's menu, which is where those settings already live.
+ * Clicking it opens the card that holds all three.
  */
 function ProfileButton({
   tabsState,
-  accentFor
-}: Pick<ChromeProps, 'tabsState' | 'accentFor'>): React.JSX.Element | null {
+  accentFor,
+  profileMenuOpen,
+  onToggleProfileMenu
+}: Pick<
+  ChromeProps,
+  'tabsState' | 'accentFor' | 'profileMenuOpen' | 'onToggleProfileMenu'
+>): React.JSX.Element | null {
   const space = tabsState.spaces.find((s) => s.id === tabsState.activeSpaceId)
   if (!space) return null
   const separate = space.profile === 'separate'
   const name = space.name.trim()
   return (
-    <button
-      className={`profile-btn ${separate ? 'separate' : ''}`}
-      style={{ '--space-color': accentFor(space) } as React.CSSProperties}
-      title={`${name || 'Space'} — ${separate ? 'separate logins' : 'shared logins'}`}
-      onClick={() => void offshore.menu.spaceContext(space.id)}
-      onContextMenu={(e) => {
-        e.preventDefault()
-        void offshore.menu.spaceContext(space.id)
-      }}
-    >
-      {(name[0] ?? '•').toUpperCase()}
-    </button>
+    <div className="profile-anchor">
+      <button
+        className={`profile-btn ${separate ? 'separate' : ''}`}
+        style={{ '--space-color': accentFor(space) } as React.CSSProperties}
+        title={`${name || 'Space'} — ${separate ? 'separate logins' : 'shared logins'}`}
+        onClick={() => onToggleProfileMenu(!profileMenuOpen)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          onToggleProfileMenu(!profileMenuOpen)
+        }}
+      >
+        {(name[0] ?? '•').toUpperCase()}
+      </button>
+      {profileMenuOpen && (
+        <ProfileMenu
+          tabsState={tabsState}
+          accentFor={accentFor}
+          onClose={() => onToggleProfileMenu(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+/** The ⋮ button and the menu it drops, in whichever bar is asking. */
+function AppMenuButton(props: ChromeProps): React.JSX.Element {
+  return (
+    <div className="app-menu-anchor">
+      <button
+        className={`chrome-btn no-drag ${props.appMenuOpen ? 'active' : ''}`}
+        title="More"
+        onClick={() => props.onToggleAppMenu(!props.appMenuOpen)}
+      >
+        <IconMore size={16} />
+      </button>
+      {props.appMenuOpen && (
+        <AppMenu
+          tabsState={props.tabsState}
+          settings={props.settings}
+          onPatchSettings={props.onPatchSettings}
+          onClose={() => props.onToggleAppMenu(false)}
+        />
+      )}
+    </div>
   )
 }
 
@@ -456,34 +554,67 @@ function useDragReorder(ids: number[]): {
 
 /** Arc-quick tab motion: a genuinely new tab slides open, a closing one collapses
  * before the real close lands, so rows never blink in or out of existence.
- * Space switches must not replay the entrance — hence the id diff, not a mount flag. */
-function useTabMotion(tabsState: TabsState): {
+ * Space switches must not replay the entrance — hence the id diff, not a mount flag.
+ *
+ * hiddenId is the blank tab the New Tab button is standing in for: it has no row
+ * yet, so the row it grows the moment it goes somewhere should unroll like any
+ * other new one. */
+function useTabMotion(tabsState: TabsState, hiddenId: number | null = null): {
   entering: (id: number) => boolean
   closing: (id: number) => boolean
   closeAnimated: (id: number) => void
+  closeCollapsed: (id: number) => void
 } {
   const [closingIds, setClosingIds] = useState<Set<number>>(new Set())
-  const allIds = tabsState.tabs.map((t) => t.id)
+  const allIds = tabsState.tabs.map((t) => t.id).filter((id) => id !== hiddenId)
   const prevAllIds = useRef<Set<number>>(new Set(allIds))
   const enteringIds = new Set(allIds.filter((id) => !prevAllIds.current.has(id)))
   useEffect(() => {
     prevAllIds.current = new Set(allIds)
   })
 
+  /**
+   * A row stays collapsed until the tab is really gone. Letting go of the class
+   * on a timer meant the row sprang back to full width for the frames the close
+   * spent in flight — the hitch you saw at the end of the animation.
+   */
+  useEffect(() => {
+    setClosingIds((prev) => {
+      if (!prev.size) return prev
+      const live = new Set(tabsState.tabs.map((t) => t.id))
+      const next = new Set([...prev].filter((id) => live.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [tabsState.tabs])
+
+  // one timer per closing tab: the safety net if no transition ever runs
+  const pending = useRef(new Map<number, ReturnType<typeof setTimeout>>())
+  useEffect(() => {
+    const timers = pending.current
+    return () => timers.forEach((t) => clearTimeout(t))
+  }, [])
+
+  /** Fires the real close exactly once, whoever gets here first. */
+  const commit = (id: number): void => {
+    const timer = pending.current.get(id)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    pending.current.delete(id)
+    void offshore.tabs.close(id)
+  }
+
   return {
     entering: (id) => enteringIds.has(id),
     closing: (id) => closingIds.has(id),
     closeAnimated: (id) => {
+      if (pending.current.has(id) || closingIds.has(id)) return
       setClosingIds((prev) => new Set(prev).add(id))
-      setTimeout(() => {
-        void offshore.tabs.close(id)
-        setClosingIds((prev) => {
-          const next = new Set(prev)
-          next.delete(id)
-          return next
-        })
-      }, 110)
-    }
+      pending.current.set(id, setTimeout(() => commit(id), 300))
+    },
+    // The collapse itself says when it is done — a fixed timer started before
+    // the transition did, so the row was still a couple of frames wide when the
+    // close landed and the strip jumped the rest of the way.
+    closeCollapsed: (id) => commit(id)
   }
 }
 
@@ -511,6 +642,11 @@ function TabItemVertical({
       onClick={() => void offshore.tabs.activate(tab.id)}
       onAuxClick={(e) => {
         if (e.button === 1) motion.closeAnimated(tab.id)
+      }}
+      onTransitionEnd={(e) => {
+        if (e.target === e.currentTarget && e.propertyName === 'height') {
+          motion.closeCollapsed(tab.id)
+        }
       }}
       onContextMenu={(e) => {
         e.preventDefault()
@@ -564,6 +700,37 @@ function spaceTabsOf(tabsState: TabsState): TabInfo[] {
   return tabsState.tabs.filter((t) => t.spaceId === tabsState.activeSpaceId)
 }
 
+/**
+ * A tab still sitting on its home screen with nothing typed into it and nowhere
+ * to go back to — a new tab that hasn't become anything yet.
+ */
+function isBlankTab(tab: TabInfo): boolean {
+  return tab.displayUrl.startsWith('offshore://start') && !tab.canGoBack && !tab.canGoForward
+}
+
+/**
+ * One slot in the tab strip. A split pair is a single slot — the two pages share
+ * the content area, so they share a tab: one tab's worth of strip, cut in two.
+ */
+type StripSlot = { kind: 'tab'; tab: TabInfo } | { kind: 'split'; tabs: [TabInfo, TabInfo] }
+
+function stripSlots(tabs: TabInfo[], splitPair: [number, number] | null): StripSlot[] {
+  const plain = (): StripSlot[] => tabs.map((tab) => ({ kind: 'tab', tab }))
+  if (!splitPair) return plain()
+  const a = tabs.find((t) => t.id === splitPair[0])
+  const b = tabs.find((t) => t.id === splitPair[1])
+  // a pair straddling two spaces isn't on screen together — show them apart
+  if (!a || !b) return plain()
+  const [first, second] = tabs.indexOf(a) <= tabs.indexOf(b) ? [a, b] : [b, a]
+  const out: StripSlot[] = []
+  for (const t of tabs) {
+    if (t.id === second.id) continue
+    if (t.id === first.id) out.push({ kind: 'split', tabs: [first, second] })
+    else out.push({ kind: 'tab', tab: t })
+  }
+  return out
+}
+
 function orderedTabs(tabs: TabInfo[], order: number[] | null): TabInfo[] {
   if (!order) return tabs
   const byId = new Map(tabs.map((t) => [t.id, t]))
@@ -583,11 +750,19 @@ function orderedTabs(tabs: TabInfo[], order: number[] | null): TabInfo[] {
 
 export function Sidebar(props: ChromeProps): React.JSX.Element {
   const { tabsState, activeTab, downloads, find } = props
-  const spaceTabs = spaceTabsOf(tabsState)
+  // The blank tab you are looking at has no row of its own: the New Tab button
+  // right above the list lights up as that tab instead, so the button you press
+  // to make one is the thing that shows you have one. It takes its row the
+  // moment it goes somewhere.
+  const blankId =
+    activeTab && activeTab.spaceId === tabsState.activeSpaceId && isBlankTab(activeTab)
+      ? activeTab.id
+      : null
+  const spaceTabs = spaceTabsOf(tabsState).filter((t) => t.id !== blankId)
   const drag = useDragReorder(spaceTabs.map((t) => t.id))
   const { dir } = useSpacePane(tabsState)
   const shown = orderedTabs(spaceTabs, drag.order)
-  const motion = useTabMotion(tabsState)
+  const motion = useTabMotion(tabsState, blankId)
 
   return (
     <div className="sidebar drag">
@@ -597,9 +772,7 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
         <div className="traffic-inline" />
         <div className="toolbar-spring" />
         <NavButtons activeTab={activeTab} />
-        <button className="chrome-btn no-drag" title="More" onClick={() => void offshore.menu.appContext()}>
-          <IconMore size={14} />
-        </button>
+        <AppMenuButton {...props} />
       </div>
       <OmniboxWrap {...props} />
       <FindBar find={find} onFindQuery={props.onFindQuery} onCloseFind={props.onCloseFind} />
@@ -619,9 +792,13 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
           onRenameDone={props.onRenameBookmarkDone}
         />
       )}
-      <button className="new-tab-btn no-drag" onClick={props.onNewTab} title="New tab (⌘T)">
+      <button
+        className={`new-tab-btn no-drag ${blankId != null ? 'active' : ''}`}
+        onClick={props.onNewTab}
+        title="New tab (⌘T)"
+      >
         <span className="tab-favicon">
-          <IconPlus size={13} />
+          {blankId != null ? <IconWave size={13} /> : <IconPlus size={13} />}
         </span>
         <span>New Tab</span>
       </button>
@@ -657,17 +834,18 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
             title="Downloads"
             onClick={() => props.onToggleDownloadsPanel(!props.downloadsPanelOpen)}
           >
-            <IconDownload size={14} />
+            <IconDownload size={16} />
           </button>
           {props.downloadsPanelOpen && <DownloadsPanel onClose={() => props.onToggleDownloadsPanel(false)} />}
         </div>
         <SplitButton tabsState={tabsState} />
+        <DevToolsButtons tabsState={tabsState} settings={props.settings} />
         <button
           className="chrome-btn"
           title="Settings (⌘,)"
           onClick={() => void offshore.tabs.create('offshore://settings')}
         >
-          <IconGear size={14} />
+          <IconGear size={16} />
         </button>
       </div>
     </div>
@@ -676,6 +854,115 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
 
 // ---------------- horizontal top bar ----------------
 
+function HTab({
+  tab,
+  active,
+  drag,
+  motion
+}: {
+  tab: TabInfo
+  active: boolean
+  drag: ReturnType<typeof useDragReorder>
+  motion: ReturnType<typeof useTabMotion>
+}): React.JSX.Element {
+  return (
+    <div
+      className={`htab ${active ? 'active' : ''} ${drag.dragId === tab.id ? 'dragging' : ''} ${
+        motion.closing(tab.id) ? 'closing' : ''
+      } ${motion.entering(tab.id) ? 'entering' : ''}`}
+      draggable
+      onDragStart={(e) => drag.onDragStart(e, tab.id)}
+      onDragOver={(e) => drag.onDragOver(e, tab.id)}
+      onDragEnd={drag.onDrop}
+      onDrop={drag.onDrop}
+      onClick={() => void offshore.tabs.activate(tab.id)}
+      onAuxClick={(e) => {
+        if (e.button === 1) motion.closeAnimated(tab.id)
+      }}
+      onTransitionEnd={(e) => {
+        if (e.target === e.currentTarget && e.propertyName === 'width') {
+          motion.closeCollapsed(tab.id)
+        }
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        void offshore.menu.tabContext(tab.id)
+      }}
+      title={tab.title}
+    >
+      <span className="tab-favicon">
+        <TabGlyph tab={tab} size={13} />
+      </span>
+      <span className="tab-title">{tab.title || 'New Tab'}</span>
+      {(tab.audible || tab.muted) && (
+        <button
+          className="tab-audio"
+          onClick={(e) => {
+            e.stopPropagation()
+            void offshore.tabs.mute(tab.id, !tab.muted)
+          }}
+        >
+          {tab.muted ? <IconMuted size={10} /> : <IconAudio size={10} />}
+        </button>
+      )}
+      <button
+        className="tab-close"
+        onClick={(e) => {
+          e.stopPropagation()
+          motion.closeAnimated(tab.id)
+        }}
+      >
+        <IconClose size={10} />
+      </button>
+    </div>
+  )
+}
+
+/** One side of a split: half a tab, and it closes without any collapse to time. */
+function HalfTab({
+  tab,
+  active,
+  onDragStart,
+  onDragEnd
+}: {
+  tab: TabInfo
+  active: boolean
+  onDragStart: (e: React.DragEvent) => void
+  onDragEnd: () => void
+}): React.JSX.Element {
+  return (
+    <div
+      className={`htab half ${active ? 'active' : ''}`}
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={() => void offshore.tabs.activate(tab.id)}
+      onAuxClick={(e) => {
+        if (e.button === 1) void offshore.tabs.close(tab.id)
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        void offshore.menu.tabContext(tab.id)
+      }}
+      title={tab.title}
+    >
+      <span className="tab-favicon">
+        <TabGlyph tab={tab} size={12} />
+      </span>
+      <span className="tab-title">{tab.title || 'New Tab'}</span>
+      <button
+        className="tab-close"
+        onClick={(e) => {
+          e.stopPropagation()
+          void offshore.tabs.close(tab.id)
+        }}
+      >
+        <IconClose size={10} />
+      </button>
+    </div>
+  )
+}
+
 export function TopBar(props: ChromeProps): React.JSX.Element {
   const { tabsState, activeTab, downloads, find } = props
   const spaceTabs = spaceTabsOf(tabsState)
@@ -683,6 +970,11 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
   const { dir } = useSpacePane(tabsState)
   const shown = orderedTabs(spaceTabs, drag.order)
   const motion = useTabMotion(tabsState)
+  const slots = stripSlots(shown, tabsState.splitPair)
+  // A half dragged clear of its pair leaves the split behind; one dropped back
+  // onto it stays. The drop lands before dragend, so the flag is set in time.
+  const halfDrag = useRef(false)
+  const ontoSplit = useRef(false)
 
   return (
     <div className="topbar drag">
@@ -701,55 +993,52 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
           key={tabsState.activeSpaceId}
           style={{ '--dir': dir } as React.CSSProperties}
         >
-          {shown.map((tab) => (
-            <div
-              key={tab.id}
-              className={`htab ${tab.id === tabsState.activeTabId ? 'active' : ''} ${
-                drag.dragId === tab.id ? 'dragging' : ''
-              } ${motion.closing(tab.id) ? 'closing' : ''} ${motion.entering(tab.id) ? 'entering' : ''}`}
-              draggable
-              onDragStart={(e) => drag.onDragStart(e, tab.id)}
-              onDragOver={(e) => drag.onDragOver(e, tab.id)}
-              onDragEnd={drag.onDrop}
-              onDrop={drag.onDrop}
-              onClick={() => void offshore.tabs.activate(tab.id)}
-              onAuxClick={(e) => {
-                if (e.button === 1) motion.closeAnimated(tab.id)
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                void offshore.menu.tabContext(tab.id)
-              }}
-              title={tab.title}
-            >
-              <span className="tab-favicon">
-                <TabGlyph tab={tab} size={12} />
-              </span>
-              <span className="tab-title">{tab.title || 'New Tab'}</span>
-              {(tab.audible || tab.muted) && (
-                <button
-                  className="tab-audio"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void offshore.tabs.mute(tab.id, !tab.muted)
-                  }}
-                >
-                  {tab.muted ? <IconMuted size={10} /> : <IconAudio size={10} />}
-                </button>
-              )}
-              <button
-                className="tab-close"
-                onClick={(e) => {
+          {slots.map((slot) =>
+            slot.kind === 'tab' ? (
+              <HTab
+                key={slot.tab.id}
+                tab={slot.tab}
+                active={slot.tab.id === tabsState.activeTabId}
+                drag={drag}
+                motion={motion}
+              />
+            ) : (
+              <div
+                key={`split-${slot.tabs[0].id}`}
+                className={`htab-split ${
+                  slot.tabs.some((t) => t.id === tabsState.activeTabId) ? 'active' : ''
+                }`}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault()
                   e.stopPropagation()
-                  motion.closeAnimated(tab.id)
+                  ontoSplit.current = true
+                  const id = Number(e.dataTransfer.getData('offshore/tab-id'))
+                  if (id && !slot.tabs.some((t) => t.id === id)) void offshore.tabs.splitWith(id)
                 }}
               >
-                <IconClose size={10} />
-              </button>
-            </div>
-          ))}
+                {slot.tabs.map((t) => (
+                  <HalfTab
+                    key={t.id}
+                    tab={t}
+                    active={t.id === tabsState.activeTabId}
+                    onDragStart={(e) => {
+                      halfDrag.current = true
+                      ontoSplit.current = false
+                      drag.onDragStart(e, t.id)
+                    }}
+                    onDragEnd={() => {
+                      if (halfDrag.current && !ontoSplit.current) void offshore.tabs.unsplit()
+                      halfDrag.current = false
+                      drag.onDrop()
+                    }}
+                  />
+                ))}
+              </div>
+            )
+          )}
           <button className="htab-new" onClick={props.onNewTab} title="New tab (⌘T)">
-            <IconPlus size={13} />
+            <IconPlus size={14} />
           </button>
         </div>
       </div>
@@ -771,28 +1060,20 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
               title="Downloads"
               onClick={() => props.onToggleDownloadsPanel(!props.downloadsPanelOpen)}
             >
-              <IconDownload size={14} />
+              <IconDownload size={16} />
             </button>
             {props.downloadsPanelOpen && <DownloadsPanel onClose={() => props.onToggleDownloadsPanel(false)} />}
           </div>
-          <button
-            className={`chrome-btn ${props.settings.bookmarksBar ? 'active' : ''}`}
-            title={props.settings.bookmarksBar ? 'Hide bookmarks bar' : 'Show bookmarks bar'}
-            onClick={() => void offshore.settings.set({ bookmarksBar: !props.settings.bookmarksBar })}
-          >
-            <IconBookmarkTray size={14} />
-          </button>
-          <button
-            className="chrome-btn"
-            title="Developer Tools (⌥⌘I)"
-            onClick={() => void offshore.tabs.devtools()}
-          >
-            <IconCode size={14} />
-          </button>
-          <ProfileButton tabsState={tabsState} accentFor={props.accentFor} />
-          <button className="chrome-btn" title="More" onClick={() => void offshore.menu.appContext()}>
-            <IconMore size={14} />
-          </button>
+          {/* Chromium's star lives here, and the bookmarks bar moved to the ⋮ menu */}
+          <StarButton activeTab={activeTab} onEditBookmark={props.onEditBookmark} size={17} toolbar />
+          <DevToolsButtons tabsState={tabsState} settings={props.settings} />
+          <ProfileButton
+            tabsState={tabsState}
+            accentFor={props.accentFor}
+            profileMenuOpen={props.profileMenuOpen}
+            onToggleProfileMenu={props.onToggleProfileMenu}
+          />
+          <AppMenuButton {...props} />
         </div>
         <FindBar find={find} onFindQuery={props.onFindQuery} onCloseFind={props.onCloseFind} floating />
       </div>

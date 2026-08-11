@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import type {
   AccentId,
   BookmarkNode,
+  DevToolsDock,
   NewTabWidgets,
   BriefWeather,
   ExtensionInfo,
@@ -661,6 +662,24 @@ function App(): React.JSX.Element {
                     <div className="row-sub">The tree in the sidebar, or a bar under the toolbar in horizontal layout.</div>
                   </div>
                   <Toggle on={settings.bookmarksBar} onChange={(v) => patch({ bookmarksBar: v })} />
+                </div>
+                <div className="row">
+                  <div className="row-title">
+                    Developer Tools
+                    <div className="row-sub">
+                      Where ⌥⌘I opens them. Docked ones can be sent to a window (and back) from the
+                      button beside the toolbar&apos;s DevTools icon.
+                    </div>
+                  </div>
+                  <Segmented<DevToolsDock>
+                    value={settings.devtoolsDock}
+                    options={[
+                      ['right', 'Side'],
+                      ['bottom', 'Bottom'],
+                      ['window', 'Window']
+                    ]}
+                    onChange={(v) => patch({ devtoolsDock: v })}
+                  />
                 </div>
                 <div className="row">
                   <div className="row-title">Restore tabs on launch</div>

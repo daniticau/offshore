@@ -72,12 +72,19 @@ function clampBounds(b: { x: number; y: number; width: number; height: number })
   return { x, y, width, height }
 }
 
+/** How long we wait for the chrome to say it has painted the still. */
+const FREEZE_ACK_MS = 250
+
 export class OffshoreWindow implements TabHost {
   win: BrowserWindow
   tabs: TabManager
   private insets: Insets
   private contentFullscreen = false
   private overlayOpen = false
+  /** Resolves when the chrome has the freeze frames up; see setOverlay. */
+  private freezeAck: (() => void) | null = null
+  /** Bumped per overlay change so a stale capture never lands. */
+  private overlayGen = 0
 
   constructor(restore?: SessionWindowV2 | string[]) {
     this.insets = DEFAULT_INSETS[settingsStore.get().tabOrientation]
@@ -190,19 +197,11 @@ export class OffshoreWindow implements TabHost {
   }
 
   /**
-   * A new tab, cursor already in whichever search box the layout puts in front
-   * of you: the omnibox in horizontal mode, where it sits right above the
-   * page; the new tab page's own centre pill in vertical mode, where the
-   * omnibox is tucked away in the sidebar.
+   * A new tab, cursor already in the pill the page puts in the middle of
+   * itself — the one thing a new tab has that the empty window doesn't.
    */
   openNewTab(): void {
-    const tab = this.tabs.createTab()
-    if (settingsStore.get().tabOrientation === 'vertical') {
-      tab.wc.focus()
-    } else {
-      this.win.webContents.focus()
-      this.sendToChrome('omnibox:focus')
-    }
+    this.tabs.createTab().wc.focus()
   }
 
   onTabsChanged(): void {
@@ -216,10 +215,60 @@ export class OffshoreWindow implements TabHost {
     this.tabs.layout()
   }
 
+  /**
+   * A chrome panel needs the space the page is sitting in.
+   *
+   * The chrome renders *under* the page views, so the view has to step aside for
+   * a panel to be seen at all — which used to leave a blank card behind it. So
+   * we photograph the page first, hand the picture to the chrome, wait for it to
+   * be on screen, and only then hide the live view. Nothing appears to move.
+   *
+   * On the way back the view is shown before the picture is dropped: it paints
+   * over the still, so again there is no frame where neither is there.
+   */
   setOverlay(open: boolean): void {
+    const gen = ++this.overlayGen
     this.overlayOpen = open
-    this.tabs.setActiveVisible(!open)
-    if (!open) this.tabs.activeTab?.wc.focus()
+    if (!open) {
+      this.tabs.setActiveVisible(true, () => {
+        if (gen === this.overlayGen) this.sendToChrome('chrome:page-freeze', null)
+      })
+      this.tabs.activeTab?.wc.focus()
+      return
+    }
+    void (async () => {
+      const frames = await this.tabs.captureVisible()
+      // the panel may have come and gone while the shutter was open
+      if (gen !== this.overlayGen || this.win.isDestroyed()) return
+      if (frames.length) {
+        this.sendToChrome('chrome:page-freeze', frames)
+        await this.awaitFreezeAck()
+        if (gen !== this.overlayGen || this.win.isDestroyed()) return
+      }
+      this.tabs.setActiveVisible(false)
+    })()
+  }
+
+  /** The chrome has the still up — or it has had long enough to say so. */
+  onFreezeAck(): void {
+    const ack = this.freezeAck
+    this.freezeAck = null
+    ack?.()
+  }
+
+  private awaitFreezeAck(): Promise<void> {
+    this.onFreezeAck()
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        if (this.freezeAck === fire) this.freezeAck = null
+        resolve()
+      }, FREEZE_ACK_MS)
+      const fire = (): void => {
+        clearTimeout(timer)
+        resolve()
+      }
+      this.freezeAck = fire
+    })
   }
 
   /** Dynamic density: chrome hid/revealed itself — keep traffic lights in sync. */

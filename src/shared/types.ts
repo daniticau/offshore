@@ -37,11 +37,28 @@ export interface TabsState {
   activeSpaceId: string
   /** Two tab ids sharing the content area, when split view is on */
   splitPair: [number, number] | null
+  /** Where DevTools are right now, so the toolbar can offer the other place */
+  devtools: DevToolsState | null
 }
 
 export type SearchEngineId = 'duckduckgo' | 'google' | 'brave' | 'startpage'
 export type TabOrientation = 'vertical' | 'horizontal'
 export type ToolbarDensity = 'classic' | 'compact' | 'dynamic'
+
+/**
+ * Where DevTools open. 'right'/'bottom' dock them into the window beside the
+ * page (the sidebar); 'window' gives them a window of their own.
+ */
+export type DevToolsDock = 'right' | 'bottom' | 'window'
+
+export interface DevToolsState {
+  /** The tab being inspected. */
+  tabId: number
+  /** false = floating in its own window. */
+  docked: boolean
+  /** Which side it is docked to; meaningless while undocked. */
+  side: 'right' | 'bottom'
+}
 
 export interface AdblockSettings {
   enabled: boolean
@@ -95,11 +112,21 @@ export interface NewTabWidgets {
   moon: boolean
 }
 
-export type WidgetAlign = 'left' | 'center' | 'right'
-
-/** Where a widget sits on the row, and which of its looks it wears. */
+/**
+ * Where a widget sits on the home grid, how many cells it takes, and which of
+ * its looks it wears. Positions are grid cells, never pixels — the grid is a
+ * fixed 12 × 10 (see HomeCanvas), so a layout survives any window size. A
+ * widget with no position yet is placed for you the first time it is drawn.
+ */
 export interface WidgetLayout {
-  align: WidgetAlign
+  /** Left edge, in cells from the left of the grid. */
+  col?: number
+  /** Top edge, in cells from the top of the grid. */
+  row?: number
+  /** Width in cells — always even, so the box can sit dead centre. */
+  w?: number
+  /** Height in cells — always even. */
+  h?: number
   style?: string
 }
 
@@ -376,9 +403,9 @@ export interface Settings {
   bookmarksBar: boolean
   /** What the new-tab page shows. Time and date by default; the rest is opt-in. */
   newTabWidgets: NewTabWidgets
-  /** Vertical order of enabled widgets on the new-tab page. */
+  /** Which widget gets first claim on a cell when the grid places them for you. */
   newTabWidgetOrder: (keyof NewTabWidgets)[]
-  /** Per-widget placement + style, set by dragging in the page's edit mode. */
+  /** Per-widget cell, size + style, set by dragging in the page's edit mode. */
   newTabWidgetLayout: Partial<Record<keyof NewTabWidgets, WidgetLayout>>
   /** Local heuristic prose analysis that flags AI-generated-looking pages. No AI involved. */
   slopDetector: boolean
@@ -387,6 +414,8 @@ export interface Settings {
   /** Tiny interface sounds (tab close, download done, …) */
   uiSounds: boolean
   toolbarDensity: ToolbarDensity
+  /** Where ⌥⌘I puts DevTools. Docked beside the page by default, like Chromium. */
+  devtoolsDock: DevToolsDock
   appearance: AppearanceSettings
   /** First-launch onboarding completed */
   onboarded: boolean
@@ -432,6 +461,7 @@ export interface SessionV2 {
 
 export type ActionId =
   | 'new-tab'
+  | 'new-window'
   | 'close-tab'
   | 'reopen-tab'
   | 'new-space'
@@ -451,6 +481,7 @@ export interface ActionDef {
 
 export const ACTION_DEFS: ActionDef[] = [
   { id: 'new-tab', label: 'New Tab', keywords: 'create open' },
+  { id: 'new-window', label: 'New Window', keywords: 'create open' },
   { id: 'close-tab', label: 'Close Tab', keywords: 'remove' },
   { id: 'reopen-tab', label: 'Reopen Closed Tab', keywords: 'restore undo' },
   { id: 'new-space', label: 'New Space', keywords: 'workspace create' },
@@ -497,6 +528,19 @@ export interface ExtensionInfo {
 export interface FindResult {
   activeMatch: number
   matches: number
+}
+
+/**
+ * A still of one page view. The chrome renders *under* the page views, so a
+ * panel that overhangs the content can only be seen once the view is hidden —
+ * which used to blank the page out. Instead main hands over a picture of what
+ * was there, the chrome paints it in the same place, and only then does the
+ * live view step aside. See OffshoreWindow.setOverlay.
+ */
+export interface PageFreezeFrame {
+  tabId: number
+  dataUrl: string
+  bounds: { x: number; y: number; width: number; height: number }
 }
 
 export interface DownloadItemInfo {
@@ -654,6 +698,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoPip: true,
   uiSounds: true,
   toolbarDensity: 'compact',
+  devtoolsDock: 'right',
   appearance: { theme: 'system', waves: true, waveStyle: 'dithered', accent: 'sea' },
   onboarded: false
 }

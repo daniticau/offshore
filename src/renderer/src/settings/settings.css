@@ -6,8 +6,11 @@ body,
   background: transparent;
 }
 
+/* Chromium's settings are a flat sheet, not a tinted pane of glass. The accent
+   still runs through it — in the headings, the nav pill, the switches — but the
+   page itself gets out of the way of the controls. */
 body {
-  background: linear-gradient(180deg, var(--tint-top), var(--tint-bottom));
+  background: var(--content-bg);
   min-height: 100vh;
 }
 
@@ -58,9 +61,12 @@ body {
   background: var(--hover);
   color: var(--ink);
 }
-.nav-item.nav-on {
-  background: var(--active-row);
+/* Chromium's nav marker: an accent-tinted pill, not a raised card */
+.nav-item.nav-on,
+.nav-item.nav-on:hover {
+  background: var(--accent-soft, var(--selection));
   color: var(--accent-strong);
+  font-weight: 600;
 }
 
 .settings-main {
@@ -68,10 +74,12 @@ body {
   min-width: 0;
 }
 
+/* Anchored to the nav, not floated in the middle of whatever width is left —
+   Chromium keeps its content column next to the categories at any window size. */
 .settings-page {
-  max-width: 660px;
-  margin: 0 auto;
-  padding: 56px 32px 96px;
+  max-width: 720px;
+  margin: 0;
+  padding: 52px 32px 96px 8px;
 }
 
 .h2-gap {
@@ -82,22 +90,22 @@ section {
   margin-top: var(--sp-7);
 }
 
+/* Section headings sit outside the card in the accent, the way Chromium does
+   it. The serif is kept for the one display moment — the page title. */
 h2 {
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
   margin-bottom: 10px;
-  color: var(--ink);
+  padding-left: 2px;
+  color: var(--accent-strong);
 }
 
 .card {
   border-radius: var(--radius-lg);
-  background: var(--glass-strong);
-  border: 0.5px solid var(--glass-border);
-  box-shadow:
-    inset 0 1px 0 var(--glass-inset-hi),
-    var(--shadow-soft);
+  background: var(--surface);
+  border: 0.5px solid var(--hairline);
   overflow: hidden;
 }
 
@@ -106,7 +114,7 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-4);
-  padding: 13px 18px;
+  padding: 15px 20px;
   border-bottom: 0.5px solid var(--hairline);
 }
 .row:last-child {
@@ -145,12 +153,15 @@ h2 {
 
 /* ---------- controls ---------- */
 
+/* Material's switch, which is what Chromium's settings use: a thin track with
+   the knob riding proud of it — not iOS's filled capsule. */
 .toggle {
   position: relative;
-  width: 42px;
-  height: 26px;
+  width: 34px;
+  height: 14px;
+  margin: 5px 3px;
   border: none;
-  border-radius: 13px;
+  border-radius: 7px;
   background: var(--press);
   cursor: default;
   transition: background var(--dur-slow) var(--ease-out);
@@ -158,20 +169,28 @@ h2 {
 }
 .toggle .knob {
   position: absolute;
-  top: 3px;
-  left: 3px;
+  top: -3px;
+  left: -3px;
   width: 20px;
   height: 20px;
   border-radius: 50%;
+  /* white in both themes, like Chromium's — a knob that matched the surface
+     would vanish into the card the moment the switch was off */
   background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
-  transition: transform var(--dur-slow) var(--ease-out);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.28),
+    inset 0 0 0 0.5px var(--hairline);
+  transition:
+    transform var(--dur-slow) var(--ease-out),
+    background var(--dur-slow) var(--ease-out);
 }
 .toggle.on {
-  background: var(--accent);
+  background: var(--accent-soft, var(--selection));
 }
 .toggle.on .knob {
-  transform: translateX(16px);
+  transform: translateX(20px);
+  background: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
 }
 .toggle.disabled {
   opacity: 0.4;

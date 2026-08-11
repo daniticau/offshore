@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type {
   BookmarkNode,
+  PageFreezeFrame,
   PasswordOffer,
   Settings,
   SpaceInfo,
@@ -32,6 +33,41 @@ export interface FindState {
   text: string
   activeMatch: number
   matches: number
+}
+
+/**
+ * Stand-ins for the page views while a panel needs the room they occupy.
+ *
+ * The chrome draws under the page views, so a panel that overhangs the content
+ * can only be seen once the view is hidden. Main sends a picture of what was
+ * there; we paint it in the same place and tell main the moment it is really up,
+ * so the live view only steps aside behind something identical to itself.
+ */
+function PageFreeze({ frames }: { frames: PageFreezeFrame[] }): React.JSX.Element | null {
+  const [loaded, setLoaded] = useState(0)
+  useEffect(() => setLoaded(0), [frames])
+  useEffect(() => {
+    if (!frames.length || loaded < frames.length) return
+    // two frames: one to lay the image out, one to be sure it has been painted
+    const raf = requestAnimationFrame(() => requestAnimationFrame(() => offshore.chrome.freezeAck()))
+    return () => cancelAnimationFrame(raf)
+  }, [frames, loaded])
+  if (!frames.length) return null
+  return (
+    <>
+      {frames.map((f) => (
+        <img
+          key={f.tabId}
+          className="page-freeze"
+          src={f.dataUrl}
+          alt=""
+          style={{ left: f.bounds.x, top: f.bounds.y, width: f.bounds.width, height: f.bounds.height }}
+          onLoad={() => setLoaded((n) => n + 1)}
+          onError={() => setLoaded((n) => n + 1)}
+        />
+      ))}
+    </>
+  )
 }
 
 /** The content view's backdrop card — and the single source of truth for insets. */
@@ -73,13 +109,13 @@ function ContentFrame({ children }: { children?: React.ReactNode }): React.JSX.E
 /**
  * The zero-tab home screen: what the window shows when every tab is closed.
  * It is the new tab page — same component, same widgets, same settings — so
- * editing widgets here and editing them on a new tab are one thing. Typing in
- * the pill conjures the first tab; the window only closes when the human
- * closes it.
+ * editing widgets here and editing them on a new tab are one thing. The window
+ * only closes when the human closes it.
  *
- * The pill follows the same rule as a new tab: it appears in vertical layout,
- * where the omnibox is tucked away in the sidebar, and stays away in
- * horizontal layout, where the omnibox sits right above with the cursor in it.
+ * The one difference from a new tab is the search pill: there is none here.
+ * Nothing is open, so there is nothing to search from — the omnibox is right
+ * there when you want to go somewhere, and opening a tab is what puts a pill
+ * in front of you.
  */
 function EmptyHome({
   settings,
@@ -90,7 +126,6 @@ function EmptyHome({
   onPatch(patch: Partial<Settings>): void
   editSignal: number
 }): React.JSX.Element {
-  const vertical = settings.tabOrientation === 'vertical'
   return (
     <HomeCanvas
       className="no-drag"
@@ -98,8 +133,7 @@ function EmptyHome({
       onPatch={onPatch}
       onSubmit={(input) => void offshore.tabs.create(input)}
       fetchWeather={() => offshore.brief.weather()}
-      searchPill={vertical}
-      autoFocus={vertical}
+      searchPill={false}
       editSignal={editSignal}
       onContextMenu={() => void offshore.menu.homeContext()}
     />
@@ -112,7 +146,8 @@ export function App(): React.JSX.Element {
     activeTabId: -1,
     spaces: [],
     activeSpaceId: '',
-    splitPair: null
+    splitPair: null,
+    devtools: null
   })
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [bookmarks, setBookmarks] = useState<BookmarkNode[]>([])
@@ -129,6 +164,9 @@ export function App(): React.JSX.Element {
   const [hasExtensions, setHasExtensions] = useState(false)
   const [popupPanelOpen, setPopupPanelOpen] = useState(false)
   const [siteInfoOpen, setSiteInfoOpen] = useState(false)
+  const [appMenuOpen, setAppMenuOpen] = useState(false)
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
+  const [freeze, setFreeze] = useState<PageFreezeFrame[]>([])
   const [passwordOffer, setPasswordOffer] = useState<PasswordOffer | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [collapsing, setCollapsing] = useState(false)
@@ -279,6 +317,11 @@ export function App(): React.JSX.Element {
         setDevshot(payload)
       }) as never)
     )
+    un.push(
+      offshore.on('chrome:page-freeze', ((frames: PageFreezeFrame[] | null) => {
+        setFreeze(frames ?? [])
+      }) as never)
+    )
     const onSpaceRename = (e: Event): void => {
       setRenameSpaceId((e as CustomEvent<string>).detail)
     }
@@ -356,24 +399,23 @@ export function App(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [omniboxNonce])
 
-  // Closing the last tab lands on the home screen. In horizontal layout that
-  // screen has no pill, so the omnibox takes the cursor; in vertical layout
-  // the pill is right there on the screen and focuses itself.
+  // Closing the last tab lands on the home screen, which carries no pill of its
+  // own — so the omnibox takes the cursor, in either layout.
   // starts true so a launch that restores tabs never yanks focus to the omnibox
   const wasEmpty = useRef(true)
   const spaceIsEmpty = tabsState.tabs.every((t) => t.spaceId !== tabsState.activeSpaceId)
   useEffect(() => {
-    if (spaceIsEmpty && !wasEmpty.current && mode === 'horizontal') {
-      setOmniboxNonce((n) => n + 1)
-    }
+    if (spaceIsEmpty && !wasEmpty.current) setOmniboxNonce((n) => n + 1)
     wasEmpty.current = spaceIsEmpty
-  }, [spaceIsEmpty, mode])
+  }, [spaceIsEmpty])
 
   // ---- overlay (content hidden while a chrome surface must float over it) ----
   const overlayOpen =
     omniboxOverlay ||
     downloadsPanelOpen ||
     siteInfoOpen ||
+    appMenuOpen ||
+    profileMenuOpen ||
     (mode === 'horizontal' && (bookmarkEdit !== null || popupPanelOpen))
   useEffect(() => {
     void offshore.chrome.setOverlay(overlayOpen)
@@ -381,18 +423,29 @@ export function App(): React.JSX.Element {
 
   // escape closes panels
   useEffect(() => {
-    if (!downloadsPanelOpen && !bookmarkEdit && !popupPanelOpen && !siteInfoOpen) return
+    if (
+      !downloadsPanelOpen &&
+      !bookmarkEdit &&
+      !popupPanelOpen &&
+      !siteInfoOpen &&
+      !appMenuOpen &&
+      !profileMenuOpen
+    ) {
+      return
+    }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         setDownloadsPanelOpen(false)
         setBookmarkEdit(null)
         setPopupPanelOpen(false)
         setSiteInfoOpen(false)
+        setAppMenuOpen(false)
+        setProfileMenuOpen(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [downloadsPanelOpen, bookmarkEdit, popupPanelOpen, siteInfoOpen])
+  }, [downloadsPanelOpen, bookmarkEdit, popupPanelOpen, siteInfoOpen, appMenuOpen, profileMenuOpen])
 
   // devshot composite render completion
   useEffect(() => {
@@ -408,16 +461,9 @@ export function App(): React.JSX.Element {
     void offshore.tabs.navigate(null, input)
   }, [])
 
-  /**
-   * A new tab hands the cursor to whichever search box the layout puts in
-   * front of you: the omnibox in horizontal mode, the page's own pill in
-   * vertical mode.
-   */
+  /** A new tab hands the cursor to its own pill, ready to type into. */
   const newTab = useCallback(() => {
-    void offshore.tabs.create().then(() => {
-      if (stateRef.current.settings.tabOrientation === 'vertical') void offshore.chrome.focusPage()
-      else setOmniboxNonce((n) => n + 1)
-    })
+    void offshore.tabs.create().then(() => void offshore.chrome.focusPage())
   }, [])
 
   // ---- find bar ----
@@ -509,7 +555,12 @@ export function App(): React.JSX.Element {
     onToggleDownloadsPanel: setDownloadsPanelOpen,
     onTogglePopupPanel: setPopupPanelOpen,
     siteInfoOpen,
-    onToggleSiteInfo: setSiteInfoOpen
+    onToggleSiteInfo: setSiteInfoOpen,
+    appMenuOpen,
+    onToggleAppMenu: setAppMenuOpen,
+    profileMenuOpen,
+    onToggleProfileMenu: setProfileMenuOpen,
+    onPatchSettings: patchSettings
   }
 
   const classes = [
@@ -543,6 +594,12 @@ export function App(): React.JSX.Element {
         if (!t.closest('.site-info, .omni-tune')) {
           if (siteInfoOpen) setSiteInfoOpen(false)
         }
+        if (!t.closest('.cr-menu, .app-menu-anchor')) {
+          if (appMenuOpen) setAppMenuOpen(false)
+        }
+        if (!t.closest('.profile-menu, .profile-anchor')) {
+          if (profileMenuOpen) setProfileMenuOpen(false)
+        }
       }}
       style={accentVars(acc) as React.CSSProperties}
     >
@@ -554,6 +611,9 @@ export function App(): React.JSX.Element {
           <EmptyHome settings={settings} onPatch={patchSettings} editSignal={homeEditSignal} />
         )}
       </ContentFrame>
+
+      {/* stands in for the page views while a panel needs their space */}
+      <PageFreeze frames={freeze} />
 
       {passwordOffer && mode === 'horizontal' && (
         <div className="banner-row no-drag">

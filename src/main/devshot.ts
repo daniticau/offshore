@@ -112,6 +112,57 @@ export function setupDevshot(): void {
         .catch((e) => `err: ${e}`)
       console.log('[devshot] page diag', pd)
     }
+    /**
+     * OFFSHORE_SHOT_CLICK=<css selector>: press something in the chrome and
+     * photograph what it opened, into click.png.
+     *
+     * No composite here. A panel now stands on the page-freeze still the chrome
+     * paints for itself (see OffshoreWindow.setOverlay), so a plain window
+     * capture already shows page and panel together — while the devshot
+     * composite, which rides above everything, would bury the panel.
+     */
+    const click = process.env['OFFSHORE_SHOT_CLICK']
+    if (click) {
+      w.sendToChrome('devshot:composite', null)
+      await delay(150)
+      const hit = await w.win.webContents
+        .executeJavaScript(
+          `(() => { const el = document.querySelector(${JSON.stringify(click)})
+             if (!el) return false
+             el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+             el.click()
+             return true })()`
+        )
+        .catch((e) => `err: ${e}`)
+      console.log('[devshot] click', click, hit)
+      await delay(1200)
+      const after = await w.win.webContents
+        .executeJavaScript(
+          `JSON.stringify({
+             freeze: [...document.querySelectorAll('.page-freeze')].map((i) => ({ w: i.clientWidth, h: i.clientHeight, done: i.complete })),
+             panels: ['.cr-menu', '.profile-menu', '.dl-panel', '.htab-split'].map((s) => {
+               const e = document.querySelector(s)
+               if (!e) return [s, null]
+               const r = e.getBoundingClientRect()
+               return [s, { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }]
+             })
+           })`
+        )
+        .catch((e) => `err: ${e}`)
+      console.log('[devshot] after click', after)
+      const shot = await w.win.webContents.capturePage()
+      writeFileSync(join(dir!, 'click.png'), shot.toPNG())
+      console.log(
+        '[devshot] devtools:',
+        JSON.stringify(w.tabs.state().devtools),
+        'open:',
+        w.tabs.activeTab?.wc.isDevToolsOpened(),
+        'content:',
+        JSON.stringify(w.contentBounds()),
+        'page:',
+        JSON.stringify(w.tabs.activeTab?.view.getBounds())
+      )
+    }
     if (process.env['OFFSHORE_SHOT_PALETTE']) {
       w.sendToChrome('devshot:composite', null)
       w.sendToChrome('omnibox:focus')

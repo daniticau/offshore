@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { BriefWeather, NewTabWidgets, Settings, WidgetAlign, WidgetLayout } from '@shared/types'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { BriefWeather, NewTabWidgets, Settings, WidgetLayout } from '@shared/types'
 import { DEFAULT_SETTINGS, resolveAccentColors, weatherCondition } from '@shared/types'
 import { ClassicWaves } from '../theme/ClassicWaves'
 import { moonPhase } from '../theme/moon'
@@ -108,6 +108,84 @@ function ForecastHours({ weather }: { weather: BriefWeather }): React.JSX.Elemen
   )
 }
 
+// ---------------- the grid ----------------
+
+/**
+ * The home screen is a grid of cells, the way a phone's is, and a widget is
+ * always a whole number of them. Both counts are even and every widget size is
+ * even, so anything can sit dead centre — the thing you reach for first.
+ *
+ * Positions are stored in cells, never pixels, so a layout means the same thing
+ * in a small window and a full-screen one: the cells stretch, the arrangement
+ * holds.
+ */
+const COLS = 12
+const ROWS = 10
+
+/**
+ * The two middle rows belong to the search pill. They are held on both home
+ * screens, whether or not a pill is actually drawn there, so a layout built on
+ * a new tab reads identically on the zero-tab window — and nothing can ever be
+ * dropped underneath the search field.
+ */
+const BAND_TOP = 4
+const BAND_END = 6
+
+/** Breathing room between a widget's card and its cell, in px. */
+const GUTTER = 7
+
+interface Rect {
+  col: number
+  row: number
+  w: number
+  h: number
+}
+
+const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n))
+
+/** On the board, and clear of the pill's band. */
+function insideGrid(r: Rect): boolean {
+  if (r.col < 0 || r.row < 0 || r.col + r.w > COLS || r.row + r.h > ROWS) return false
+  return !(r.row < BAND_END && r.row + r.h > BAND_TOP)
+}
+
+function hits(a: Rect, b: Rect): boolean {
+  return a.col < b.col + b.w && b.col < a.col + a.w && a.row < b.row + b.h && b.row < a.row + a.h
+}
+
+function isFree(r: Rect, taken: Rect[]): boolean {
+  return insideGrid(r) && !taken.some((t) => hits(t, r))
+}
+
+/** The free cell of this size that scores lowest — the caller says what "best" means. */
+function bestSpot(w: number, h: number, taken: Rect[], score: (r: Rect) => number): Rect | null {
+  let best: Rect | null = null
+  let bestScore = Infinity
+  for (let row = 0; row + h <= ROWS; row++) {
+    for (let col = 0; col + w <= COLS; col++) {
+      const r = { col, row, w, h }
+      if (!isFree(r, taken)) continue
+      const s = score(r)
+      if (s < bestScore) {
+        bestScore = s
+        best = r
+      }
+    }
+  }
+  return best
+}
+
+/**
+ * Where a widget lands when nobody has placed it: as close to the middle column
+ * as it can get, and as close to the pill as it can get. Centre beats proximity,
+ * so widgets stack into a column above the search rather than spreading sideways
+ * — which is what the page looked like before there was a grid at all.
+ */
+function homeScore(r: Rect): number {
+  const rowGap = r.row + r.h <= BAND_TOP ? BAND_TOP - (r.row + r.h) : r.row - BAND_END
+  return Math.abs(r.col - (COLS - r.w) / 2) * 8 + rowGap
+}
+
 // ---------------- widget catalogue ----------------
 
 const ALL_WIDGETS: WidgetKey[] = ['clock', 'date', 'greeting', 'weather', 'forecast', 'sun', 'moon']
@@ -122,13 +200,62 @@ const WIDGET_LABELS: Record<WidgetKey, string> = {
   moon: 'Moon phase'
 }
 
+interface WidgetSize {
+  w: number
+  h: number
+  label: string
+}
+
+/** The sizes each widget comes in. Every one is even on both axes. */
+const WIDGET_SIZES: Record<WidgetKey, WidgetSize[]> = {
+  clock: [
+    { w: 4, h: 2, label: 'Small' },
+    { w: 4, h: 4, label: 'Medium' },
+    { w: 6, h: 4, label: 'Large' }
+  ],
+  date: [
+    { w: 2, h: 2, label: 'Small' },
+    { w: 4, h: 2, label: 'Medium' }
+  ],
+  greeting: [
+    { w: 4, h: 2, label: 'Medium' },
+    { w: 6, h: 2, label: 'Wide' }
+  ],
+  weather: [
+    { w: 2, h: 2, label: 'Small' },
+    { w: 4, h: 2, label: 'Medium' },
+    { w: 4, h: 4, label: 'Large' }
+  ],
+  forecast: [
+    { w: 6, h: 2, label: 'Wide' },
+    { w: 8, h: 2, label: 'Wider' }
+  ],
+  sun: [
+    { w: 4, h: 2, label: 'Medium' },
+    { w: 6, h: 2, label: 'Wide' }
+  ],
+  moon: [
+    { w: 2, h: 2, label: 'Small' },
+    { w: 4, h: 2, label: 'Medium' }
+  ]
+}
+
+const DEFAULT_SIZE: Record<WidgetKey, WidgetSize> = {
+  clock: WIDGET_SIZES.clock[1],
+  date: WIDGET_SIZES.date[1],
+  greeting: WIDGET_SIZES.greeting[0],
+  weather: WIDGET_SIZES.weather[1],
+  forecast: WIDGET_SIZES.forecast[0],
+  sun: WIDGET_SIZES.sun[0],
+  moon: WIDGET_SIZES.moon[1]
+}
+
 /** Looks each widget can wear, chosen from its own strip in edit mode. */
 const WIDGET_STYLES: Partial<Record<WidgetKey, { id: string; label: string }[]>> = {
   clock: [
     { id: 'serif', label: 'Serif' },
     { id: 'light', label: 'Light' },
-    { id: 'mono', label: 'Mono' },
-    { id: 'small', label: 'Small' }
+    { id: 'mono', label: 'Mono' }
   ],
   date: [
     { id: 'long', label: 'Sunday, August 10' },
@@ -164,9 +291,9 @@ export interface HomeCanvasProps {
   onSubmit(input: string): void
   fetchWeather(): Promise<BriefWeather | null>
   /**
-   * Show the centred search pill. On for the zero-tab window, where there is
-   * no tab to type into; off for a new tab, where the toolbar omnibox already
-   * has the cursor. Either way the pill's row is held, so the widgets land in
+   * Show the centred search pill. On for a new tab, which is a page you can
+   * search from; off for the zero-tab window, which is just the home screen
+   * sitting there. Either way the pill's row is held, so the widgets land in
    * exactly the same place on both screens.
    */
   searchPill?: boolean
@@ -187,12 +314,11 @@ export interface HomeCanvasProps {
  * screen, so they are the same component, reading the same widget settings —
  * edit the widgets on either and both change.
  *
- * The search pill is pinned to the middle of the pane and the widgets are
- * centred in the space above it, so they drift upward as you add more instead
- * of crowding the pill. Right-click → Edit Widgets (or press and hold) enters
- * iPhone-home-screen edit mode: widgets jiggle, − removes, drag moves and
- * reorders, and each offers its own looks. The pill steps back — dimmed and
- * inert — while editing, so it is never in the way of a drag.
+ * The widgets live on a grid that spans the whole pane, edge to edge, with the
+ * search pill holding the two middle rows. Right-click → Edit Widgets (or press
+ * and hold) enters iPhone-home-screen edit mode: widgets jiggle, − removes, and
+ * dragging one shows the cell it will take and springs it into place on release.
+ * Nothing else moves while you drag, so a widget goes where you put it.
  */
 export function HomeCanvas({
   settings,
@@ -212,19 +338,38 @@ export function HomeCanvas({
     key: WidgetKey
     dx: number
     dy: number
+    /** The cell it would take if you let go now. */
+    target: Rect
+    /** A same-size widget sitting there, which trades places with it. */
+    swap: WidgetKey | null
   } | null>(null)
-  const [previewOrder, setPreviewOrder] = useState<WidgetKey[] | null>(null)
-  const [previewAlign, setPreviewAlign] = useState<WidgetAlign | null>(null)
   const [text, setText] = useState('')
   const [pillWidth, setPillWidth] = useState<number | null>(null)
+  /** The pane in px. Everything on the board is derived from this. */
+  const [board, setBoard] = useState({ w: 0, h: 0 })
+  /** How tall the add-a-widget tray is right now — the board stops above it. */
+  const [trayH, setTrayH] = useState(56)
+  /** True while the window is being resized — the widgets follow it live, not on a spring. */
+  const [resizing, setResizing] = useState(false)
 
   const hostRef = useRef<HTMLDivElement>(null)
-  const centerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const mirrorRef = useRef<HTMLSpanElement>(null)
-  const slotRefs = useRef<Map<WidgetKey, HTMLElement>>(new Map())
-  const dragStart = useRef<{ x: number; y: number; moved: boolean } | null>(null)
+  const trayRef = useRef<HTMLDivElement>(null)
+  const dragStart = useRef<{
+    key: WidgetKey
+    x: number
+    y: number
+    /** Where the widget was when the drag began — where a swapped neighbour goes. */
+    rect: Rect
+    moved: boolean
+    target: Rect
+    swap: WidgetKey | null
+  } | null>(null)
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const resizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const patchRef = useRef(patch)
+  patchRef.current = patch
   const isDark = useIsDark()
 
   useEffect(() => {
@@ -255,6 +400,39 @@ export function HomeCanvas({
     return () => window.removeEventListener('keydown', onKey)
   }, [editing])
 
+  // ---- the board measures itself; cells are whatever fits ----
+
+  useLayoutEffect(() => {
+    const el = hostRef.current
+    const tray = trayRef.current
+    if (!el || !tray) return
+    const read = (): void => {
+      setBoard({ w: el.clientWidth, h: el.clientHeight })
+      setTrayH(tray.offsetHeight)
+    }
+    read()
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    ro.observe(tray)
+    return () => ro.disconnect()
+  }, [])
+
+  /*
+   * The board's margins are part of the cell arithmetic rather than the grid
+   * element's box, so the element never moves: entering edit mode changes only
+   * the numbers, and every widget springs from where it was to where it now
+   * belongs. A short window keeps a smaller foot so the cells stay usable.
+   */
+  const padX = 20
+  const padTop = editing ? 58 : 24
+  // the tray is measured rather than guessed: it grows to three rows on a narrow
+  // window, and the board has to end above it wherever it ends up
+  const padBottom = editing ? 48 + trayH : Math.min(96, Math.round(board.h * 0.14))
+  const cellW = Math.max(0, board.w - padX * 2) / COLS
+  const cellH = Math.max(0, board.h - padTop - padBottom) / ROWS
+  const boardW = cellW * COLS
+  const boardH = cellH * ROWS
+
   // ---- the pill grows with what you type, staying centred ----
 
   const measure = useCallback(() => {
@@ -272,8 +450,17 @@ export function HomeCanvas({
   useLayoutEffect(measure, [measure, text])
 
   useEffect(() => {
-    window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
+    const onResize = (): void => {
+      measure()
+      setResizing(true)
+      if (resizeTimer.current) clearTimeout(resizeTimer.current)
+      resizeTimer.current = setTimeout(() => setResizing(false), 180)
+    }
+    window.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      if (resizeTimer.current) clearTimeout(resizeTimer.current)
+    }
   }, [measure])
 
   const submit = (): void => {
@@ -288,15 +475,71 @@ export function HomeCanvas({
   const baseOrder = (settings.newTabWidgetOrder?.length ? settings.newTabWidgetOrder : ALL_WIDGETS).filter(
     (k) => ALL_WIDGETS.includes(k)
   )
-  const fullOrder: WidgetKey[] = [...baseOrder, ...ALL_WIDGETS.filter((k) => !baseOrder.includes(k))]
-  const order = previewOrder ?? fullOrder
+  const order: WidgetKey[] = [...baseOrder, ...ALL_WIDGETS.filter((k) => !baseOrder.includes(k))]
   const enabledKeys = order.filter((k) => widgets[k])
   const availableKeys = ALL_WIDGETS.filter((k) => !widgets[k])
 
-  const layoutFor = (key: WidgetKey): WidgetLayout => ({
-    align: layout[key]?.align ?? 'center',
-    style: layout[key]?.style ?? DEFAULT_STYLE[key]
-  })
+  const sizeOf = (key: WidgetKey): WidgetSize => {
+    const saved = layout[key]
+    return WIDGET_SIZES[key].find((s) => s.w === saved?.w && s.h === saved?.h) ?? DEFAULT_SIZE[key]
+  }
+  const styleOf = (key: WidgetKey): string => layout[key]?.style ?? DEFAULT_STYLE[key]
+
+  /**
+   * Every enabled widget's cell. A saved position is honoured whenever it still
+   * fits and nothing has taken it; otherwise the widget is placed for you. Order
+   * decides who gets first claim, so the resolution is the same on every screen
+   * showing this home — no two windows disagree about where the clock is.
+   */
+  const fingerprint = JSON.stringify(
+    enabledKeys.map((k) => [k, layout[k]?.col, layout[k]?.row, layout[k]?.w, layout[k]?.h])
+  )
+  const placement = useMemo(() => {
+    const taken: Rect[] = []
+    const out = new Map<WidgetKey, Rect>()
+
+    // Placed widgets first, all of them, before anything is placed for you —
+    // otherwise adding a widget could take a cell someone already put one in.
+    for (const key of enabledKeys) {
+      const size = sizeOf(key)
+      const saved = layout[key]
+      if (!Number.isInteger(saved?.col) || !Number.isInteger(saved?.row)) continue
+      const cand = { col: saved!.col!, row: saved!.row!, w: size.w, h: size.h }
+      if (!isFree(cand, taken)) continue
+      out.set(key, cand)
+      taken.push(cand)
+    }
+
+    for (const key of enabledKeys) {
+      if (out.has(key)) continue
+      const size = sizeOf(key)
+      // A full board is the only way past bestSpot: park it rather than drop it.
+      const rect = bestSpot(size.w, size.h, taken, homeScore) ?? { col: 0, row: 0, w: size.w, h: size.h }
+      out.set(key, rect)
+      taken.push(rect)
+    }
+
+    // back into the order the widgets are listed in, so the − badges stagger
+    // down the page rather than in whatever order the cells were resolved
+    return new Map(enabledKeys.filter((k) => out.has(k)).map((k) => [k, out.get(k)!]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fingerprint])
+
+  // Write placements back so they stop being a guess: an old layout from before
+  // the grid, or a widget just added, settles into a cell it keeps. Identical on
+  // every screen, so the second one to run finds nothing to write.
+  useEffect(() => {
+    const next: Partial<Record<WidgetKey, WidgetLayout>> = {}
+    let changed = false
+    for (const [key, r] of placement) {
+      const s = layout[key]
+      if (s?.col === r.col && s?.row === r.row && s?.w === r.w && s?.h === r.h) continue
+      next[key] = { ...s, col: r.col, row: r.row, w: r.w, h: r.h }
+      changed = true
+    }
+    if (changed) patchRef.current({ newTabWidgetLayout: { ...layout, ...next } })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placement])
 
   const hasLocation = settings.brief?.lat != null
   const wantsWeather = widgets.weather || widgets.forecast || widgets.sun
@@ -364,53 +607,85 @@ export function HomeCanvas({
     }
   }
 
-  // ---- pointer drag: vertical position reorders, horizontal places ----
+  // ---- dragging: the board holds still and the widget picks a cell ----
+
+  const boxStyle = (r: Rect, dx = 0, dy = 0): React.CSSProperties => {
+    const w = Math.max(0, r.w * cellW - GUTTER * 2)
+    const h = Math.max(0, r.h * cellH - GUTTER * 2)
+    return {
+      transform: `translate3d(${padX + r.col * cellW + GUTTER + dx}px, ${
+        padTop + r.row * cellH + GUTTER + dy
+      }px, 0)`,
+      width: w,
+      height: h,
+      // the content sizes itself off the box it is in, so a big clock is big
+      ['--bw' as string]: `${w}px`,
+      ['--bh' as string]: `${h}px`
+    }
+  }
 
   const onWidgetPointerDown = (e: React.PointerEvent, key: WidgetKey): void => {
     if (!editing) return
     if ((e.target as HTMLElement).closest('.widget-remove, .style-strip')) return
+    const rect = placement.get(key)
+    if (!rect) return
     e.preventDefault()
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    dragStart.current = { x: e.clientX, y: e.clientY, moved: false }
-    setDrag({ key, dx: 0, dy: 0 })
-    setPreviewOrder(order)
-    setPreviewAlign(layoutFor(key).align)
+    e.stopPropagation()
+    try {
+      // capture keeps the drag with this widget even when the pointer runs off it
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    } catch {
+      /* no live pointer to capture */
+    }
+    dragStart.current = { key, x: e.clientX, y: e.clientY, rect, moved: false, target: rect, swap: null }
+    setDrag({ key, dx: 0, dy: 0, target: rect, swap: null })
   }
 
+  // The drag lives in a ref, not in state: a move must be able to act on the
+  // pointerdown that came a moment ago, whether or not React has re-rendered
+  // for it yet. State is only what the board is painted from.
   const onWidgetPointerMove = (e: React.PointerEvent, key: WidgetKey): void => {
     const start = dragStart.current
-    if (!start || !drag || drag.key !== key) return
+    if (!start || start.key !== key || !cellW || !cellH) return
     const dx = e.clientX - start.x
     const dy = e.clientY - start.y
     if (!start.moved && Math.hypot(dx, dy) > 4) start.moved = true
-    setDrag({ key, dx, dy })
 
-    // horizontal thirds of the row decide where the widget lives
-    const rect = centerRef.current?.getBoundingClientRect()
-    if (rect && rect.width > 0) {
-      const t = (e.clientX - rect.left) / rect.width
-      setPreviewAlign(t < 0.34 ? 'left' : t > 0.66 ? 'right' : 'center')
-    }
+    const { w, h } = start.rect
+    // Where the widget's own top-left has been dragged to, in cells.
+    const col = clamp(Math.round((start.rect.col * cellW + dx) / cellW), 0, Math.max(0, COLS - w))
+    const row = clamp(Math.round((start.rect.row * cellH + dy) / cellH), 0, Math.max(0, ROWS - h))
+    const wanted = { col, row, w, h }
 
-    // insertion point = how many other widgets sit above the pointer
-    const others = enabledKeys.filter((k) => k !== key)
-    let insertAt = 0
-    for (const k of others) {
-      const el = slotRefs.current.get(k)
-      if (!el) continue
-      const r = el.getBoundingClientRect()
-      if (e.clientY > r.top + r.height / 2) insertAt++
+    const others = enabledKeys
+      .filter((k) => k !== key)
+      .map((k) => ({ key: k, rect: placement.get(k)! }))
+      .filter((o) => o.rect)
+
+    let target = wanted
+    let swap: WidgetKey | null = null
+    if (!isFree(wanted, others.map((o) => o.rect))) {
+      const under = others.filter((o) => hits(o.rect, wanted))
+      if (insideGrid(wanted) && under.length === 1 && under[0].rect.w === w && under[0].rect.h === h) {
+        // same size, one neighbour: the two trade places, like the home screen
+        target = under[0].rect
+        swap = under[0].key
+      } else {
+        target =
+          bestSpot(
+            w,
+            h,
+            others.map((o) => o.rect),
+            (r) => (r.col - col) ** 2 + (r.row - row) ** 2
+          ) ?? start.target
+      }
     }
-    const next = [...others]
-    next.splice(insertAt, 0, key)
-    setPreviewOrder([...next, ...fullOrder.filter((k) => !next.includes(k))])
+    start.target = target
+    start.swap = swap
+    setDrag({ key, dx, dy, target, swap })
   }
 
-  const endDrag = (): void => {
-    setDrag(null)
-    setPreviewOrder(null)
-    setPreviewAlign(null)
-  }
+  const endDrag = (): void => setDrag(null)
 
   const onWidgetPointerUp = (e: React.PointerEvent, key: WidgetKey): void => {
     const start = dragStart.current
@@ -422,21 +697,25 @@ export function HomeCanvas({
     }
     if (!start) return
     if (!start.moved) {
-      // a tap, not a drag: open this widget's style strip
+      // a tap, not a drag: open this widget's size and style strip
       setSelected((prev) => (prev === key ? null : key))
       endDrag()
       return
     }
-    patch({
-      newTabWidgetOrder: previewOrder ?? fullOrder,
-      newTabWidgetLayout: {
-        ...layout,
-        [key]: {
-          ...layoutFor(key),
-          align: previewAlign ?? layoutFor(key).align
-        }
+    const { target, swap } = start
+    const next: Partial<Record<WidgetKey, WidgetLayout>> = {
+      [key]: { ...layout[key], col: target.col, row: target.row, w: target.w, h: target.h }
+    }
+    if (swap) {
+      next[swap] = {
+        ...layout[swap],
+        col: start.rect.col,
+        row: start.rect.row,
+        w: start.rect.w,
+        h: start.rect.h
       }
-    })
+    }
+    patch({ newTabWidgetLayout: { ...layout, ...next } })
     endDrag()
   }
 
@@ -450,8 +729,34 @@ export function HomeCanvas({
   }
 
   const setStyle = (key: WidgetKey, style: string): void => {
+    patch({ newTabWidgetLayout: { ...layout, [key]: { ...layout[key], style } } })
+  }
+
+  /**
+   * Growing or shrinking a widget keeps its top-left corner where it is when the
+   * new size still fits there; when it does not, the widget moves the shortest
+   * distance to a cell that holds it.
+   */
+  const setSize = (key: WidgetKey, size: WidgetSize): void => {
+    const at = placement.get(key)
+    const others = enabledKeys.filter((k) => k !== key).map((k) => placement.get(k)!)
+    const anchor = at ?? { col: 0, row: 0, ...size }
+    let rect: Rect = {
+      col: clamp(anchor.col, 0, Math.max(0, COLS - size.w)),
+      row: clamp(anchor.row, 0, Math.max(0, ROWS - size.h)),
+      w: size.w,
+      h: size.h
+    }
+    if (!isFree(rect, others)) {
+      rect =
+        bestSpot(size.w, size.h, others, (r) => (r.col - anchor.col) ** 2 + (r.row - anchor.row) ** 2) ??
+        rect
+    }
     patch({
-      newTabWidgetLayout: { ...layout, [key]: { ...layoutFor(key), style } }
+      newTabWidgetLayout: {
+        ...layout,
+        [key]: { ...layout[key], col: rect.col, row: rect.row, w: rect.w, h: rect.h }
+      }
     })
   }
 
@@ -468,10 +773,18 @@ export function HomeCanvas({
     }
   }
 
+  const bandStyle: React.CSSProperties = {
+    transform: `translate3d(${padX}px, ${padTop + BAND_TOP * cellH}px, 0)`,
+    width: boardW,
+    height: (BAND_END - BAND_TOP) * cellH
+  }
+  /** The pill rides the middle of the band it holds. */
+  const pillTop = padTop + ((BAND_TOP + BAND_END) / 2) * cellH
+
   return (
     <div
       ref={hostRef}
-      className={`start ${editing ? 'editing' : ''} ${className}`}
+      className={`start ${editing ? 'editing' : ''} ${resizing ? 'no-anim' : ''} ${className}`}
       style={{
         background: `linear-gradient(180deg, ${acc.tintTop} 0%, ${acc.tintBottom} 100%)`
       }}
@@ -504,114 +817,151 @@ export function HomeCanvas({
       </button>
 
       <div className="start-stage">
-        <div className="start-center" ref={centerRef}>
-          {enabledKeys.length === 0 && editing && (
-            <div className="widget-line dim">A perfectly calm, blank page. Add something below.</div>
-          )}
-          {enabledKeys.map((key, i) => {
-            const conf = layoutFor(key)
-            const align = drag?.key === key && previewAlign ? previewAlign : conf.align
-            const style = conf.style ?? DEFAULT_STYLE[key]
-            const inner = renderWidget(key, style)
-            if (!inner) return null
-            const dragging = drag?.key === key
-            const styles = WIDGET_STYLES[key]
-            return (
-              <div
-                key={key}
-                ref={(el) => {
-                  if (el) slotRefs.current.set(key, el)
-                  else slotRefs.current.delete(key)
-                }}
-                className={`widget-slot align-${align} ${editing ? 'editable' : ''} ${dragging ? 'dragging' : ''} ${
-                  selected === key ? 'selected' : ''
-                }`}
-                style={
-                  dragging
-                    ? {
-                        transform: `translate(${drag.dx}px, ${drag.dy}px)`,
-                        zIndex: 5
-                      }
-                    : undefined
-                }
-                onPointerDown={(e) => onWidgetPointerDown(e, key)}
-                onPointerMove={(e) => onWidgetPointerMove(e, key)}
-                onPointerUp={(e) => onWidgetPointerUp(e, key)}
-                onPointerCancel={() => {
-                  dragStart.current = null
-                  endDrag()
-                }}
-              >
-                <button
-                  className="widget-remove"
-                  title={`Remove ${WIDGET_LABELS[key]}`}
-                  tabIndex={editing ? 0 : -1}
-                  aria-hidden={!editing}
-                  style={editing ? { transitionDelay: `${Math.min(i, 5) * 22}ms` } : undefined}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => removeWidget(key)}
-                >
-                  −
-                </button>
+        {/* The board: the full width of the pane, edge to edge. In edit mode it
+            pulls in from the top and bottom to clear the Done button and the
+            tray, and every widget springs along with it. */}
+        <div
+          className="start-grid"
+          style={{
+            ['--cw' as string]: `${cellW}px`,
+            ['--ch' as string]: `${cellH}px`,
+            ['--gx' as string]: `${padX}px`,
+            ['--gy' as string]: `${padTop}px`,
+            ['--gw' as string]: `${boardW}px`,
+            ['--gh' as string]: `${boardH}px`
+          }}
+        >
+          <div className="grid-band" style={bandStyle} />
+
+          {drag && <div className="drop-ghost" style={boxStyle(drag.target)} />}
+
+          {board.w > 0 &&
+            enabledKeys.map((key, i) => {
+              const rect = placement.get(key)
+              if (!rect) return null
+              const style = styleOf(key)
+              const inner = renderWidget(key, style)
+              if (!inner) return null
+              const dragging = drag?.key === key
+              const nudged = drag?.swap === key
+              const styles = WIDGET_STYLES[key]
+              const sizes = WIDGET_SIZES[key]
+              const size = sizeOf(key)
+              // a widget low on the board opens its strip upward
+              const flip = rect.row + rect.h > ROWS - 2
+              return (
                 <div
-                  className={`widget-inner ${editing && !dragging ? 'jiggle' : ''}`}
-                  style={editing && !dragging ? { animationDelay: `${(i % 3) * -0.14}s` } : undefined}
+                  key={key}
+                  className={`widget-slot ${dragging ? 'dragging' : ''} ${nudged ? 'nudged' : ''} ${
+                    selected === key ? 'selected' : ''
+                  } ${rect.w <= 2 ? 'narrow' : ''}`}
+                  style={{
+                    ...boxStyle(rect, dragging ? drag.dx : 0, dragging ? drag.dy : 0),
+                    zIndex: dragging ? 6 : selected === key ? 5 : 1
+                  }}
+                  onPointerDown={(e) => onWidgetPointerDown(e, key)}
+                  onPointerMove={(e) => onWidgetPointerMove(e, key)}
+                  onPointerUp={(e) => onWidgetPointerUp(e, key)}
+                  onPointerCancel={() => {
+                    dragStart.current = null
+                    endDrag()
+                  }}
                 >
-                  {inner}
-                </div>
-                {editing && selected === key && styles && (
-                  <div className="style-strip" onPointerDown={(e) => e.stopPropagation()}>
-                    {styles.map((s) => (
-                      <button
-                        key={s.id}
-                        className={`style-chip ${style === s.id ? 'on' : ''}`}
-                        onClick={() => setStyle(key, s.id)}
-                      >
-                        {s.label}
-                      </button>
-                    ))}
+                  <button
+                    className="widget-remove"
+                    title={`Remove ${WIDGET_LABELS[key]}`}
+                    tabIndex={editing ? 0 : -1}
+                    aria-hidden={!editing}
+                    style={editing ? { transitionDelay: `${Math.min(i, 5) * 22}ms` } : undefined}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => removeWidget(key)}
+                  >
+                    −
+                  </button>
+                  <div
+                    className={`widget-inner ${editing && !dragging ? 'jiggle' : ''}`}
+                    style={editing && !dragging ? { animationDelay: `${(i % 3) * -0.14}s` } : undefined}
+                  >
+                    {inner}
                   </div>
-                )}
-              </div>
-            )
-          })}
+                  {editing && selected === key && (
+                    <div
+                      className={`style-strip ${flip ? 'above' : ''}`}
+                      onPointerDown={(e) => e.stopPropagation()}
+                    >
+                      <div className="strip-row">
+                        {sizes.map((s) => (
+                          <button
+                            key={s.label}
+                            className={`style-chip ${size.w === s.w && size.h === s.h ? 'on' : ''}`}
+                            onClick={() => setSize(key, s)}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                      {styles && (
+                        <div className="strip-row">
+                          {styles.map((s) => (
+                            <button
+                              key={s.id}
+                              className={`style-chip ${style === s.id ? 'on' : ''}`}
+                              onClick={() => setStyle(key, s.id)}
+                            >
+                              {s.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+          {enabledKeys.length === 0 && editing && (
+            <div className="grid-empty" style={{ top: padTop + 3 * cellH }}>
+              A perfectly calm, blank page. Add something below.
+            </div>
+          )}
+
+          {/* sits in the band it holds, rather than wherever the pane's middle
+              happens to be — which is not the same place once edit mode has
+              pulled the board in */}
+          {searchPill && (
+            <div className="start-search" style={{ top: pillTop, ...(pillWidth ? { width: pillWidth } : {}) }}>
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              >
+                <circle cx="11" cy="11" r="7" />
+                <path d="M21 21l-4.35-4.35" />
+              </svg>
+              <input
+                ref={inputRef}
+                value={text}
+                placeholder="Search or type a URL"
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                tabIndex={editing ? -1 : 0}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && submit()}
+              />
+              <span className="start-measure" ref={mirrorRef} aria-hidden="true">
+                {text}
+              </span>
+            </div>
+          )}
         </div>
-
-        {!searchPill && <div className="start-search-gap" />}
-
-        {searchPill && (
-          <div className="start-search" style={pillWidth ? { width: pillWidth } : undefined}>
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            >
-              <circle cx="11" cy="11" r="7" />
-              <path d="M21 21l-4.35-4.35" />
-            </svg>
-            <input
-              ref={inputRef}
-              value={text}
-              placeholder="Search or type a URL"
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              tabIndex={editing ? -1 : 0}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && submit()}
-            />
-            <span className="start-measure" ref={mirrorRef} aria-hidden="true">
-              {text}
-            </span>
-          </div>
-        )}
       </div>
 
-      <div className={`we-tray ${editing ? 'on' : ''}`} aria-hidden={!editing}>
+      <div className={`we-tray ${editing ? 'on' : ''}`} ref={trayRef} aria-hidden={!editing}>
         {availableKeys.length > 0 ? (
           availableKeys.map((key) => (
             <button
@@ -625,7 +975,7 @@ export function HomeCanvas({
             </button>
           ))
         ) : (
-          <span className="we-tray-hint">Drag to move · tap a widget for its styles</span>
+          <span className="we-tray-hint">Drag to move · tap a widget for its size and looks</span>
         )}
       </div>
 

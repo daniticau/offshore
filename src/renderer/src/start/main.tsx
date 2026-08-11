@@ -15,12 +15,9 @@ const internal = (window as unknown as { offshoreInternal?: InternalApi }).offsh
 
 /**
  * The new tab page — a thin shell around HomeCanvas, which the zero-tab window
- * renders too.
- *
- * Where you type depends on the tab layout. Horizontal: the omnibox is right
- * there above the page and already has the cursor, so the page shows widgets
- * only. Vertical: the omnibox is off in the sidebar, so the page carries its
- * own pill in the middle and takes the cursor itself.
+ * renders too. Same widgets, same settings; the tab is the half that carries
+ * the search pill, and it opens with the cursor already in it, so a new tab is
+ * a place you can start typing the moment it appears.
  */
 function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
@@ -56,16 +53,14 @@ function App(): React.JSX.Element {
     void internal?.settings.set(p)
   }
 
-  const vertical = settings.tabOrientation === 'vertical'
-
   return (
     <HomeCanvas
       settings={settings}
       onPatch={patch}
       onSubmit={(input) => void internal?.open(input)}
       fetchWeather={async () => (await internal?.brief.weather()) ?? null}
-      searchPill={vertical}
-      autoFocus={vertical}
+      searchPill
+      autoFocus
       editSignal={editSignal}
     />
   )

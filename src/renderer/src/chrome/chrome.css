@@ -27,7 +27,7 @@ body,
   --chrome-pad: 12px;
   --row-h: 34px;
   --omnibox-h: 36px;
-  --btn-h: 28px;
+  --btn-h: 30px;
   --tab-gap: 3px;
   --tab-btn: 22px;
   --tab-icon: 16px;
@@ -38,8 +38,11 @@ body,
   --font-chrome: 13px;
   --topbar-pad: 8px;
   --topbar-tabs-h: 32px;
-  --topbar-toolbar-h: 36px;
-  --topbar-gap: 6px;
+  --topbar-toolbar-h: 38px;
+  /* The address row is framed by equal air: --topbar-gap above it, to the tab
+     strip, and --content-air below it, to the page. Change one, change both. */
+  --topbar-gap: 4px;
+  --content-air: 6px;
   --htab-h: 30px;
   --bm-row-h: 26px;
   --bm-max-h: 240px;
@@ -55,7 +58,7 @@ body,
   --chrome-pad: 10px;
   --row-h: 30px;
   --omnibox-h: 31px;
-  --btn-h: 26px;
+  --btn-h: 28px;
   --tab-gap: 2px;
   --tab-btn: 20px;
   --tab-icon: 15px;
@@ -64,8 +67,9 @@ body,
   --font-chrome: 12.5px;
   --topbar-pad: 6px;
   --topbar-tabs-h: 29px;
-  --topbar-toolbar-h: 32px;
-  --topbar-gap: 5px;
+  --topbar-toolbar-h: 34px;
+  --topbar-gap: 3px;
+  --content-air: 4px;
   --htab-h: 27px;
   --bm-row-h: 24px;
   --bm-max-h: 200px;
@@ -154,11 +158,12 @@ body,
   left: var(--gutter);
 }
 .mode-horizontal .content-frame {
-  /* top hugs the toolbar a touch tighter than the sides so the chrome reads square */
-  inset: calc(var(--topbar-h) + 3px) var(--gutter) var(--gutter);
+  /* --content-air matches --topbar-gap above the address row, so that row sits
+     with the same air to the tabs as it has to the page */
+  inset: calc(var(--topbar-h) + var(--content-air)) var(--gutter) var(--gutter);
 }
 .mode-horizontal.has-bmbar .content-frame {
-  top: calc(var(--topbar-h) + var(--bmbar-h) + 3px);
+  top: calc(var(--topbar-h) + var(--bmbar-h) + var(--content-air));
 }
 .mode-horizontal.collapsed .content-frame {
   top: calc(var(--topbar-pad) + var(--topbar-tabs-h) + var(--gutter));
@@ -325,7 +330,7 @@ body,
   display: flex;
   align-items: center;
   gap: 11px;
-  height: 38px;
+  height: 40px;
   padding: 0 11px;
   border-radius: var(--radius-row);
   font-size: var(--text-md);
@@ -338,23 +343,44 @@ body,
 }
 .s-icon {
   display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   color: var(--accent);
   flex-shrink: 0;
+}
+.s-favicon {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  object-fit: contain;
+}
+/* the row reads as one line — title, then the address in the same breath */
+.s-fill {
+  flex: 1;
+}
+.s-hint {
+  color: var(--ink-faint);
+  font-size: 12px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .s-text {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-weight: 500;
+  font-weight: 600;
+  flex-shrink: 0;
+  max-width: 60%;
 }
 .s-url {
-  flex: 1;
+  margin-left: -5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--ink-faint);
   font-size: 12.5px;
-  text-align: right;
 }
 .pill-favicon {
   width: 15px;
@@ -388,6 +414,15 @@ body,
 .new-tab-btn:hover {
   background: var(--hover);
   color: var(--ink);
+}
+/* standing in for the blank tab you're looking at — it wears that tab's row */
+.new-tab-btn.active,
+.new-tab-btn.active:hover {
+  background: var(--active-row);
+  color: var(--ink);
+  box-shadow:
+    inset 0 1px 0 var(--glass-inset-hi),
+    0 3px 10px rgba(14, 92, 122, 0.12);
 }
 
 .tab-list {
@@ -1065,10 +1100,12 @@ browser-action-list {
   flex-shrink: 0;
 }
 
+/* The space between tabs is each tab's own margin, not the strip's gap — a gap
+   survives its tab's collapse and pops out of existence when the row unmounts.
+   As a margin it closes with everything else. */
 .tab-strip {
   display: flex;
   align-items: center;
-  gap: 5px;
   flex: 1;
   overflow-x: auto;
   overflow-y: hidden;
@@ -1087,6 +1124,7 @@ browser-action-list {
      neighbours — they only shrink together once the strip overflows. */
   width: 190px;
   min-width: 56px;
+  margin-right: 5px;
   border-radius: var(--radius-sm);
   font-size: calc(var(--font-chrome) - 0.5px);
   flex-shrink: 1;
@@ -1112,11 +1150,13 @@ browser-action-list {
     min-width: 0;
     padding-left: 0;
     padding-right: 0;
+    margin-right: 0;
     opacity: 0;
     transform: translateX(-8px);
   }
   to {
     width: 190px;
+    margin-right: 5px;
     opacity: 1;
     transform: translateX(0);
   }
@@ -1127,18 +1167,80 @@ browser-action-list {
 .htab.entering {
   animation: htab-in 150ms var(--ease-out);
 }
+/* Everything that takes up room goes to nothing together and on one clock, so
+   the strip closes the space in a single move. The row is only unmounted once
+   this has finished — see useTabMotion. */
 .htab.closing {
   width: 0 !important;
   min-width: 0 !important;
   padding-left: 0 !important;
   padding-right: 0 !important;
+  margin-right: 0 !important;
   opacity: 0;
   transition:
-    width 110ms var(--ease-out),
-    min-width 110ms var(--ease-out),
-    padding 110ms var(--ease-out),
-    opacity 100ms var(--ease-out);
+    width 130ms var(--ease-out),
+    min-width 130ms var(--ease-out),
+    padding 130ms var(--ease-out),
+    margin 130ms var(--ease-out),
+    opacity 90ms var(--ease-out);
   pointer-events: none;
+}
+
+/* ---------- split view: one tab's worth of strip, cut in two ---------- */
+
+/* Two pages sharing the content area share a tab. The slot is exactly as long
+   as any other tab, so splitting never makes the strip lurch. */
+.htab-split {
+  display: flex;
+  align-items: center;
+  width: 190px;
+  min-width: 72px;
+  height: var(--htab-h);
+  margin-right: 5px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+  box-shadow: inset 0 0 0 0.5px var(--glass-border);
+  flex-shrink: 1;
+  overflow: hidden;
+  transition:
+    background var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
+}
+.htab-split.active {
+  background: var(--active-row);
+  box-shadow:
+    inset 0 1px 0 var(--glass-inset-hi),
+    0 2px 8px rgba(14, 92, 122, 0.12);
+}
+.htab.half {
+  width: 50%;
+  min-width: 0;
+  height: 100%;
+  margin-right: 0;
+  padding: 0 3px 0 6px;
+  gap: 5px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  box-shadow: none;
+  font-size: calc(var(--font-chrome) - 1.5px);
+}
+.htab.half + .htab.half {
+  border-left: 0.5px solid var(--hairline);
+}
+.htab.half:hover {
+  background: var(--press);
+}
+/* the half you're typing into reads as the live one */
+.htab.half.active,
+.htab.half.active:hover {
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 var(--glass-inset-hi);
+  border-left-color: transparent;
+}
+.htab.half .tab-close {
+  width: 17px;
+  height: 17px;
 }
 
 .htab-new {
@@ -1207,8 +1309,8 @@ browser-action-list {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   margin: 0 2px;
   border: none;
   border-radius: 50%;
@@ -1493,8 +1595,8 @@ browser-action-list {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   margin-left: -2px;
   margin-right: -1px;
   border: none;
@@ -1518,7 +1620,7 @@ browser-action-list {
 .omni-actions {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 0;
   flex-shrink: 0;
   margin-left: 2px;
 }
@@ -1545,14 +1647,23 @@ browser-action-list {
   background: var(--press);
   color: var(--ink);
 }
+/* copy-link stays out of the way until you reach for the pill — the host needs
+   the room more than a button you press once in a while */
+.omni-copy {
+  display: none;
+}
+.omnibox:hover .omni-copy,
+.omni-copy.done {
+  display: inline-flex;
+}
 .omni-act.done {
   color: var(--accent-strong);
 }
 /* the shield keeps its count, so it may run wider than the square buttons */
 .omni-actions .shield {
   width: auto;
-  padding: 0 3px;
-  gap: 2px;
+  padding: 0 2px;
+  gap: 1px;
 }
 /* the tune button is the anchor of the cluster — a soft rounded square */
 .omni-tune.boxed {
@@ -1742,6 +1853,215 @@ browser-action-list {
   color: var(--ink-faint);
   font-size: var(--text-xs);
   flex-shrink: 0;
+}
+
+/* ---------- page freeze (the page's stand-in under a panel) ---------- */
+
+/* Same place, same radius, no interaction — the live view hides behind this and
+   comes back in front of it, so neither swap has anything to show. */
+.page-freeze {
+  position: absolute;
+  z-index: 1;
+  border-radius: var(--radius-md);
+  object-fit: fill;
+  pointer-events: none;
+}
+
+/* ---------- Chromium-style menus (the ⋮ and the profile) ---------- */
+
+.app-menu-anchor,
+.profile-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.cr-menu,
+.profile-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 96;
+  animation: omni-in 120ms var(--ease-out);
+}
+.cr-menu {
+  /* wide enough for "DevTools open in" and its three choices on one line */
+  width: 300px;
+  padding: 6px 0;
+}
+/* in the sidebar the ⋮ sits at the left edge, so the menu drops that way */
+.mode-vertical .cr-menu {
+  right: auto;
+  left: 0;
+}
+
+.cr-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 12px 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: var(--font-chrome);
+  font-weight: 450;
+  text-align: left;
+  cursor: default;
+}
+.cr-item:hover {
+  background: var(--hover);
+}
+.cr-item.danger {
+  color: var(--danger);
+}
+.cr-item.danger:hover {
+  background: var(--danger-bg);
+}
+.cr-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  flex-shrink: 0;
+  color: var(--accent-strong);
+}
+.cr-item.danger .cr-check {
+  color: var(--danger);
+}
+.cr-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cr-hint {
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  flex-shrink: 0;
+}
+.cr-sep {
+  height: 0.5px;
+  background: var(--hairline);
+  margin: 5px 0;
+}
+.cr-section {
+  padding: 6px 12px 3px 32px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-faint);
+}
+
+.cr-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 12px 6px 32px;
+}
+.cr-choice-label {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.cr-segmented {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--press);
+  flex-shrink: 0;
+}
+.cr-segmented button {
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 7px;
+  border-radius: calc(var(--radius-xs) - 1px);
+  cursor: default;
+}
+.cr-segmented button.on {
+  background: var(--surface);
+  color: var(--accent-strong);
+  box-shadow: 0 1px 2px rgba(14, 92, 122, 0.14);
+}
+
+/* ---------- profile card (a space is the profile) ---------- */
+
+.profile-menu {
+  width: 272px;
+  padding: 0 0 6px;
+  top: calc(100% + 8px);
+}
+.pm-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 12px;
+}
+.pm-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--space-color, var(--accent));
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  flex-shrink: 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+.pm-id {
+  min-width: 0;
+}
+.pm-name {
+  font-size: var(--text-md);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pm-sub {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+.pm-accents {
+  display: flex;
+  gap: 7px;
+  padding: 0 14px 12px;
+}
+.pm-swatch {
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: var(--swatch, var(--accent));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  cursor: default;
+  flex-shrink: 0;
+}
+.pm-swatch.on {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 0 0 1.5px var(--surface),
+    0 0 0 3px var(--swatch, var(--ink-faint));
+}
+/* "follow the browser" has no colour of its own to show */
+.pm-swatch.follow {
+  background: linear-gradient(135deg, var(--ink-faint), var(--glass-border));
+}
+.cr-check.pm-dot::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--space-color, var(--accent));
 }
 
 /* ---------- devshot ---------- */

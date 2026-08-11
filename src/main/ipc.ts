@@ -16,8 +16,10 @@ import {
   SEARCH_ENGINES,
   type AccentId,
   type ActionId,
+  type DevToolsDock,
   type PasswordOffer,
   type Settings,
+  type SpaceProfile,
   type Suggestion
 } from '@shared/types'
 import { adblock } from './adblock'
@@ -179,6 +181,9 @@ function runAction(w: OffshoreWindow, id: ActionId): void {
     case 'new-tab':
       w.openNewTab()
       break
+    case 'new-window':
+      void import('./windows').then((m) => m.createWindow())
+      break
     case 'close-tab': {
       const active = w.tabs.activeTab
       if (active) w.tabs.closeTab(active.id)
@@ -275,6 +280,11 @@ export function setupIpc(): void {
     if (!w) return
     await confirmDeleteSpace(w, id)
   })
+  ipcMain.handle('spaces:set-profile', async (e, id: string, profile: SpaceProfile) => {
+    const w = chromeWindow(e)
+    if (!w || (profile !== 'shared' && profile !== 'separate')) return
+    await confirmSpaceProfile(w, id, profile)
+  })
 
   // ---- native context menus for the chrome strip ----
   ipcMain.handle('downloads:list', (e) => (chromeWindow(e) ? downloadsStore.list() : []))
@@ -290,11 +300,12 @@ export function setupIpc(): void {
     }
   })
   ipcMain.handle('tabs:toggle-split', (e) => chromeWindow(e)?.tabs.toggleSplit())
-  ipcMain.handle('tabs:devtools', (e) => {
-    const wc = chromeWindow(e)?.tabs.activeTab?.wc
-    if (!wc) return
-    if (wc.isDevToolsOpened()) wc.closeDevTools()
-    else wc.openDevTools({ mode: 'detach' })
+  ipcMain.handle('tabs:split-with', (e, tabId: number) => chromeWindow(e)?.tabs.splitWith(tabId))
+  ipcMain.handle('tabs:unsplit', (e) => chromeWindow(e)?.tabs.unsplit())
+  ipcMain.handle('tabs:devtools', (e) => chromeWindow(e)?.tabs.toggleDevTools())
+  ipcMain.handle('tabs:devtools-dock', (e, dock: DevToolsDock) => {
+    if (!['right', 'bottom', 'window'].includes(dock)) return
+    chromeWindow(e)?.tabs.setDevToolsDock(dock)
   })
 
   // The three-dots menu: everything Helium keeps behind its kebab
@@ -327,34 +338,9 @@ export function setupIpc(): void {
     ]).popup({ window: w.win })
   })
 
-  ipcMain.handle('menu:app-context', (e) => {
-    const w = chromeWindow(e)
-    if (!w) return
-    const s = settingsStore.get()
-    const menu = Menu.buildFromTemplate([
-      { label: 'New Tab', accelerator: 'Cmd+T', click: () => w.openNewTab() },
-      { label: 'New Window', accelerator: 'Cmd+N', click: () => void import('./windows').then((m) => m.createWindow()) },
-      { label: 'New Space', accelerator: 'Cmd+Alt+N', click: () => {
-        const space = w.tabs.createSpace()
-        w.sendToChrome('spaces:begin-rename', space.id)
-      } },
-      { type: 'separator' },
-      { label: 'Split View', accelerator: 'Cmd+Shift+S', type: 'checkbox', checked: w.tabs.splitPair !== null, click: () => w.tabs.toggleSplit() },
-      { label: 'Show Bookmarks', type: 'checkbox', checked: s.bookmarksBar, click: () => settingsStore.set({ bookmarksBar: !s.bookmarksBar }) },
-      { type: 'separator' },
-      { label: 'Downloads', click: () => void shell.openPath(app.getPath('downloads')) },
-      { label: 'Developer Tools', accelerator: 'Cmd+Alt+I', click: () => {
-        const wc = w.tabs.activeTab?.wc
-        if (!wc) return
-        if (wc.isDevToolsOpened()) wc.closeDevTools()
-        else wc.openDevTools({ mode: 'detach' })
-      } },
-      { type: 'separator' },
-      { label: 'Welcome Tour', click: () => w.tabs.createTab(internalPageUrl('welcome')) },
-      { label: 'Settings…', accelerator: 'Cmd+,', click: () => w.tabs.createTab(internalPageUrl('settings')) }
-    ])
-    menu.popup({ window: w.win })
-  })
+  // No menu:app-context here: the ⋮ menu is drawn by the chrome itself (see
+  // Menus.tsx), the way Chromium draws its own kebab rather than handing the
+  // job to the system. Right-click menus below stay native — so are Chrome's.
 
   ipcMain.handle('menu:tab-context', (e, tabId: number) => {
     const w = chromeWindow(e)
@@ -367,6 +353,19 @@ export function setupIpc(): void {
     add({ label: 'Close Tab', click: () => w.tabs.closeTab(tabId) })
     add({ label: 'Close Other Tabs', click: () => w.tabs.closeOtherTabs(tabId) })
     add({ label: 'Duplicate Tab', click: () => w.tabs.duplicateTab(tabId) })
+    add({ type: 'separator' })
+    const inSplit = w.tabs.splitPair?.includes(tabId) ?? false
+    if (inSplit) {
+      add({ label: 'Remove from Split View', click: () => w.tabs.unsplit() })
+    } else if (tabId === w.tabs.activeTabId) {
+      add({
+        label: 'Split View with New Tab',
+        accelerator: 'Cmd+Shift+S',
+        click: () => w.tabs.toggleSplit()
+      })
+    } else {
+      add({ label: 'Split View with This Tab', click: () => w.tabs.splitWith(tabId) })
+    }
     add({ type: 'separator' })
     const others = w.tabs.spaces.filter((s) => s.id !== tab.spaceId)
     add({
@@ -439,24 +438,8 @@ export function setupIpc(): void {
       label: 'Separate Logins',
       type: 'checkbox',
       checked: space.profile === 'separate',
-      click: () => {
-        void (async () => {
-          const toSeparate = space.profile !== 'separate'
-          const r = await dialog.showMessageBox(w.win, {
-            type: 'question',
-            buttons: [toSeparate ? 'Use Separate Logins' : 'Use Shared Logins', 'Cancel'],
-            defaultId: 0,
-            cancelId: 1,
-            message: toSeparate
-              ? `Give “${space.name}” its own logins?`
-              : `Switch “${space.name}” back to shared logins?`,
-            detail: toSeparate
-              ? 'This space gets its own cookies — sign in to a site here without affecting other spaces. Its tabs will reload.'
-              : 'This space will share cookies and logins with the rest of Offshore. Its tabs will reload.'
-          })
-          if (r.response === 0) w.tabs.setSpaceProfile(spaceId, toSeparate ? 'separate' : 'shared')
-        })()
-      }
+      click: () =>
+        void confirmSpaceProfile(w, spaceId, space.profile === 'separate' ? 'shared' : 'separate')
     })
     add({ type: 'separator' })
     add({
@@ -534,6 +517,8 @@ export function setupIpc(): void {
   ipcMain.handle('chrome:set-collapsed', (e, collapsed: boolean) =>
     chromeWindow(e)?.setCollapsed(collapsed)
   )
+  // "the still is on screen" — the page view can step aside now
+  ipcMain.on('chrome:freeze-ack', (e) => chromeWindow(e)?.onFreezeAck())
   ipcMain.handle('chrome:copy-text', (e, text: string) => {
     if (!isTrustedSender(e) || typeof text !== 'string' || !text) return
     clipboard.writeText(text)
@@ -774,6 +759,30 @@ export function setupIpc(): void {
       if (w.tabs.byId(tabId)) w.tabs.pushState()
     }
   }
+}
+
+/** Flipping a space's cookie jar reloads its tabs, so it gets asked about first. */
+async function confirmSpaceProfile(
+  w: OffshoreWindow,
+  spaceId: string,
+  profile: SpaceProfile
+): Promise<void> {
+  const space = w.tabs.spaceById(spaceId)
+  if (!space || space.profile === profile) return
+  const toSeparate = profile === 'separate'
+  const r = await dialog.showMessageBox(w.win, {
+    type: 'question',
+    buttons: [toSeparate ? 'Use Separate Logins' : 'Use Shared Logins', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    message: toSeparate
+      ? `Give “${space.name}” its own logins?`
+      : `Switch “${space.name}” back to shared logins?`,
+    detail: toSeparate
+      ? 'This space gets its own cookies — sign in to a site here without affecting other spaces. Its tabs will reload.'
+      : 'This space will share cookies and logins with the rest of Offshore. Its tabs will reload.'
+  })
+  if (r.response === 0) w.tabs.setSpaceProfile(spaceId, profile)
 }
 
 async function confirmDeleteSpace(w: OffshoreWindow, spaceId: string): Promise<void> {

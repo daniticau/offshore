@@ -4,10 +4,13 @@ import type {
   BlockedPopup,
   BookmarkNode,
   BriefWeather,
+  DevToolsDock,
   FindResult,
+  PageFreezeFrame,
   PasswordOffer,
   Settings,
   SpaceInfo,
+  SpaceProfile,
   Suggestion,
   TabsState
 } from '@shared/types'
@@ -31,7 +34,10 @@ export interface OffshoreApi {
     stop(id?: number): Promise<void>
     reorder(ids: number[]): Promise<void>
     toggleSplit(): Promise<void>
+    splitWith(tabId: number): Promise<void>
+    unsplit(): Promise<void>
     devtools(): Promise<void>
+    devtoolsDock(dock: DevToolsDock): Promise<void>
     mute(id: number, muted: boolean): Promise<void>
     getState(): Promise<TabsState | undefined>
   }
@@ -41,10 +47,10 @@ export interface OffshoreApi {
     rename(id: string, name: string): Promise<void>
     setAccent(id: string, accent: string | null): Promise<void>
     moveTab(tabId: number, spaceId: string): Promise<void>
+    setProfile(id: string, profile: SpaceProfile): Promise<void>
     remove(id: string): Promise<void>
   }
   menu: {
-    appContext(): Promise<void>
     homeContext(): Promise<void>
     tabContext(tabId: number): Promise<void>
     spaceContext(spaceId: string): Promise<void>
@@ -56,6 +62,7 @@ export interface OffshoreApi {
     setInsets(insets: Insets): Promise<void>
     setOverlay(open: boolean): Promise<void>
     setCollapsed(collapsed: boolean): Promise<void>
+    freezeAck(): void
     focusPage(): Promise<void>
     copyText(text: string): Promise<void>
   }
@@ -114,4 +121,16 @@ export function prettyHost(url: string): string {
   }
 }
 
-export type { TabsState, Settings, Suggestion, BookmarkNode, SpaceInfo, FindResult, PasswordOffer, BlockedPopup }
+export type {
+  TabsState,
+  Settings,
+  Suggestion,
+  BookmarkNode,
+  SpaceInfo,
+  SpaceProfile,
+  DevToolsDock,
+  PageFreezeFrame,
+  FindResult,
+  PasswordOffer,
+  BlockedPopup
+}

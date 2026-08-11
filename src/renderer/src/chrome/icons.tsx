@@ -70,16 +70,23 @@ export const IconClock = svg(
     <path d="M12 7v5l3 3" />
   </>
 )
-export const IconStar = svg(
-  <path d="M12 3l2.7 5.8 6.3.8-4.6 4.3 1.2 6.1-5.6-3.1-5.6 3.1 1.2-6.1L3 9.6l6.3-.8z" />
-)
+/** A regular five-point star, the shape Chromium puts at the end of its omnibox. */
+const STAR = 'M12 3L14.29 8.85 20.56 9.22 15.71 13.21 17.29 19.28 12 15.9 6.71 19.28 8.29 13.21 3.44 9.22 9.71 8.85Z'
+export const IconStar = svg(<path d={STAR} />)
 export const IconStarFilled = function IconStarFilled({ size = 16, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>
-      <path d="M12 3l2.7 5.8 6.3.8-4.6 4.3 1.2 6.1-5.6-3.1-5.6 3.1 1.2-6.1L3 9.6l6.3-.8z" />
+      <path d={STAR} />
     </svg>
   )
 }
+export const IconTrash = svg(
+  <>
+    <path d="M4 7h16" />
+    <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    <path d="M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12" />
+  </>
+)
 export const IconShield = svg(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />)
 export const IconShieldFilled = function IconShieldFilled({ size = 16, className }: IconProps) {
   return (

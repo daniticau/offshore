@@ -22,47 +22,101 @@ body,
   pointer-events: auto;
 }
 
-/*
- * Three rows: widgets, the search pill, an empty mirror of the first. The two
- * 1fr rows stay equal, so the pill sits dead centre however many widgets are
- * stacked, and the widgets stay centred in the space above it — they drift up
- * as you add more rather than crowding the pill.
- */
 .start-stage {
   position: absolute;
   inset: 0;
-  display: grid;
-  /* minmax(0, 1fr) so a tall widget stack scrolls inside its half instead of
-     growing the row and shoving the pill off centre */
-  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
-  justify-items: center;
   z-index: 2;
 }
 
-.start-center {
-  grid-row: 1;
-  align-self: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  width: 100%;
-  max-width: 1040px;
-  max-height: 100%;
-  padding: 16px var(--sp-7) 28px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: none;
+/*
+ * The board. It fills the pane and HomeCanvas divides it into COLS × ROWS
+ * cells, handing the geometry back down as --cw / --ch and --gx / --gy / --gw /
+ * --gh. The element itself never moves — the margins live in the arithmetic —
+ * so entering edit mode is a spring on each widget rather than a reflow.
+ */
+.start-grid {
+  position: absolute;
+  inset: 0;
 }
-.start-center::-webkit-scrollbar {
-  display: none;
+
+/* a dot at each cell corner, so edit mode shows you the grid you are aiming at */
+.start-grid::before {
+  content: '';
+  position: absolute;
+  left: var(--gx);
+  top: var(--gy);
+  width: var(--gw);
+  height: var(--gh);
+  background-image: radial-gradient(circle at 0 0, var(--ink-faint) 1.1px, transparent 1.4px);
+  background-size: var(--cw) var(--ch);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease-out);
+}
+.start.editing .start-grid::before {
+  opacity: 0.22;
+}
+
+/* the two rows the search pill keeps for itself, held on both home screens */
+.grid-band {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: var(--radius-lg);
+  background: var(--glass);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--dur) var(--ease-out),
+    transform var(--dur) var(--ease-out);
+}
+.start.editing .grid-band {
+  opacity: 0.5;
+}
+
+/* the cell a dragged widget will land in */
+.drop-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  border-radius: 26px;
+  border: 1.5px dashed var(--accent);
+  background: var(--glass);
+  opacity: 0.5;
+  pointer-events: none;
+  transition:
+    transform 190ms var(--ease-out),
+    width 190ms var(--ease-out),
+    height 190ms var(--ease-out);
+}
+@supports (corner-shape: squircle) {
+  .drop-ghost {
+    corner-shape: squircle;
+    border-radius: 32px;
+  }
+}
+
+.grid-empty {
+  position: absolute;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: 17px;
+  color: var(--ink-faint);
 }
 
 /* ---------- search pill ---------- */
 
+/* centred on the band it holds — the middle two rows of the board. `top` comes
+   from HomeCanvas, which knows where that band is. */
 .start-search {
-  grid-row: 2;
-  position: relative;
+  position: absolute;
+  left: 50%;
+  z-index: 3;
+  transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -79,6 +133,7 @@ body,
   color: var(--accent-strong);
   transition:
     width var(--dur-slow) var(--ease-out),
+    top var(--dur-slow) var(--ease-out),
     opacity var(--dur-slow) var(--ease-out),
     transform var(--dur-slow) var(--ease-out);
 }
@@ -97,13 +152,6 @@ body,
   color: var(--ink-faint);
   opacity: 0.5;
 }
-/* new tab: no pill, but the same hole in the middle, so the widgets sit
-   exactly where they sit on the zero-tab screen */
-.start-search-gap {
-  grid-row: 2;
-  height: 56px;
-}
-
 /* invisible twin of the input — its width is what the pill grows to */
 .start-measure {
   position: absolute;
@@ -120,13 +168,19 @@ body,
    so it is neither a drop target nor a distraction mid-drag. */
 .start.editing .start-search {
   opacity: 0.26;
-  transform: scale(0.97);
+  transform: translate(-50%, -50%) scale(0.97);
   pointer-events: none;
 }
 
+/*
+ * A widget's type sizes itself off the box it was given — --bw and --bh are the
+ * box in px, set by HomeCanvas. Grow the clock to four cells and the numerals
+ * grow with it; shrink it and they stay inside their card instead of spilling.
+ */
 .clock {
+  --clock-fit: min(var(--display-clock), calc(var(--bh, 200px) * 0.52), calc(var(--bw, 400px) * 0.2));
   font-family: var(--font-display);
-  font-size: var(--display-clock);
+  font-size: calc(var(--clock-fit) * var(--clock-scale, 1));
   font-weight: 400;
   letter-spacing: -0.02em;
   line-height: 1;
@@ -423,41 +477,60 @@ body,
 
 /* ---------- iOS-style widget edit mode ---------- */
 
+/*
+ * A widget is placed by transform alone — one property, so a drop is a single
+ * spring from where your hand left it to the cell it claimed. Nothing else on
+ * the board moves while you drag, which is why a widget goes where you put it.
+ */
 .widget-slot {
-  position: relative;
-  /* the side gutters are where the − badge lives, clear of the card itself */
-  padding: 0 36px;
-  align-self: center;
-  transition: align-self 0s;
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  pointer-events: none;
+  transition:
+    transform 460ms var(--ease-spring),
+    width 320ms var(--ease-out),
+    height 320ms var(--ease-out);
 }
-.widget-slot.align-left {
-  align-self: flex-start;
-}
-.widget-slot.align-center {
-  align-self: center;
-}
-.widget-slot.align-right {
-  align-self: flex-end;
+/* a live window resize is not a move — follow it frame for frame, no spring */
+.start.no-anim .widget-slot,
+.start.no-anim .drop-ghost,
+.start.no-anim .grid-band {
+  transition: none;
 }
 .start.editing .widget-slot {
+  pointer-events: auto;
   cursor: grab;
   touch-action: none;
 }
 .widget-slot.dragging {
+  transition: none;
   cursor: grabbing;
-  opacity: 0.92;
-  filter: drop-shadow(0 8px 22px rgba(0, 0, 0, 0.22));
+  opacity: 0.94;
+  filter: drop-shadow(0 10px 26px rgba(0, 0, 0, 0.24));
+}
+/* the widget being traded places with, so a swap reads as a swap */
+.widget-slot.nudged .widget-inner {
+  background: var(--glass-strong);
+  box-shadow:
+    inset 0 1px 0 var(--glass-inset-hi),
+    0 0 0 1px var(--accent);
 }
 
 /* Reading the page, a widget is just its content on the water. Only in edit mode
    does it grow a squircle around itself — the box is the handle you drag and the
    edge you aim the − at, so it belongs to editing and nowhere else. */
 .widget-inner {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
+  overflow: hidden;
+  padding: 10px 14px;
   border-radius: 28px;
   /* held in both states so revealing the card never nudges the layout */
   border: 0.5px solid transparent;
@@ -465,15 +538,9 @@ body,
   transition:
     background var(--dur) var(--ease-out),
     border-color var(--dur) var(--ease-out),
-    box-shadow var(--dur) var(--ease-out),
-    padding var(--dur-slow) var(--ease-out),
-    min-width var(--dur-slow) var(--ease-out),
-    min-height var(--dur-slow) var(--ease-out);
+    box-shadow var(--dur) var(--ease-out);
 }
 .start.editing .widget-inner {
-  min-width: 250px;
-  min-height: 104px;
-  padding: 20px 28px;
   background: var(--glass);
   border-color: var(--glass-border);
   box-shadow:
@@ -518,8 +585,8 @@ body,
 /* pinned to the card's top-left corner, exactly where the home screen puts it */
 .widget-remove {
   position: absolute;
-  top: -10px;
-  left: 25px;
+  top: -9px;
+  left: -9px;
   transform: scale(0.4);
   opacity: 0;
   pointer-events: none;
@@ -551,26 +618,41 @@ body,
   filter: brightness(1.1);
 }
 
-/* per-widget style picker, tucked under the widget it belongs to */
+/* per-widget size and style picker, floated off the widget it belongs to so it
+   never changes the box's size — the box is a number of cells, and that is that */
 .style-strip {
+  position: absolute;
+  top: calc(100% + 9px);
+  left: 50%;
+  z-index: 8;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 5px;
-  margin-top: 8px;
   padding: 6px;
   border-radius: var(--radius-md);
   background: var(--surface);
   border: 0.5px solid var(--glass-border);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.16);
   animation: strip-in 160ms var(--ease-spring);
+  transform: translateX(-50%);
+}
+/* a widget on the bottom row opens its strip upward instead of off the page */
+.style-strip.above {
+  top: auto;
+  bottom: calc(100% + 9px);
+}
+.strip-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 5px;
 }
 @keyframes strip-in {
   from {
-    transform: translateY(-4px);
+    transform: translateX(-50%) translateY(-4px);
     opacity: 0;
   }
   to {
-    transform: translateY(0);
+    transform: translateX(-50%) translateY(0);
     opacity: 1;
   }
 }
@@ -700,18 +782,17 @@ body,
 
 /* ---------- widget style variants ---------- */
 
+/* the looks scale the fitted size rather than setting their own, so a style and
+   a size never fight over how big the clock is */
 .clock-light {
   font-weight: 200;
   letter-spacing: -0.015em;
 }
 .clock-mono {
+  --clock-scale: 0.82;
   font-family: var(--font-ui);
   font-weight: 300;
-  font-size: calc(var(--display-clock) * 0.78);
   letter-spacing: -0.03em;
-}
-.clock-small {
-  font-size: calc(var(--display-clock) * 0.56);
 }
 
 .greet-plain {
@@ -719,7 +800,6 @@ body,
   font-size: var(--text-lg);
   font-weight: 500;
   color: var(--ink-soft);
-  margin-top: var(--sp-4);
 }
 
 .widget-weather.compact {
@@ -728,4 +808,21 @@ body,
 
 .widget-line.dim {
   color: var(--ink-faint);
+}
+
+/* a two-cell widget is a small square — the type comes down to fit it */
+.widget-slot.narrow .date,
+.widget-slot.narrow .widget-line,
+.widget-slot.narrow .greet-plain,
+.widget-slot.narrow .brief-line {
+  font-size: var(--text-sm);
+}
+.widget-slot.narrow .widget-weather {
+  font-size: 16px;
+}
+.widget-slot.narrow .widget-weather.compact {
+  font-size: 20px;
+}
+.widget-slot.narrow .brief-hilo {
+  display: none;
 }

@@ -20,6 +20,7 @@ const SUBSCRIBABLE = new Set([
   'find:result',
   'downloads:event',
   'devshot:composite',
+  'chrome:page-freeze',
   'spaces:begin-rename',
   'bookmarks:begin-rename',
   'bookmarks:edit-current',
@@ -41,7 +42,10 @@ const api = {
     stop: (id?: number) => invoke('tabs:stop', id),
     reorder: (ids: number[]) => invoke('tabs:reorder', ids),
     toggleSplit: () => invoke('tabs:toggle-split'),
+    splitWith: (tabId: number) => invoke('tabs:split-with', tabId),
+    unsplit: () => invoke('tabs:unsplit'),
     devtools: () => invoke('tabs:devtools'),
+    devtoolsDock: (dock: string) => invoke('tabs:devtools-dock', dock),
     mute: (id: number, muted: boolean) => invoke('tabs:mute', id, muted),
     getState: () => invoke('tabs:get-state')
   },
@@ -51,10 +55,10 @@ const api = {
     rename: (id: string, name: string) => invoke('spaces:rename', id, name),
     setAccent: (id: string, accent: string | null) => invoke('spaces:set-accent', id, accent),
     moveTab: (tabId: number, spaceId: string) => invoke('spaces:move-tab', tabId, spaceId),
+    setProfile: (id: string, profile: string) => invoke('spaces:set-profile', id, profile),
     remove: (id: string) => invoke('spaces:remove', id)
   },
   menu: {
-    appContext: () => invoke('menu:app-context'),
     homeContext: () => invoke('menu:home-context'),
     tabContext: (tabId: number) => invoke('menu:tab-context', tabId),
     spaceContext: (spaceId: string) => invoke('menu:space-context', spaceId),
@@ -74,6 +78,8 @@ const api = {
       invoke('chrome:insets', insets),
     setOverlay: (open: boolean) => invoke('chrome:overlay', open),
     setCollapsed: (collapsed: boolean) => invoke('chrome:set-collapsed', collapsed),
+    /** The page still is up — main may hide the live view now. */
+    freezeAck: () => ipcRenderer.send('chrome:freeze-ack'),
     focusPage: () => invoke('chrome:focus-page'),
     copyText: (text: string) => invoke('chrome:copy-text', text)
   },

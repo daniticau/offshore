@@ -170,12 +170,7 @@ export function installMenu(): void {
             {
               label: 'Toggle Developer Tools',
               accelerator: 'Cmd+Alt+I',
-              click: withActive((w) => {
-                const wc = w.tabs.activeTab?.wc
-                if (!wc) return
-                if (wc.isDevToolsOpened()) wc.closeDevTools()
-                else wc.openDevTools({ mode: 'detach' })
-              })
+              click: withActive((w) => w.tabs.toggleDevTools())
             },
             {
               label: 'Toggle Browser UI DevTools',
