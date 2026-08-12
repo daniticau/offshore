@@ -57,6 +57,25 @@ body,
   opacity: 0.22;
 }
 
+/*
+ * The home screen with the widget board parked (HOME_WIDGETS in shared/types):
+ * the time near the top, out of the way of the search that springs up in the
+ * middle of the pane. Nothing to drag, nothing to edit, nothing to add.
+ */
+.plain-clock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 11%;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.plain-clock .clock {
+  /* no widget box to size against, so it reads off the pane instead */
+  font-size: min(var(--display-clock), 11vw);
+}
+
 /* the two rows the search pill keeps for itself, held on both home screens */
 .grid-band {
   position: absolute;

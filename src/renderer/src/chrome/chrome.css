@@ -317,6 +317,17 @@ body,
 
 /* The nav row starts where the traffic lights end — same clearance the topbar
    uses (gutter + 76px), minus the sidebar's own left padding. */
+/*
+ * The traffic lights are macOS's own buttons, sitting over our chrome. A drag
+ * region *under* them swallows the mouse before AppKit's own tracking sees it,
+ * which is what made them hover late, hover once, or not light up at all. Their
+ * strip is therefore explicitly not draggable — the same deal Chrome makes, where
+ * you can't drag a window by its buttons either.
+ */
+.traffic-inline,
+.traffic-spacer-h {
+  -webkit-app-region: no-drag;
+}
 .traffic-inline {
   width: calc(86px - var(--chrome-pad));
   flex-shrink: 0;

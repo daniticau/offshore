@@ -53,11 +53,12 @@ skips.
   state with live block count, popup permissions, and a one-click "clear data for this site"
 - **Split view** — two tabs side by side in the content area; the toolbar button (or the
   three-dots menu) splits the active tab with its neighbour, and closing either half exits
-- **Widget new tab** — time and date by default; greeting, weather, hourly forecast, sunrise &
-  sunset, and moon phase are opt-in from onboarding, Settings, or a right-click on the page.
-  The home screen *is* the background: the search sits in front of it and can be put away
-  (click past it, Escape, or the ✕ on the New Tab row) leaving just the widgets, without
-  closing the tab. Digits roll softly as the clock turns
+- **A new tab is the time and the search** — the clock over the waves, with the search bar
+  springing up in front of it. Put the search away (click past it, Escape, or the ✕ on the New
+  Tab row) and the page stays exactly where it is; the tab goes nowhere. Digits roll softly as
+  the clock turns. The widget board — drag-to-place edit mode, the + tray, weather, forecast,
+  sunrise/sunset, moon phase — is parked behind `HOME_WIDGETS` in `src/shared/types.ts`: intact,
+  switched off, one flag away from coming back
 - **Living waves** — both wave styles drift continuously in one direction at layered speeds,
   and the water parts away from your cursor. Closing the last tab lands you here instead of
   closing the window — quitting is an explicit act

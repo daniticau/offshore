@@ -22,7 +22,7 @@ import type {
   TabInfo,
   TabsState
 } from '@shared/types'
-import { SEARCH_ENGINES } from '@shared/types'
+import { HOME_WIDGETS, SEARCH_ENGINES } from '@shared/types'
 import { adblock } from './adblock'
 import { extensionsRef } from './extensions-ref'
 import { passwordVault } from './passwords'
@@ -1313,7 +1313,7 @@ export class TabManager {
     }
 
     // The new-tab page is widget-based — offer its controls right here
-    if (toDisplayUrl(wc.getURL()) === 'offshore://start') {
+    if (HOME_WIDGETS && toDisplayUrl(wc.getURL()) === 'offshore://start') {
       add({
         label: 'Edit Widgets…',
         click: () => wc.send('widgets:edit')

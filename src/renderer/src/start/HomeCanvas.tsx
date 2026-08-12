@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { BriefWeather, NewTabWidgets, Settings, WidgetLayout } from '@shared/types'
-import { DEFAULT_SETTINGS, resolveAccentColors, weatherCondition } from '@shared/types'
+import { DEFAULT_SETTINGS, HOME_WIDGETS, resolveAccentColors, weatherCondition } from '@shared/types'
 import { ClassicWaves } from '../theme/ClassicWaves'
 import { moonPhase } from '../theme/moon'
 import { DitheredWaves } from '../theme/DitheredWaves'
@@ -425,7 +425,7 @@ export function HomeCanvas({
   }, [showSearch])
 
   useEffect(() => {
-    if (editSignal > 0) setEditing(true)
+    if (editSignal > 0 && HOME_WIDGETS) setEditing(true)
   }, [editSignal])
 
   useEffect(() => {
@@ -809,7 +809,7 @@ export function HomeCanvas({
 
   // press and hold empty space to start editing, like the home screen
   const startHold = (e: React.PointerEvent): void => {
-    if (editing) return
+    if (editing || !HOME_WIDGETS) return
     if ((e.target as HTMLElement).closest('.widget-slot, .start-search, .we-done, .we-tray')) return
     holdTimer.current = setTimeout(() => setEditing(true), 550)
   }
@@ -878,14 +878,23 @@ export function HomeCanvas({
             ['--gh' as string]: `${boardH}px`
           }}
         >
-          <div className="grid-band" style={bandStyle} />
+          {/* With the board parked, the home screen is the time and the search
+              in front of it — the clock takes the top and stays out of the way. */}
+          {!HOME_WIDGETS && (
+            <div className="plain-clock">
+              <SlidingClock time={time} className="clock-serif" />
+            </div>
+          )}
+
+          {HOME_WIDGETS && <div className="grid-band" style={bandStyle} />}
 
           {/* half a step back while the search is in front of it */}
           {searchPill && <div className={`start-dim ${showSearch ? 'on' : ''}`} />}
 
-          {drag && <div className="drop-ghost" style={boxStyle(drag.target)} />}
+          {HOME_WIDGETS && drag && <div className="drop-ghost" style={boxStyle(drag.target)} />}
 
-          {board.w > 0 &&
+          {HOME_WIDGETS &&
+            board.w > 0 &&
             enabledKeys.map((key, i) => {
               const rect = placement.get(key)
               if (!rect) return null
@@ -969,7 +978,7 @@ export function HomeCanvas({
               )
             })}
 
-          {enabledKeys.length === 0 && editing && (
+          {HOME_WIDGETS && enabledKeys.length === 0 && editing && (
             <div className="grid-empty" style={{ top: padTop + 3 * cellH }}>
               A perfectly calm, blank page. Add something below.
             </div>
@@ -1019,22 +1028,25 @@ export function HomeCanvas({
         </div>
       </div>
 
+      {/* the tray is measured even when it has nothing in it — the board's bottom
+          margin is derived from its height (see padBottom) */}
       <div className={`we-tray ${editing ? 'on' : ''}`} ref={trayRef} aria-hidden={!editing}>
-        {availableKeys.length > 0 ? (
-          availableKeys.map((key) => (
-            <button
-              key={key}
-              className="we-tray-add"
-              tabIndex={editing ? 0 : -1}
-              onClick={() => addWidget(key)}
-            >
-              <span className="we-tray-badge">+</span>
-              {WIDGET_LABELS[key]}
-            </button>
-          ))
-        ) : (
-          <span className="we-tray-hint">Drag to move · tap a widget for its size and looks</span>
-        )}
+        {HOME_WIDGETS &&
+          (availableKeys.length > 0 ? (
+            availableKeys.map((key) => (
+              <button
+                key={key}
+                className="we-tray-add"
+                tabIndex={editing ? 0 : -1}
+                onClick={() => addWidget(key)}
+              >
+                <span className="we-tray-badge">+</span>
+                {WIDGET_LABELS[key]}
+              </button>
+            ))
+          ) : (
+            <span className="we-tray-hint">Drag to move · tap a widget for its size and looks</span>
+          ))}
       </div>
 
       {settings.appearance?.waves !== false &&

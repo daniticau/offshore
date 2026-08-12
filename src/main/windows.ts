@@ -135,11 +135,19 @@ export class OffshoreWindow implements TabHost {
     })
     this.win.on('resized', () => this.onTabsChanged())
     this.win.on('moved', () => this.onTabsChanged())
-    // The content size changes a beat after the window does on the way into and
-    // out of full screen; without these the page view keeps the old bounds and
-    // leaves a live strip of chrome showing along an edge.
-    this.win.on('enter-full-screen', () => this.tabs.layout())
-    this.win.on('leave-full-screen', () => this.tabs.layout())
+    /*
+     * Zoom, un-zoom and full screen all animate the frame, and the content size
+     * arrives a beat after the event does. The page view is ours to move by hand
+     * — a native one would follow the window itself — so every one of these
+     * transitions gets a layout now and another once the frame has settled.
+     * Without the second pass an un-zoom can leave the view at the size the
+     * window used to be, which reads as a glitch along the edges.
+     */
+    this.win.on('maximize', () => this.settleLayout())
+    this.win.on('unmaximize', () => this.settleLayout())
+    this.win.on('restore', () => this.settleLayout())
+    this.win.on('enter-full-screen', () => this.settleLayout())
+    this.win.on('leave-full-screen', () => this.settleLayout())
 
     const dev = devRendererUrl()
     if (dev) {
@@ -218,6 +226,14 @@ export class OffshoreWindow implements TabHost {
   setInsets(insets: Insets): void {
     this.insets = insets
     this.tabs.layout()
+  }
+
+  /** Lay the views out now, and again when the window frame stops moving. */
+  private settleLayout(): void {
+    this.tabs.layout()
+    setTimeout(() => {
+      if (!this.win.isDestroyed()) this.tabs.layout()
+    }, 260)
   }
 
   /**

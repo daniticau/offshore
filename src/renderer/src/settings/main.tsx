@@ -14,7 +14,14 @@ import type {
   ThemePref,
   ToolbarDensity
 } from '@shared/types'
-import { ACCENTS, DEFAULT_SETTINGS, SEARCH_ENGINES, accentColors, resolveAccentColors } from '@shared/types'
+import {
+  ACCENTS,
+  DEFAULT_SETTINGS,
+  HOME_WIDGETS,
+  SEARCH_ENGINES,
+  accentColors,
+  resolveAccentColors
+} from '@shared/types'
 import { Favicon } from '../theme/Favicon'
 import { moonPhase, timezoneCity } from '../theme/moon'
 import { useIsDark } from '../theme/useTheme'
@@ -441,6 +448,38 @@ function NewTabSection({ settings, patch }: { settings: Settings; patch: (p: Par
         if (r && r[0]) pickLocation(r[0])
       })
       .finally(() => setLocating(false))
+  }
+
+  /*
+   * The widget board is parked (HOME_WIDGETS in shared/types), so there is
+   * nothing here to edit: the new tab is the time and the search in front of it.
+   * The editor below is untouched and comes back with the flag.
+   */
+  if (!HOME_WIDGETS) {
+    return (
+      <section>
+        <h2>New Tab</h2>
+        <div className="card we-card">
+          <div
+            className="we-preview"
+            style={{ background: `linear-gradient(180deg, ${acc.tintTop} 0%, ${acc.tintBottom} 100%)` }}
+          >
+            <div className="we-widget">
+              <div className="we-clock">{time}</div>
+            </div>
+          </div>
+          <div className="row">
+            <div className="row-title">
+              The time, and the search
+              <div className="row-sub">
+                A new tab is the clock over the waves, with the search bar springing up in front
+                of it. Click past the search (or press Escape) and the page stays where it is.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    )
   }
 
   return (

@@ -13,6 +13,7 @@ import {
 import {
   ACCENTS,
   ACTION_DEFS,
+  HOME_WIDGETS,
   SEARCH_ENGINES,
   type AccentId,
   type ActionId,
@@ -372,8 +373,13 @@ export function setupIpc(): void {
     const w = chromeWindow(e)
     if (!w) return
     Menu.buildFromTemplate([
-      { label: 'Edit Widgets…', click: () => w.sendToChrome('widgets:edit') },
-      { type: 'separator' },
+      // parked with the widget board itself — see HOME_WIDGETS
+      ...(HOME_WIDGETS
+        ? [
+            { label: 'Edit Widgets…', click: () => w.sendToChrome('widgets:edit') },
+            { type: 'separator' as const }
+          ]
+        : []),
       { label: 'New Tab', accelerator: 'Cmd+T', click: () => w.openNewTab() },
       { label: 'Settings…', accelerator: 'Cmd+,', click: () => w.tabs.createTab(internalPageUrl('settings')) }
     ]).popup({ window: w.win })

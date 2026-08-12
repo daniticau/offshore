@@ -710,6 +710,21 @@ export const ADBLOCK_LIST_URLS: Record<string, string[]> = {
   annoyances: ['https://secure.fanboy.co.nz/fanboy-annoyance.txt']
 }
 
+/**
+ * Is the widget board on the home screen?
+ *
+ * Parked on 2026-08-11 at the user's request: the home screen is the time at the
+ * top and the search that springs up in front of it, and nothing else. Every
+ * widget — the board, the drag-to-place edit mode, the + tray, the size and
+ * style strips, the Settings gallery, the Edit Widgets menu items — is still here
+ * and still works; it is only switched off. Set this to `true` to bring the whole
+ * thing back exactly as it was, and the saved `newTabWidgets` layouts with it.
+ *
+ * Typed as boolean on purpose, so the parked branches stay type-checked rather
+ * than being narrowed away as dead code.
+ */
+export const HOME_WIDGETS: boolean = false
+
 export const DEFAULT_SETTINGS: Settings = {
   tabOrientation: 'vertical',
   searchEngine: 'google',
