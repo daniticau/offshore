@@ -3,6 +3,7 @@ import type {
   BookmarkNode,
   PageFreezeFrame,
   PasswordOffer,
+  Rect,
   Settings,
   SpaceInfo,
   TabsState
@@ -13,7 +14,7 @@ import { accentVars, useIsDark } from '../theme/useTheme'
 import { offshore, prettyHost } from './api'
 import { PasswordDialog } from './PasswordDialog'
 import { playSound, setSoundsEnabled } from './sounds'
-import { Sidebar, TopBar } from './Tabs'
+import { DevToolsHeader, Sidebar, TopBar } from './Tabs'
 
 interface DevshotPayload {
   dataUrl: string
@@ -41,38 +42,85 @@ export interface FindState {
  * The chrome draws under the page views, so a panel that overhangs the content
  * can only be seen once the view is hidden. Main sends a picture of what was
  * there; we paint it in the same place and tell main the moment it is really up,
- * so the live view only steps aside behind something identical to itself.
+ * so the live view only steps aside behind something identical to itself. Main
+ * drops the pictures again only after the view is back, so neither end of the
+ * swap has a frame with nothing in it.
+ *
+ * A frame with no picture is the home screen, which the chrome can simply draw:
+ * same widgets, same settings, same water off the same clock. That is not an
+ * optimisation, it is the point — a photograph of the sea is a sea that has
+ * stopped, and the waves have no business freezing because you started typing.
  */
-function PageFreeze({ frames }: { frames: PageFreezeFrame[] }): React.JSX.Element | null {
+function PageFreeze({
+  frames,
+  settings,
+  onPatch
+}: {
+  frames: PageFreezeFrame[]
+  settings: Settings
+  onPatch(patch: Partial<Settings>): void
+}): React.JSX.Element | null {
   const [loaded, setLoaded] = useState(0)
+  const stills = frames.filter((f) => f.dataUrl !== null).length
   useEffect(() => setLoaded(0), [frames])
   useEffect(() => {
-    if (!frames.length || loaded < frames.length) return
-    // two frames: one to lay the image out, one to be sure it has been painted
-    const raf = requestAnimationFrame(() => requestAnimationFrame(() => offshore.chrome.freezeAck()))
+    if (!frames.length || loaded < stills) return
+    /*
+     * Three frames: one to lay things out, one for the home screen to measure
+     * its board and place its widgets, one to be sure all of it has been
+     * painted. The photographs need only the first two; the third costs nothing
+     * anyone can see and is the difference between a stand-in that is ready and
+     * one that is a blank gradient for a beat.
+     */
+    let raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(() => {
+        raf = requestAnimationFrame(() => offshore.chrome.freezeAck())
+      })
+    })
     return () => cancelAnimationFrame(raf)
-  }, [frames, loaded])
+  }, [frames, loaded, stills])
   if (!frames.length) return null
   return (
     <>
-      {frames.map((f) => (
-        <img
-          key={f.tabId}
-          className="page-freeze"
-          src={f.dataUrl}
-          alt=""
-          style={{ left: f.bounds.x, top: f.bounds.y, width: f.bounds.width, height: f.bounds.height }}
-          onLoad={() => setLoaded((n) => n + 1)}
-          onError={() => setLoaded((n) => n + 1)}
-        />
-      ))}
+      {frames.map((f) => {
+        const box = {
+          left: f.bounds.x,
+          top: f.bounds.y,
+          width: f.bounds.width,
+          height: f.bounds.height
+        }
+        return f.dataUrl === null ? (
+          <div key={f.tabId} className="page-freeze page-freeze-home" style={box}>
+            <ChromeHome settings={settings} onPatch={onPatch} standIn />
+          </div>
+        ) : (
+          <img
+            key={f.tabId}
+            className="page-freeze"
+            src={f.dataUrl}
+            alt=""
+            style={box}
+            onLoad={() => setLoaded((n) => n + 1)}
+            onError={() => setLoaded((n) => n + 1)}
+          />
+        )
+      })}
     </>
   )
 }
 
 /** The content view's backdrop card — and the single source of truth for insets. */
-function ContentFrame({ children }: { children?: React.ReactNode }): React.JSX.Element {
+function ContentFrame({
+  children,
+  onRect
+}: {
+  children?: React.ReactNode
+  /** The card in window coordinates, for anything the chrome draws over it. */
+  onRect?: (rect: Rect) => void
+}): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
+  const rectRef = useRef(onRect)
+  rectRef.current = onRect
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
@@ -86,6 +134,12 @@ function ContentFrame({ children }: { children?: React.ReactNode }): React.JSX.E
           left: Math.round(r.left),
           right: Math.round(window.innerWidth - r.right),
           bottom: Math.round(window.innerHeight - r.bottom)
+        })
+        rectRef.current?.({
+          x: Math.round(r.left),
+          y: Math.round(r.top),
+          width: Math.round(r.width),
+          height: Math.round(r.height)
         })
       })
     }
@@ -107,35 +161,44 @@ function ContentFrame({ children }: { children?: React.ReactNode }): React.JSX.E
 }
 
 /**
- * The zero-tab home screen: what the window shows when every tab is closed.
- * It is the new tab page — same component, same widgets, same settings — so
- * editing widgets here and editing them on a new tab are one thing. The window
- * only closes when the human closes it.
+ * The home screen, drawn by the chrome. It shows up in two situations, and it is
+ * the same screen in both — same component, same widgets, same settings — so
+ * editing the widgets on any of them edits all of them.
  *
- * The one difference from a new tab is the search: there is none in front of
- * this one. Nothing is open, so there is nothing to search from — the omnibox is
- * right there when you want to go somewhere, and opening a tab is what puts a
- * search panel in front of you.
+ * **Every tab closed.** The window has nothing to show, so it shows this. There
+ * is no search in front of it: nothing is open, so there is nothing to search
+ * from, and the address bar is right there when you want to go somewhere.
+ *
+ * **Standing in for a new tab.** A panel that overhangs the page needs the room
+ * the page view is sitting in, and the chrome paints under those views, so the
+ * view has to step aside — normally behind a photograph of itself, taken the
+ * instant before. A photograph of the home screen is a photograph of the sea
+ * holding still, which is what you used to get the moment you touched the
+ * address bar on a new tab. There is no need for one: the chrome can draw that
+ * page itself, live, waves and all. So it does, and the water keeps moving while
+ * you type. It is a stand-in, though, not a page — it takes no clicks.
  */
-function EmptyHome({
+function ChromeHome({
   settings,
   onPatch,
-  editSignal
+  editSignal = 0,
+  standIn
 }: {
   settings: Settings
   onPatch(patch: Partial<Settings>): void
-  editSignal: number
+  editSignal?: number
+  standIn?: boolean
 }): React.JSX.Element {
   return (
     <HomeCanvas
-      className="no-drag"
+      className={standIn ? 'stand-in' : 'no-drag'}
       settings={settings}
       onPatch={onPatch}
       onSubmit={(input) => void offshore.tabs.create(input)}
       fetchWeather={() => offshore.brief.weather()}
       searchPill={false}
-      editSignal={editSignal}
-      onContextMenu={() => void offshore.menu.homeContext()}
+      editSignal={standIn ? 0 : editSignal}
+      onContextMenu={standIn ? undefined : () => void offshore.menu.homeContext()}
     />
   )
 }
@@ -168,6 +231,8 @@ export function App(): React.JSX.Element {
   const [appMenuOpen, setAppMenuOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [freeze, setFreeze] = useState<PageFreezeFrame[]>([])
+  /** The page card in window coordinates — what the chrome draws over it needs it. */
+  const [contentRect, setContentRect] = useState<Rect | null>(null)
   const [passwordOffer, setPasswordOffer] = useState<PasswordOffer | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [collapsing, setCollapsing] = useState(false)
@@ -544,26 +609,34 @@ export function App(): React.JSX.Element {
   }, [])
 
   /**
-   * A new tab hands the cursor to its own search, ready to type into.
+   * A new tab. Main decides where the cursor lands afterwards, because that is
+   * a question about the layout: the page's own pill in vertical, the address
+   * bar above the page in horizontal.
    *
-   * If the tab you are on is already a blank one whose search you put away, that
-   * search is what you are asking for — a second empty tab would be no use to
-   * anyone. So the button conjures it back instead of making another tab.
+   * Vertical has one wrinkle. Its new tabs have no row of their own — the New
+   * Tab button in the sidebar *is* that tab while its search is up — so pressing
+   * it again on a blank tab whose search you put away is a request for the
+   * search back, not for a second empty tab nobody can see.
+   *
+   * Horizontal has no such thing. Every tab is a tab in the strip and + means
+   * one more, every single time, the way it does in Chrome.
    */
   const newTab = useCallback(() => {
-    const { tabsState: ts } = stateRef.current
-    const active = ts.tabs.find((t) => t.id === ts.activeTabId)
-    const blank =
-      active &&
-      active.spaceId === ts.activeSpaceId &&
-      active.displayUrl.startsWith('offshore://start') &&
-      !active.canGoBack &&
-      !active.canGoForward
-    if (blank && !active.homeSearch) {
-      void offshore.home.setSearch(true, active.id)
-      return
+    const { tabsState: ts, settings: st } = stateRef.current
+    if (st.tabOrientation !== 'horizontal') {
+      const active = ts.tabs.find((t) => t.id === ts.activeTabId)
+      const blank =
+        active &&
+        active.spaceId === ts.activeSpaceId &&
+        active.displayUrl.startsWith('offshore://start') &&
+        !active.canGoBack &&
+        !active.canGoForward
+      if (blank && !active.homeSearch) {
+        void offshore.home.setSearch(true, active.id)
+        return
+      }
     }
-    void offshore.tabs.create().then(() => void offshore.chrome.focusPage())
+    void offshore.tabs.create()
   }, [])
 
   // ---- find bar ----
@@ -733,14 +806,21 @@ export function App(): React.JSX.Element {
       {mode === 'vertical' ? <Sidebar {...chromeProps} /> : <TopBar {...chromeProps} />}
 
       {/* Rounded backdrop + shadow behind the web content view; also the insets source */}
-      <ContentFrame>
-        {tabsState.tabs.filter((t) => t.spaceId === tabsState.activeSpaceId).length === 0 && (
-          <EmptyHome settings={settings} onPatch={patchSettings} editSignal={homeEditSignal} />
+      <ContentFrame onRect={setContentRect}>
+        {spaceIsEmpty && (
+          <ChromeHome settings={settings} onPatch={patchSettings} editSignal={homeEditSignal} />
         )}
       </ContentFrame>
 
       {/* stands in for the page views while a panel needs their space */}
-      <PageFreeze frames={freeze} />
+      <PageFreeze frames={freeze} settings={settings} onPatch={patchSettings} />
+
+      {/* the docked DevTools panel's own title bar, ✕ and all */}
+      <DevToolsHeader
+        tabsState={tabsState}
+        contentRect={contentRect}
+        overlayOpen={overlayOpen}
+      />
 
       {/* one dialog, in the middle, in both layouts */}
       {passwordOffer && (

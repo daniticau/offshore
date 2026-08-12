@@ -156,7 +156,9 @@ export function DitheredWaves({ colors, height = 190, className }: DitheredWaves
       for (const band of bands) {
         const [r, g, b, a] = band.rgba
         const [fr, fg, fb] = band.foamRgb
-        const drift = tSec * band.speed
+        // wrapped at the pattern's own period: same water, small numbers (the
+        // clock is the wall clock, so the raw product is enormous)
+        const drift = (tSec * band.speed) % W
         for (let x = 0; x < W; x++) {
           // sample the surface in drifting pattern space; the cursor lives in
           // screen px, so the water is shoved aside around the pointer

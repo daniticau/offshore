@@ -1,5 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react'
-import type { BookmarkNode, DownloadEntry, SpaceInfo, Settings, TabInfo, TabsState } from '@shared/types'
+import type {
+  BookmarkNode,
+  DownloadEntry,
+  Rect,
+  SpaceInfo,
+  Settings,
+  TabInfo,
+  TabsState
+} from '@shared/types'
+import { DEVTOOLS_HEAD, devtoolsPanelRect } from '@shared/types'
 import { offshore } from './api'
 import type { DownloadToast, FindState } from './App'
 import { BookmarkEditPopover, BookmarksBar, BookmarksSection } from './Bookmarks'
@@ -10,7 +19,6 @@ import { SpaceSwitcher } from './SpaceSwitcher'
 import { AppMenu, ProfileMenu } from './Menus'
 import {
   IconAlert,
-  IconArrowUpRight,
   IconAudio,
   IconBack,
   IconClose,
@@ -23,7 +31,6 @@ import {
   IconMuted,
   IconPlus,
   IconReload,
-  IconSidebar,
   IconSlop,
   IconSplit,
   IconStar,
@@ -140,74 +147,90 @@ function NavButtons({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element {
 
 /**
  * Chromium's star, and Chromium's rules for it: hollow until the page is saved,
- * then filled in. In the toolbar it holds its place on a page that can't be
- * bookmarked (greyed out, like Chrome); inside the sidebar pill it just goes.
+ * then filled in. It lives inside the address bar, at the trailing edge, and a
+ * page with no address worth saving simply doesn't get one — the bar it sits in
+ * is already telling you there is nothing there.
  */
 function StarButton({
   activeTab,
-  onEditBookmark,
-  size = 14,
-  toolbar
-}: Pick<ChromeProps, 'activeTab' | 'onEditBookmark'> & {
-  size?: number
-  toolbar?: boolean
-}): React.JSX.Element | null {
+  onEditBookmark
+}: Pick<ChromeProps, 'activeTab' | 'onEditBookmark'>): React.JSX.Element | null {
   const usable =
     !!activeTab && /^https?:/.test(activeTab.url) && !activeTab.displayUrl.startsWith('offshore://')
-  if (!usable && !toolbar) return null
-  const starred = usable && activeTab.isBookmarked
+  if (!usable) return null
+  const starred = activeTab.isBookmarked
   return (
     <button
       className={`chrome-btn star ${starred ? 'starred' : ''}`}
-      disabled={!usable}
       onClick={() => {
-        if (!usable) return
         if (starred) void offshore.bookmarks.toggle(activeTab.url, activeTab.title)
         else onEditBookmark()
       }}
-      title={
-        !usable
-          ? 'Nothing here to bookmark'
-          : starred
-            ? 'Remove bookmark'
-            : 'Bookmark this page (⌘D)'
-      }
+      title={starred ? 'Remove bookmark' : 'Bookmark this page (⌘D)'}
     >
-      {starred ? <IconStarFilled size={size} /> : <IconStar size={size} />}
+      {starred ? <IconStarFilled size={14} /> : <IconStar size={14} />}
     </button>
   )
 }
 
 /**
- * DevTools, and the button that moves them. They dock beside the page by
- * default, so the second button is always the *other* place they could be —
- * out to a window when docked, back to the side when floating.
+ * DevTools: one button, which opens them and shuts them again.
+ *
+ * There used to be a second one for sending the panel out to a window of its
+ * own. It is gone — where DevTools live is a setting you choose once, not a
+ * thing to keep flipping mid-debug, and a toolbar button that changes what it
+ * does depending on the last time you pressed it is a button you have to read
+ * before every press. The panel closes from its own ✕ now, or from here.
  */
-function DevToolsButtons({
-  tabsState,
-  settings
-}: Pick<ChromeProps, 'tabsState' | 'settings'>): React.JSX.Element {
+function DevToolsButton({ tabsState }: Pick<ChromeProps, 'tabsState'>): React.JSX.Element {
   const dt = tabsState.devtools
-  const backTo = settings.devtoolsDock === 'window' ? 'right' : settings.devtoolsDock
   return (
-    <>
+    <button
+      className={`chrome-btn ${dt ? 'active' : ''}`}
+      title={dt ? 'Close Developer Tools (⌥⌘I)' : 'Developer Tools (⌥⌘I)'}
+      onClick={() => void offshore.tabs.devtools()}
+    >
+      <IconCode size={16} />
+    </button>
+  )
+}
+
+/**
+ * The strip along the top of a docked DevTools panel — its name, and the ✕ that
+ * shuts it, where Chromium and Helium both keep one.
+ *
+ * The panel itself is a view of the front-end, and views paint over the chrome,
+ * so there is nowhere inside it for a button of ours to go. Main hands the strip
+ * back instead: the view starts DEVTOOLS_HEAD pixels lower down, and what shows
+ * through is this.
+ */
+export function DevToolsHeader({
+  tabsState,
+  contentRect,
+  overlayOpen
+}: Pick<ChromeProps, 'tabsState'> & {
+  contentRect: Rect | null
+  /** A panel has the content area; the panel this heads is off screen with it. */
+  overlayOpen: boolean
+}): React.JSX.Element | null {
+  const dt = tabsState.devtools
+  if (!dt?.docked || !contentRect || tabsState.contentFullscreen || overlayOpen) return null
+  const panel = devtoolsPanelRect(contentRect, dt.side)
+  if (!panel) return null
+  return (
+    <div
+      className={`devtools-head devtools-head-${dt.side} no-drag`}
+      style={{ left: panel.x, top: panel.y, width: panel.width, height: DEVTOOLS_HEAD }}
+    >
+      <span className="devtools-head-title">DevTools</span>
       <button
-        className={`chrome-btn ${dt ? 'active' : ''}`}
-        title={dt ? 'Close Developer Tools (⌥⌘I)' : 'Developer Tools (⌥⌘I)'}
+        className="chrome-btn"
+        title="Close Developer Tools (⌥⌘I)"
         onClick={() => void offshore.tabs.devtools()}
       >
-        <IconCode size={16} />
+        <IconClose size={12} />
       </button>
-      {dt && (
-        <button
-          className="chrome-btn"
-          title={dt.docked ? 'Move DevTools to its own window' : 'Dock DevTools beside the page'}
-          onClick={() => void offshore.tabs.devtoolsDock(dt.docked ? 'window' : backTo)}
-        >
-          {dt.docked ? <IconArrowUpRight size={15} /> : <IconSidebar size={15} />}
-        </button>
-      )}
-    </>
+    </div>
   )
 }
 
@@ -224,9 +247,10 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
       {activeTab && (
         <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
       )}
-      {/* the top toolbar carries its own star, where Chromium keeps it; the
-          sidebar has no toolbar to put one in, so its pill keeps this one */}
-      {!props.compact && <StarButton {...props} />}
+      {/* The star belongs to the address, so it rides the address bar in both
+          layouts: the far right of it, which is where every browser on this
+          machine keeps one and where your hand already goes to save a page. */}
+      <StarButton {...props} />
     </>
   )
   return (
@@ -847,7 +871,7 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
           {props.downloadsPanelOpen && <DownloadsPanel onClose={() => props.onToggleDownloadsPanel(false)} />}
         </div>
         <SplitButton tabsState={tabsState} />
-        <DevToolsButtons tabsState={tabsState} settings={props.settings} />
+        <DevToolsButton tabsState={tabsState} />
         <button
           className="chrome-btn"
           title="Settings (⌘,)"
@@ -1072,9 +1096,9 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
             </button>
             {props.downloadsPanelOpen && <DownloadsPanel onClose={() => props.onToggleDownloadsPanel(false)} />}
           </div>
-          {/* Chromium's star lives here, and the bookmarks bar moved to the ⋮ menu */}
-          <StarButton activeTab={activeTab} onEditBookmark={props.onEditBookmark} size={17} toolbar />
-          <DevToolsButtons tabsState={tabsState} settings={props.settings} />
+          {/* the star used to sit out here; it lives in the address bar now,
+              at the trailing edge, which is the same place Chromium keeps it */}
+          <DevToolsButton tabsState={tabsState} />
           <ProfileButton
             tabsState={tabsState}
             accentFor={props.accentFor}

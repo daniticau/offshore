@@ -16,11 +16,24 @@ export interface WaveCursor {
 }
 
 /**
- * Seconds on the page clock. Shared by every renderer so a remount (a colour
- * change, a resize, a parent re-render) resumes exactly where it left off
- * instead of snapping the drift back to zero.
+ * The water is one ocean, and every screen showing it is a window onto the same
+ * one — so the clock behind it is the wall clock, not the page's own.
+ *
+ * `performance.now()` counts from whenever *this document* started, which makes
+ * every new tab start its swell from zero: flick between two of them and the
+ * waves jump, because they are two different oceans an hour apart. Reading the
+ * wall clock instead means a tab opened now and one opened this morning are
+ * drawing the same instant of the same water, and switching between them shows
+ * no seam at all. It still survives a remount, which is what the page clock was
+ * for: `timeOrigin + now()` is the same number either side of it.
+ *
+ * The epoch keeps the figure small enough that a float still has room for the
+ * fraction of a second the drift is actually made of.
  */
-export const waveTime = (): number => performance.now() / 1000
+const WAVE_EPOCH = Date.UTC(2026, 0, 1)
+
+export const waveTime = (): number =>
+  (performance.timeOrigin + performance.now() - WAVE_EPOCH) / 1000
 
 export function trackWaveCursor(host: HTMLElement): { current: WaveCursor; detach: () => void } {
   const current: WaveCursor = { x: -10_000, strength: 0 }

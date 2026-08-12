@@ -22,7 +22,13 @@ import type {
   TabInfo,
   TabsState
 } from '@shared/types'
-import { HOME_WIDGETS, SEARCH_ENGINES } from '@shared/types'
+import {
+  DEVTOOLS_GAP,
+  DEVTOOLS_HEAD,
+  HOME_WIDGETS,
+  SEARCH_ENGINES,
+  devtoolsPanelRect
+} from '@shared/types'
 import { adblock } from './adblock'
 import { extensionsRef } from './extensions-ref'
 import { passwordVault } from './passwords'
@@ -52,9 +58,14 @@ export { TAB_PARTITION, tabSession } from './sessions'
 const COLD_SWAP_MS = 300
 /** Frames of slack between "the document is ready" and "the compositor has it". */
 const PAINT_GRACE_MS = 40
-/** Docked DevTools take a third of the content area, within these limits. */
-const DEVTOOLS_MIN = 260
-const DEVTOOLS_MAX = 720
+/**
+ * The home screen, in whichever form the url takes (offshore://start in a build,
+ * a dev server's start.html while developing). The one page the chrome can draw
+ * for itself, and the one that paints a frame later than it parses.
+ */
+export function isHomePage(url: string): boolean {
+  return !!url && isInternalUrl(url) && toDisplayUrl(url).startsWith('offshore://start')
+}
 
 /** DevTools living inside the window: our view, so our bounds and our rules. */
 interface DockedDevTools {
@@ -128,6 +139,18 @@ export class Tab {
   /** True once this tab's document has been parsed at least once — see whenReady. */
   ready = false
   private readyWaiters: Array<() => void> = []
+  /**
+   * Hold "ready" back until the page says it is really on screen.
+   *
+   * A parsed document is a good enough stand-in for a painted one on the web,
+   * where the markup arrives with the pixels in it. The home screen is the
+   * opposite: `dom-ready` fires on an empty <div id="root">, so a tab swapped in
+   * on that signal lands a few frames before React has drawn anything — and what
+   * shows in those frames is the view's own backdrop, which is the black flash
+   * you get opening a new tab from a new tab. So the home page reports its first
+   * paint (see home:painted) and that is what opens this gate.
+   */
+  private paintGate = false
 
   constructor(partition: string) {
     this.partition = partition
@@ -171,9 +194,26 @@ export class Tab {
     this.view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#10181E' : '#FFFFFF')
   }
 
+  /** Wait for this page's own first-paint signal rather than for `dom-ready`. */
+  gateOnPaint(): void {
+    this.paintGate = true
+    this.ready = false
+  }
+
+  /** The page has drawn its first frame — whatever else we were waiting for. */
+  markPainted(): void {
+    this.paintGate = false
+    this.markReady()
+  }
+
+  /** Whatever is loading now, it isn't the home screen; the usual signals apply. */
+  ungate(): void {
+    this.paintGate = false
+  }
+
   /** The document has been parsed; the compositor still needs a frame or two. */
   markReady(): void {
-    if (this.ready) return
+    if (this.ready || this.paintGate) return
     this.ready = true
     const waiters = this.readyWaiters
     this.readyWaiters = []
@@ -311,6 +351,8 @@ export class TabManager {
         console.warn('[extensions] addTab failed:', err)
       }
     }
+    // the home screen paints a beat after it parses — wait for the pixels
+    if (isHomePage(target)) tab.gateOnPaint()
     void tab.wc.loadURL(target).catch(() => {})
     if (opts.activate !== false) this.activateTab(tab.id)
     this.pushState()
@@ -444,6 +486,7 @@ export class TabManager {
       return
     }
     tab.loadError = undefined
+    if (isHomePage(url)) tab.gateOnPaint()
     void tab.wc.loadURL(url).catch(() => {})
     tab.wc.focus()
   }
@@ -669,17 +712,7 @@ export class TabManager {
     if (!dt || dt.view.webContents.isDestroyed()) return null
     if (this.host.isContentFullscreen()) return null
     if (dt.tabId !== this.activeTabId && !this.inSplit(dt.tabId)) return null
-    const area = this.contentArea()
-    if (dt.side === 'bottom') {
-      const wanted = Math.min(DEVTOOLS_MAX, Math.max(DEVTOOLS_MIN, Math.round(area.height / 3)))
-      const height = Math.min(wanted, area.height - DEVTOOLS_MIN)
-      if (height <= 0) return null
-      return { x: area.x, y: area.y + area.height - height, width: area.width, height }
-    }
-    const wanted = Math.min(DEVTOOLS_MAX, Math.max(DEVTOOLS_MIN, Math.round(area.width / 3)))
-    const width = Math.min(wanted, area.width - DEVTOOLS_MIN)
-    if (width <= 0) return null
-    return { x: area.x + area.width - width, y: area.y, width, height: area.height }
+    return devtoolsPanelRect(this.contentArea(), dt.side)
   }
 
   /** What the page(s) get: the content card, less whatever DevTools took. */
@@ -687,14 +720,18 @@ export class TabManager {
     const area = this.contentArea()
     const dt = this.devtoolsRect()
     if (!dt) return area
-    const gap = 6
     if (this.devtools?.side === 'bottom') {
-      return { ...area, height: Math.max(0, dt.y - area.y - gap) }
+      return { ...area, height: Math.max(0, dt.y - area.y - DEVTOOLS_GAP) }
     }
-    return { ...area, width: Math.max(0, dt.x - area.x - gap) }
+    return { ...area, width: Math.max(0, dt.x - area.x - DEVTOOLS_GAP) }
   }
 
-  /** Park the docked DevTools view where it belongs, or take it off screen. */
+  /**
+   * Park the docked DevTools view where it belongs, or take it off screen.
+   *
+   * The view starts below the panel's header strip: those pixels belong to the
+   * chrome, which draws the panel's name and the ✕ that shuts it.
+   */
   private placeDevTools(): void {
     const dt = this.devtools
     if (!dt || dt.view.webContents.isDestroyed()) return
@@ -703,7 +740,12 @@ export class TabManager {
       dt.view.setVisible(false)
       return
     }
-    dt.view.setBounds(rect)
+    dt.view.setBounds({
+      x: rect.x,
+      y: rect.y + DEVTOOLS_HEAD,
+      width: rect.width,
+      height: Math.max(0, rect.height - DEVTOOLS_HEAD)
+    })
     dt.view.setVisible(true)
   }
 
@@ -977,11 +1019,23 @@ export class TabManager {
     if (!dt.view.webContents.isDestroyed()) dt.view.webContents.close()
   }
 
-  /** Stills of whatever is on screen, so the chrome can stand in for it. */
+  /**
+   * Stills of whatever is on screen, so the chrome can stand in for it.
+   *
+   * The home screen is the exception, and it needs no photograph: the chrome
+   * already knows how to draw that page — same widgets, same settings, same
+   * water — so it is sent a frame with no picture in it and renders a live one
+   * in that spot instead. A photograph of the home screen is a photograph of the
+   * sea holding still, which is exactly what you got the moment you touched the
+   * address bar on a new tab. The frame still travels, though: it is what the
+   * handshake counts, so the stand-in arrives and leaves on the same beat as
+   * every other one and no swap ever shows a bare card.
+   */
   async captureVisible(): Promise<PageFreezeFrame[]> {
     const shots = await Promise.all(
       this.viewBounds().map(async ([tab, rect]): Promise<PageFreezeFrame | null> => {
         if (tab.wc.isDestroyed() || !tab.view.getVisible() || this.staged.has(tab)) return null
+        if (isHomePage(tab.wc.getURL())) return { tabId: tab.id, dataUrl: null, bounds: rect }
         try {
           const img = await tab.wc.capturePage()
           if (img.isEmpty()) return null
@@ -1153,6 +1207,9 @@ export class TabManager {
     })
 
     wc.on('did-navigate', (_e, url) => {
+      // a tab that was waiting on the home screen's paint and went somewhere
+      // else instead is back to the ordinary signals
+      if (!isHomePage(url)) tab.ungate()
       tab.loadError = undefined
       tab.slopScore = undefined
       tab.favicon = undefined

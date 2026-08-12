@@ -1517,6 +1517,19 @@ browser-action-list {
 .omnibox.compact.has-actions {
   padding-left: 8px;
 }
+/*
+ * Site settings, in the slot Chromium keeps for the padlock: hard against the
+ * leading edge, immediately left of the address it belongs to. The star sits at
+ * the far end of the same bar, so the two things you can do to a page are at the
+ * two ends of the thing they are about.
+ */
+.omnibox.compact.lead-tune {
+  padding-left: 5px;
+  padding-right: 4px;
+}
+.omnibox.compact.lead-tune .omni-tune.boxed {
+  margin-right: 1px;
+}
 
 /* ---- profile (the active space's cookie jar) ---- */
 
@@ -1554,9 +1567,40 @@ browser-action-list {
     0 0 0 3px var(--space-color, var(--accent));
   margin: 0 4px;
 }
+/*
+ * The suggestion list, under the address bar the way Chrome's is: same left
+ * edge, same width, same type — so the completion for what you typed sits
+ * directly underneath what you typed, and reads as the rest of the same line.
+ *
+ * It used to be centred under the bar in a narrower card, which put the top
+ * match's first letter somewhere out in the middle of the toolbar with your
+ * cursor nowhere near it. The numbers below are the omnibox's own, so the text
+ * lines up to the pixel: 10px of padding, an 18px icon, a 7px gap.
+ */
 .omnibox.compact .omni-dropdown {
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  width: 100%;
+  transform: none;
+  padding: 6px 0;
+  /* rows run the full width now, so the card has to clip its own corners */
+  overflow: hidden;
+}
+.omnibox.compact .omni-suggestion {
+  gap: 7px;
+  padding: 0 10px;
+  border-radius: 0;
+  font-size: var(--font-chrome);
+}
+.omnibox.compact .s-icon {
+  width: 18px;
+  height: 18px;
+}
+.omnibox.compact .s-favicon {
+  width: 15px;
+  height: 15px;
+}
+.omnibox.compact .s-text {
+  font-weight: 500;
 }
 .omnibox.compact.editing .omni-dropdown {
   animation: none;
@@ -1862,6 +1906,11 @@ browser-action-list {
   background: var(--press);
   color: var(--ink);
 }
+/* a saved page keeps its gold in here too — the cluster's own colour is for
+   the buttons that are only ever waiting to be pressed */
+.omni-actions .chrome-btn.star.starred {
+  color: var(--star);
+}
 /*
  * Copy link, parked on the address's leading edge — the thing you copy is right
  * there next to it. Idle it is nothing at all: zero width, so the host still
@@ -2106,6 +2155,46 @@ browser-action-list {
   border-radius: var(--radius-md);
   object-fit: fill;
   pointer-events: none;
+}
+/* the home screen redrawn rather than photographed — same box, live water */
+.page-freeze-home {
+  overflow: hidden;
+  background: var(--content-bg);
+}
+
+/* ---------- docked DevTools: the strip that is ours ---------- */
+
+/*
+ * A view paints over the chrome, so a button of ours inside the DevTools panel
+ * would never be seen. Main leaves this strip uncovered along the panel's top
+ * edge instead (DEVTOOLS_HEAD), and the chrome fills it: the panel's name, and
+ * the ✕ that shuts it — the one Chromium and Helium both put there.
+ */
+.devtools-head {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 3px 0 10px;
+  background: var(--content-bg);
+  color: var(--ink-soft);
+}
+/* only the corner that is also the card's corner gets the card's radius */
+.devtools-head-right {
+  border-radius: 0 var(--radius-md) 0 0;
+}
+.devtools-head-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.6;
 }
 
 /* ---------- Chromium-style menus (the ⋮ and the profile) ---------- */

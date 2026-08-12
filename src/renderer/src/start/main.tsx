@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { BriefWeather, Settings } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
@@ -12,6 +12,7 @@ interface InternalApi {
   home?: {
     setSearch(open: boolean): Promise<void>
     onSearch(cb: (open: boolean) => void): void
+    painted(): void
   }
 }
 
@@ -19,11 +20,16 @@ const internal = (window as unknown as { offshoreInternal?: InternalApi }).offsh
 
 /**
  * The new tab page — a thin shell around HomeCanvas, which the zero-tab window
- * renders too. Same widgets, same settings; the tab is the half that carries
- * the search, and it opens with the cursor already in it, so a new tab is a
- * place you can start typing the moment it appears.
+ * renders too. Same widgets, same settings.
  *
- * Whether the search is up is main's to know, not this page's: the sidebar shows
+ * Which half carries the search depends on the layout, and the rule is: whatever
+ * is already in front of you. The sidebar keeps its omnibox tucked away down the
+ * side, so a vertical new tab puts a pill in the middle of the page and hands it
+ * the cursor. The top bar's address bar is right there above the page — so in
+ * horizontal layout there is no pill at all, and the cursor starts in the
+ * address bar, exactly where Chrome leaves it.
+ *
+ * Whether that pill is up is main's to know, not this page's: the sidebar shows
  * it too, and its ✕ is how you put it away from the other side. So the state
  * lives on the tab, and this page follows it.
  */
@@ -32,9 +38,29 @@ function App(): React.JSX.Element {
   const [editSignal, setEditSignal] = useState(0)
   const [searchOpen, setSearchOpen] = useState(true)
 
+  /*
+   * "The page is on screen." Main holds a new tab off screen until this lands,
+   * because the document is parsed long before React has drawn into it — and a
+   * tab swapped in during that gap shows its bare backdrop for a few frames,
+   * which is the black flash you get opening a new tab from a new tab. The
+   * settings decide what gets drawn, so the report waits for them; main gives up
+   * waiting after a moment either way, so a slow read costs a beat, never a tab.
+   */
+  const painted = useRef(false)
+  const reportPainted = (): void => {
+    if (painted.current) return
+    painted.current = true
+    requestAnimationFrame(() => requestAnimationFrame(() => internal?.home?.painted()))
+  }
+
   useEffect(() => {
     const load = (): void => {
-      void internal?.settings.get().then((s) => s && setSettings(s))
+      if (!internal) return
+      void internal.settings
+        .get()
+        .then((s) => s && setSettings(s))
+        .catch(() => undefined)
+        .finally(reportPainted)
     }
     load()
     // Settings changes reach the chrome, not tab pages — so re-read whenever
@@ -63,19 +89,23 @@ function App(): React.JSX.Element {
     void internal?.settings.set(p)
   }
 
+  // horizontal layout: the address bar above the page is the search, so this
+  // page carries none — and takes no focus away from it either
+  const pill = settings.tabOrientation !== 'horizontal'
+
   return (
     <HomeCanvas
       settings={settings}
       onPatch={patch}
       onSubmit={(input) => void internal?.open(input)}
       fetchWeather={async () => (await internal?.brief.weather()) ?? null}
-      searchPill
+      searchPill={pill}
       searchOpen={searchOpen}
       onDismissSearch={() => {
         setSearchOpen(false)
         void internal?.home?.setSearch(false)
       }}
-      autoFocus
+      autoFocus={pill}
       editSignal={editSignal}
     />
   )

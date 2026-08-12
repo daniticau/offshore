@@ -230,11 +230,22 @@ export function Omnibox({
     /^https?:/.test(activeTab?.url ?? '') &&
     !(activeTab?.displayUrl ?? '').startsWith('offshore://') &&
     !!onSiteInfo
-  // The page controls sit at the trailing edge in both layouts — site settings
-  // and the star, the way Chromium parks them. Copy link is the exception: it
-  // belongs to the address itself, so it sits at the leading edge, right on top
-  // of where the link starts, and only shows up when the pointer is in the bar.
+  /*
+   * Where the page controls sit, which is not the same question in both layouts.
+   *
+   * The sidebar pill keeps Arc's arrangement: the controls ride its trailing
+   * edge, and copy-link tucks into the leading edge, right on top of where the
+   * address starts, appearing only when the pointer is in the bar.
+   *
+   * The top bar follows Chromium, because that is the bar people already know
+   * how to read. Site settings takes the slot left of the address — the padlock's
+   * place, where you look to ask what a page is doing — and the star sits at the
+   * far right of the bar. Copy link is gone from it: ⌘L then ⌘C is right there,
+   * and a button that only exists on hover is not worth the width in a toolbar
+   * that has a dozen other things to fit.
+   */
   const trailingActions = onPage
+  const leadTune = compact && onPage
 
   const copyLink = (): void => {
     const url = activeTab?.url
@@ -251,13 +262,21 @@ export function Omnibox({
     <IconWave size={13} />
   )
 
+  const tuneButton = (
+    <button className="omni-tune boxed" title="Site information" onClick={onSiteInfo}>
+      <IconTune size={14} />
+    </button>
+  )
+
   return (
     <div
       className={`omnibox no-drag ${compact ? 'compact' : ''} ${editing ? 'editing' : ''} ${
         trailingActions ? 'has-actions' : ''
-      }`}
+      } ${leadTune ? 'lead-tune' : ''}`}
     >
-      {trailingActions ? (
+      {leadTune ? (
+        tuneButton
+      ) : trailingActions ? (
         /* Sits in the address's own place: idle it takes no room at all, so the
            host still reads flush left until you bring the pointer in here. */
         <button
@@ -306,9 +325,7 @@ export function Omnibox({
       {trailingActions && (
         <div className="omni-actions">
           {actions}
-          <button className="omni-tune boxed" title="Site information" onClick={onSiteInfo}>
-            <IconTune size={14} />
-          </button>
+          {!leadTune && tuneButton}
         </div>
       )}
       {dropdownOpen && (
