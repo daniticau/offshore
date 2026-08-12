@@ -559,14 +559,39 @@ function setupTestFlows(): void {
 
       // 1b. …and the list really stands on the page in the sidebar layout, where
       // it has to hang far past a 216px column to be worth reading at all
+      /*
+       * A bar can only take the cursor if the app has it: launched behind a
+       * terminal, this window is in the background, and a renderer that is not
+       * focused cannot hand focus to an input. So claim it outright, the way the
+       * screenshot path does.
+       */
+      w.win.setAlwaysOnTop(true)
       w.win.show()
+      w.win.moveTop()
+      app.focus({ steal: true })
       w.win.focus()
-      w.win.webContents.focus()
-      // the real ⌘L path, so the bar takes the cursor the way it does for a human
-      w.sendToChrome('omnibox:focus')
+      /*
+       * Focusing the window hands the cursor to the page (see OffshoreWindow's
+       * 'focus' handler) and that lands asynchronously — ask for the omnibox in
+       * the same breath and the page takes it back a frame later. Let the window
+       * settle, then take the cursor the way ⌘L does.
+       */
       await delay(600)
+      w.win.webContents.focus()
+      w.sendToChrome('omnibox:focus')
+      await delay(700)
+      /*
+       * Launched in the background, this window may never get OS focus at all,
+       * and an unfocused renderer will not hand focus to an input — which left
+       * this step passing or failing with the window manager's mood. So ask for
+       * focus, then drive the component through the events React actually
+       * listens to (focusin → onFocus, input → onChange), which is the same code
+       * path a keystroke takes once the cursor is there.
+       */
       await inChrome(`(() => {
         const el = document.querySelector('.omni-input')
+        el.focus()
+        el.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
         const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
         set.call(el, 'canv')
         el.dispatchEvent(new Event('input', { bubbles: true }))
@@ -628,6 +653,61 @@ function setupTestFlows(): void {
         'the row keeps a way back to the search',
         (await inChrome<boolean>(`!!document.querySelector('.new-tab-btn')`)) === true
       )
+      // the ✕ is the + turned a quarter-turn; quiet, it is a plus again
+      const markQuiet = await inChrome<string>(
+        `getComputedStyle(document.querySelector('.nt-mark')).transform`
+      )
+      check('the mark is a plus while the row is quiet', markQuiet === 'none', markQuiet)
+      w.tabs.setHomeSearch(tab.id, true)
+      await delay(700)
+      const markOn = await inChrome<string>(
+        `getComputedStyle(document.querySelector('.nt-mark')).transform`
+      )
+      say(`[flowtest] mark transform with the search up: ${markOn}`)
+      check('it spins into an ✕ when the search comes up', /^matrix\(0\.70/.test(markOn), markOn)
+      w.tabs.setHomeSearch(tab.id, false)
+      await delay(500)
+
+      // 3b. the air around the page card is something you can grab the window by
+      const frame = await inChrome<{ side: string; region: string; rect: number[] }[]>(`(() => {
+        return ['.df-top', '.df-right', '.df-bottom', '.df-left'].map((s) => {
+          const el = document.querySelector(s)
+          if (!el) return { side: s, region: 'missing', rect: [] }
+          const cs = getComputedStyle(el)
+          const r = el.getBoundingClientRect()
+          return {
+            side: s,
+            region: cs.display === 'none' ? 'hidden' : cs.getPropertyValue('-webkit-app-region'),
+            rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]
+          }
+        })
+      })()`)
+      say(`[flowtest] drag frame: ${JSON.stringify(frame)}`)
+      const grabbable = frame.filter((f) => f.region === 'drag')
+      check('every visible side of the frame is a drag region', grabbable.length === 3, JSON.stringify(frame.map((f) => f.region)))
+      check(
+        'the frame has real thickness to aim at',
+        grabbable.every((f) => Math.min(f.rect[2], f.rect[3]) >= 10),
+        JSON.stringify(grabbable.map((f) => f.rect))
+      )
+      check(
+        'the sidebar keeps its own left edge in this layout',
+        frame.find((f) => f.side === '.df-left')?.region === 'hidden'
+      )
+      const card = w.contentBounds()
+      check(
+        'no strip lies over the page itself',
+        grabbable.every((f) => {
+          const [x, y, width, height] = f.rect
+          return (
+            x + width <= card.x + 1 ||
+            x >= card.x + card.width - 1 ||
+            y + height <= card.y + 1 ||
+            y >= card.y + card.height - 1
+          )
+        }),
+        `card ${JSON.stringify(card)}`
+      )
 
       // 4. ⌘S hides the chrome outright
       w.sendToChrome('chrome:toggle-hidden')
@@ -646,14 +726,17 @@ function setupTestFlows(): void {
       check('the page takes the room the sidebar had', roomy.x < 20, JSON.stringify(roomy))
 
       // 5. the peek slides in over the page — and does not resize it
-      await inChrome(`(() => {
+      const armed = await inChrome<string>(`(() => {
         const z = document.querySelector('.edge-zone')
-        if (!z) return false
+        if (!z) return 'no edge zone: ' + document.querySelector('.chrome').className
+        const r = z.getBoundingClientRect()
         // React synthesises enter/leave from mouseover/mouseout
         z.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: null }))
-        return true
+        return \`dispatched over \${Math.round(r.width)}×\${Math.round(r.height)} at \${Math.round(r.x)},\${Math.round(r.y)}\`
       })()`)
+      say(`[flowtest] edge hover: ${armed}`)
       await delay(800)
+      say(`[flowtest] chrome classes after hover: ${await inChrome<string>(`document.querySelector('.chrome').className`)}`)
       check(
         'the edge brings the sidebar back',
         (await inChrome<boolean>(`document.querySelector('.chrome').classList.contains('peeking')`)) === true

@@ -249,7 +249,18 @@ export function App(): React.JSX.Element {
   const toggleHidden = useCallback(() => {
     const next = !stateRef.current.settings.chromeHidden
     patchSettings({ chromeHidden: next })
+    /*
+     * ⌘S means gone, so nothing gets to hold the chrome open against it. A peek
+     * is pinned while something in the bar is mid-use — the address bar with the
+     * cursor in it, most often — and pressing ⌘S right then used to leave the bar
+     * sitting there, pinned by its own omnibox. Hiding hands the page the cursor
+     * back, which is what releases the pin.
+     */
     setPeekHover(false)
+    if (next) {
+      setOmniboxEditing(false)
+      void offshore.chrome.focusPage()
+    }
     // dynamic density's own tuck-away has nothing left to hide
     cancelHideTimer()
     pinnedRef.current = false
@@ -590,9 +601,16 @@ export function App(): React.JSX.Element {
 
   const onChromeDoubleClick = useCallback((e: React.MouseEvent) => {
     // macOS standard: double-click on the title bar area zooms the window
-    if (!(e.target as HTMLElement).closest('.no-drag, input, button')) {
-      void offshore.window.zoom()
-    }
+    const t = e.target as HTMLElement
+    if (t.closest('.no-drag, input, button')) return
+    /*
+     * A drag region already zooms on double-click — macOS does that itself for
+     * anything you can drag a window by. Zooming here as well meant the gesture
+     * sometimes zoomed and un-zoomed in one go, which is why double-clicking the
+     * chrome only worked every other time.
+     */
+    if (t.closest('.drag')) return
+    void offshore.window.zoom()
   }, [])
 
   // dynamic density: auto-hide when the pointer leaves the chrome. With the
@@ -700,6 +718,18 @@ export function App(): React.JSX.Element {
       }}
       style={accentVars(acc) as React.CSSProperties}
     >
+      {/* The air around the page card, as something you can take hold of: drag
+          the window by any side of it, double-click it to zoom. First in the
+          tree so every bar and panel sits above it. */}
+      {!contentFullscreen && (
+        <div className="drag-frame" aria-hidden="true">
+          <i className="df-top drag" />
+          <i className="df-right drag" />
+          <i className="df-bottom drag" />
+          <i className="df-left drag" />
+        </div>
+      )}
+
       {mode === 'vertical' ? <Sidebar {...chromeProps} /> : <TopBar {...chromeProps} />}
 
       {/* Rounded backdrop + shadow behind the web content view; also the insets source */}
@@ -732,9 +762,6 @@ export function App(): React.JSX.Element {
         />
       )}
 
-      {/* Hidden chrome leaves no bar to drag the window by; the gutter above the
-          page stands in for the title bar, the way a title bar always could. */}
-      {hidden && !contentFullscreen && <div className="hidden-drag drag" />}
 
       {devshot && (
         <img

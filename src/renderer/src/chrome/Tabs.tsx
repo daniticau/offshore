@@ -779,6 +779,10 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
         tab you are on" while its search is up, though: dismiss the search and
         you are just looking at the home screen, so the row goes quiet again and
         pressing it brings the search back rather than piling up another tab.
+
+        The mark on the right says which of those it is, and it is the same mark
+        either way: an ✕ is a + turned a quarter of the way round, so the row
+        lighting up spins the plus into the way back out of it.
       */}
       <button
         className={`new-tab-btn no-drag ${searchUp ? 'active' : ''}`}
@@ -786,22 +790,25 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
         title={searchUp ? 'Search this tab' : 'New tab (⌘T)'}
       >
         <span className="tab-favicon">
-          {blankId != null ? <IconWave size={13} /> : <IconPlus size={13} />}
+          <IconWave size={13} />
         </span>
         <span>New Tab</span>
-        {searchUp && (
-          <span
-            className="tab-close nt-close"
-            role="button"
-            title="Put the search away"
-            onClick={(e) => {
-              e.stopPropagation()
-              void offshore.home.setSearch(false, blankId ?? undefined)
-            }}
-          >
-            <IconClose size={11} />
-          </span>
-        )}
+        <span
+          className={`nt-mark ${searchUp ? 'on' : ''}`}
+          role="button"
+          aria-label={searchUp ? 'Put the search away' : 'New tab'}
+          title={searchUp ? 'Put the search away' : 'New tab (⌘T)'}
+          onClick={
+            searchUp
+              ? (e) => {
+                  e.stopPropagation()
+                  void offshore.home.setSearch(false, blankId ?? undefined)
+                }
+              : undefined
+          }
+        >
+          <IconPlus size={12} />
+        </span>
       </button>
       <div
         className="tab-list no-drag space-pane"

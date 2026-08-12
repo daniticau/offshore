@@ -23,7 +23,16 @@ body,
 
   /* ---- density contract (classic values; compact/dynamic override) ---- */
   --sidebar-w: 252px;
-  --gutter: 10px;
+  /* also the border around the page you drag the window by, so it is a little
+     more generous than looks alone would ask for — a 7px target is a dare */
+  --gutter: 14px;
+  /* left to the window's own resize edge, on every side */
+  --drag-edge: 2px;
+  /* where the page card sits; --cf-top / --cf-left change with the layout */
+  --cf-top: var(--gutter);
+  --cf-right: var(--gutter);
+  --cf-bottom: var(--gutter);
+  --cf-left: var(--gutter);
   --chrome-pad: 12px;
   --row-h: 34px;
   --omnibox-h: 36px;
@@ -53,7 +62,7 @@ body,
 .chrome.density-compact,
 .chrome.density-dynamic {
   --sidebar-w: 216px;
-  --gutter: 8px;
+  --gutter: 12px;
   --chrome-pad: 10px;
   --row-h: 30px;
   --omnibox-h: 31px;
@@ -143,28 +152,84 @@ body,
   pointer-events: none;
 }
 
-/* The content card sits one --chrome-pad off the sidebar's rows — the same air
-   the sidebar keeps on its own left edge, so the column is evenly framed. */
-.mode-vertical .content-frame {
-  inset: var(--gutter) var(--gutter) var(--gutter) var(--sidebar-w);
+/*
+ * Where the page card sits, as four numbers rather than four rules. The drag
+ * frame below reads exactly the same ones, so the strip you can grab is always
+ * the strip of window you can see around the page — in either layout, collapsed,
+ * hidden, with or without a bookmarks bar.
+ *
+ * The content card sits one --chrome-pad off the sidebar's rows — the same air
+ * the sidebar keeps on its own left edge, so the column is evenly framed.
+ */
+.mode-vertical {
+  --cf-left: var(--sidebar-w);
 }
-.mode-vertical.collapsed .content-frame,
-.mode-vertical.chrome-hidden .content-frame {
-  left: var(--gutter);
+.mode-vertical.collapsed,
+.mode-vertical.chrome-hidden {
+  --cf-left: var(--gutter);
 }
-.mode-horizontal .content-frame {
+.mode-horizontal {
   /* --content-air matches --topbar-gap above the address row, so that row sits
      with the same air to the tabs as it has to the page */
-  inset: calc(var(--topbar-h) + var(--content-air)) var(--gutter) var(--gutter);
+  --cf-top: calc(var(--topbar-h) + var(--content-air));
 }
-.mode-horizontal.has-bmbar .content-frame {
-  top: calc(var(--topbar-h) + var(--bmbar-h) + var(--content-air));
+.mode-horizontal.has-bmbar {
+  --cf-top: calc(var(--topbar-h) + var(--bmbar-h) + var(--content-air));
 }
-.mode-horizontal.collapsed .content-frame {
-  top: calc(var(--topbar-pad) + var(--topbar-tabs-h) + var(--gutter));
+.mode-horizontal.collapsed {
+  --cf-top: calc(var(--topbar-pad) + var(--topbar-tabs-h) + var(--gutter));
 }
-.mode-horizontal.chrome-hidden .content-frame {
-  top: var(--gutter);
+.mode-horizontal.chrome-hidden {
+  --cf-top: var(--gutter);
+}
+.content-frame {
+  inset: var(--cf-top) var(--cf-right) var(--cf-bottom) var(--cf-left);
+}
+
+/*
+ * ---------- the frame you can grab ----------
+ *
+ * The page fills its card, and a web view is nobody's title bar — so the only
+ * part of the window left to take hold of is the air around that card. It is
+ * now a drag region on every side, which also gets double-click-to-zoom for
+ * free, since macOS does that for anything you can drag a window by.
+ *
+ * The outermost few pixels are left alone: they belong to the window's own
+ * resize edge, and a drag region there would eat it.
+ */
+.drag-frame > i {
+  position: fixed;
+  z-index: 0;
+  display: block;
+}
+.df-top {
+  top: var(--drag-edge);
+  left: var(--cf-left);
+  right: var(--drag-edge);
+  height: calc(var(--cf-top) - var(--drag-edge));
+}
+.df-bottom {
+  bottom: var(--drag-edge);
+  left: var(--cf-left);
+  right: var(--drag-edge);
+  height: calc(var(--cf-bottom) - var(--drag-edge));
+}
+.df-left {
+  left: var(--drag-edge);
+  top: var(--cf-top);
+  bottom: var(--drag-edge);
+  width: calc(var(--cf-left) - var(--drag-edge));
+}
+.df-right {
+  right: var(--drag-edge);
+  top: var(--cf-top);
+  bottom: var(--drag-edge);
+  width: calc(var(--cf-right) - var(--drag-edge));
+}
+/* whichever side a bar already occupies, that bar does the dragging */
+.mode-horizontal .df-top,
+.mode-vertical:not(.collapsed):not(.chrome-hidden) .df-left {
+  display: none;
 }
 
 /*
@@ -208,16 +273,6 @@ body,
     inset 0 -0.5px 0 var(--frame-ring),
     0 18px 48px rgba(9, 52, 70, 0.22);
 }
-/* the window still has to be draggable with no bar to drag it by */
-.hidden-drag {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: var(--gutter);
-  z-index: 2;
-}
-
 /*
  * Full screen: nothing of ours, anywhere, however hard you push at an edge. The
  * content card stays in the tree — it is where the insets are measured from, and
@@ -486,19 +541,44 @@ body,
     inset 0 1px 0 var(--glass-inset-hi),
     0 3px 10px rgba(14, 92, 122, 0.12);
 }
-/* The ✕ on that row closes the search, never the tab — so it is shown outright
-   rather than on hover: it is the way out of the search, and it should look it. */
+/*
+ * One glyph, two jobs. Quiet, it is the + that makes a tab; while the row stands
+ * in for a tab whose search is up, the same + is turned a quarter-turn
+ * anticlockwise into the ✕ that puts the search away. Nothing swaps out — it
+ * spins, which is what tells you the two are the same door.
+ *
+ * It is never hidden until hover: it is the way out of the search, and it should
+ * look like one.
+ */
 .new-tab-btn {
   padding-right: calc((var(--row-h) - var(--tab-btn)) / 2);
 }
-.new-tab-btn .nt-close {
+.nt-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tab-btn);
+  height: var(--tab-btn);
   margin-left: auto;
-  opacity: 0.75;
-  transform: none;
-  pointer-events: auto;
+  border-radius: var(--radius-xs);
+  color: var(--ink-soft);
+  opacity: 0.7;
+  flex-shrink: 0;
+  transition:
+    transform 260ms var(--ease-spring),
+    opacity var(--dur) var(--ease-out),
+    background var(--dur) var(--ease-out);
 }
-.new-tab-btn .nt-close:hover {
+.nt-mark.on {
+  transform: rotate(-45deg);
+  opacity: 0.85;
+}
+.new-tab-btn:hover .nt-mark {
   opacity: 1;
+}
+.nt-mark:hover {
+  background: var(--press);
+  color: var(--ink);
 }
 
 .tab-list {
