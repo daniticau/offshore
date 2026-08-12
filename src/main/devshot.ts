@@ -16,7 +16,9 @@ export function setupDevshot(): void {
   const dir = process.env['OFFSHORE_SHOT']
   if (!dir) return
   const wait = Number(process.env['OFFSHORE_SHOT_WAIT'] || 3500)
-  console.log('[devshot] userData:', app.getPath('userData'))
+  /** Quiet is the default: parked off-screen, the window needs a beat longer to settle. */
+  const quiet = !process.env['OFFSHORE_TEST_FOREGROUND']
+  console.log('[devshot] userData:', app.getPath('userData'), quiet ? '(quiet)' : '')
 
   void app.whenReady().then(() => {
     setTimeout(() => {
@@ -84,10 +86,10 @@ export function setupDevshot(): void {
       '[devshot] tabs:',
       JSON.stringify(w.tabs.state().tabs.map((t) => ({ id: t.id, url: t.url.slice(0, 60), active: t.id === w.tabs.activeTabId })))
     )
-    // Ensure the window is painting and unoccluded before capturing
+    // Ensure the view has painted and has a live surface before capturing
     surface(w)
     w.tabs.setActiveVisible(true)
-    await delay(600)
+    await delay(quiet ? 900 : 600)
     const tab = w.tabs.activeTab
     if (tab) {
       const pageImg = await tab.wc.capturePage()
@@ -174,13 +176,25 @@ export function setupDevshot(): void {
       const hit = await w.win.webContents
         .executeJavaScript(
           `(() => { const el = document.querySelector(${JSON.stringify(hover)})
-             if (!el) return false
+             if (!el) return null
              el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: null }))
              el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
-             return true })()`
+             const r = el.getBoundingClientRect()
+             return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) } })()`
         )
         .catch((e) => `err: ${e}`)
-      console.log('[devshot] hover', hover, hit)
+      /*
+       * The events above are for React, which synthesises enter/leave from
+       * them. CSS :hover is not a DOM event at all, though — it is the real
+       * pointer's position, and a dispatched MouseEvent never moves it. So
+       * anything styled purely on :hover photographed as if untouched, which
+       * made a working hover look broken. Put the actual pointer there too.
+       */
+      if (hit && typeof hit === 'object' && 'x' in hit) {
+        const { x, y } = hit as { x: number; y: number }
+        w.win.webContents.sendInputEvent({ type: 'mouseMove', x, y })
+      }
+      console.log('[devshot] hover', hover, JSON.stringify(hit))
       await delay(1400)
       const shot = await w.win.webContents.capturePage()
       writeFileSync(join(dir!, 'hover.png'), shot.toPNG())
@@ -241,10 +255,12 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Get the window painting and unoccluded for a capture, or genuinely focused
- * when OFFSHORE_TEST_FOREGROUND asks for it. Quiet (the default) means the
- * human keeps their keyboard and their frontmost app: inactive but on top of
- * this app's own windows, which is all capturePage needs.
+ * Get the window painting with a live surface for captures and checks — without
+ * ever taking the keyboard or covering what the human is doing. Quiet (the
+ * default) parks it off the side of the display, shown but inactive: it keeps
+ * rendering out there, and capturePage still has a real surface to read.
+ * OFFSHORE_TEST_FOREGROUND=1 brings back the old grab-everything behavior for
+ * the rare check that needs genuine OS focus.
  */
 function surface(w: OffshoreWindow): void {
   if (process.env['OFFSHORE_TEST_FOREGROUND']) {
@@ -255,8 +271,25 @@ function surface(w: OffshoreWindow): void {
     w.win.moveTop()
     return
   }
+  const [, wy] = w.win.getPosition()
+  w.win.setPosition(-9000, wy)
   w.win.showInactive()
-  w.win.moveTop()
+}
+
+/**
+ * Poll until the page agrees, rather than sleeping a round number and hoping.
+ * Returns what the probe last said, so a timeout reads as a plain failed check
+ * instead of a thrown error in the middle of a flow.
+ */
+async function settle<T>(probe: () => Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  const deadline = Date.now() + timeoutMs
+  let last: T | undefined
+  for (;;) {
+    last = await probe().catch(() => undefined)
+    if (last) return last
+    if (Date.now() > deadline) return last
+    await delay(80)
+  }
 }
 
 /** The harness arms before the first window exists, so poll for one. */
@@ -629,10 +662,33 @@ function setupTestFlows(): void {
       check('the dropdown is on screen while typing', !!drop && drop.rows > 0)
       check('it hangs past the sidebar instead of being squeezed into it', (drop?.width ?? 0) > 320)
       check('the page steps aside behind it', drop?.frozen === true)
-      await inChrome(
-        `document.querySelector('.omni-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`
+      /*
+       * Give the address bar back, and make sure it really went.
+       *
+       * A dispatched Escape is not a real key press: it reaches React's
+       * onKeyDown but leaves the element focused, so the bar stayed "editing"
+       * for the rest of the run. Everything downstream then behaved as if the
+       * cursor were still in it — the omnibox puts the home screen's own search
+       * away while it has focus, and a bar with the cursor in it cannot be
+       * hidden by ⌘S. That is what made the later checks fail in scattered
+       * groups depending on whether the window happened to win focus at all.
+       *
+       * Blurring is what actually ends editing (see Omnibox's onBlur), so blur
+       * it, then wait for the state to say so rather than trusting a delay.
+       */
+      await inChrome(`(() => {
+        const el = document.querySelector('.omni-input')
+        if (!el) return false
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        el.blur()
+        el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+        return true
+      })()`)
+      const released = await settle(
+        () => inChrome<boolean>(`!document.querySelector('.omnibox.editing')`),
+        2000
       )
-      await delay(500)
+      check('the address bar gives the cursor back', released === true)
 
       // 2. a new tab opens with its search in front of the home screen.
       // (A clean profile opens on the welcome page, so ask for a real new tab.)
@@ -797,6 +853,79 @@ function setupTestFlows(): void {
       await delay(400)
       const back = w.tabs.activeTab!.view.getBounds()
       check('leaving full screen gives the page a real size again', back.width > 100 && back.height > 100, JSON.stringify(back))
+
+      /*
+       * 5. The New Tab row, its search, and the panel that keeps to the column.
+       *
+       * Last on purpose: these three make tabs and type into them, and the
+       * checks above read a sidebar in a known state. Anything that leaves a
+       * mark goes at the end, where there is nothing left to disturb.
+       */
+      const blank = w.tabs.activeTab
+      if (blank) w.tabs.setHomeSearch(blank.id, false)
+      await delay(400)
+
+      /*
+       * ⌘T means the New Tab row, not a second blank tab. The key used to go
+       * straight to createTab in main, so pressing it while already on a blank
+       * tab made another one — and the first, no longer active, took a row of
+       * its own in the sidebar. Both now land on the same handler.
+       */
+      const beforeCmdT = w.tabs.tabs.length
+      w.openNewTab()
+      await delay(1000)
+      check(
+        '⌘T on a blank tab does not pile up another one',
+        w.tabs.tabs.length === beforeCmdT,
+        `${beforeCmdT} → ${w.tabs.tabs.length}`
+      )
+      check('⌘T brings the search back instead', w.tabs.activeTab?.info().homeSearch === true)
+      check(
+        'the New Tab row is the thing that lights up',
+        (await inChrome<boolean>(`!!document.querySelector('.new-tab-btn.active')`)) === true
+      )
+
+      // the new tab's search finishes your sentence, the way the omnibox does
+      const home = w.tabs.activeTab
+      await home?.wc.executeJavaScript(`(() => {
+        const el = document.querySelector('.start-search input')
+        if (!el) return false
+        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+        set.call(el, 'canv')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await delay(1800)
+      const homeSugs = await home?.wc.executeJavaScript(
+        `document.querySelectorAll('.start-sug').length`
+      )
+      say(`[flowtest] home search rows: ${homeSugs}`)
+      check('the new tab search offers suggestions too (needs network)', Number(homeSugs) > 0, String(homeSugs))
+
+      /*
+       * Downloads keeps to the sidebar column, so it never asks the page to
+       * step aside. That freeze was what stopped the home screen's waves dead,
+       * brought the panel in twice, and left it behind the page for the first
+       * frames — the chrome draws under the views until they stand down.
+       */
+      const dl = await inChrome<{ panel: number; column: number; frozen: boolean }>(`(() => {
+        const cs = getComputedStyle(document.querySelector('.chrome'))
+        const w = parseFloat(cs.getPropertyValue('--sidebar-w'))
+        const pad = parseFloat(cs.getPropertyValue('--chrome-pad'))
+        const el = document.querySelector('.dl-panel')
+        return {
+          panel: el ? Math.round(el.getBoundingClientRect().width) : w - pad * 2,
+          column: w - pad * 2,
+          frozen: !!document.querySelector('.page-freeze')
+        }
+      })()`)
+      say(`[flowtest] downloads: ${JSON.stringify(dl)}`)
+      check(
+        'the downloads panel is sized to the column, not past it',
+        dl.panel <= dl.column,
+        `${dl.panel} ≤ ${dl.column}`
+      )
+      check('opening it does not freeze the page behind it', dl.frozen === false)
 
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)

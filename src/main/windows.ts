@@ -4,7 +4,7 @@ import type { Insets, SessionWindowV2, TabsState } from '@shared/types'
 import { HARNESS_QUIET } from './bootstrap'
 import { popupOwner } from './popups'
 import { sessionStore, settingsStore } from './stores'
-import { TabManager, type Tab, type TabHost } from './tabs'
+import { TabManager, type TabHost } from './tabs'
 import { devRendererUrl, remapInternal } from './util'
 
 /** Pre-first-paint fallback only; steady-state insets are measured from the chrome DOM. */
@@ -109,6 +109,21 @@ export class OffshoreWindow implements TabHost {
       }
     })
 
+    /*
+     * AppKit's own buttons go away and the chrome draws three of its own in
+     * their place. Two reasons. The look: macOS colors its buttons whenever the
+     * window is key, and the resting state we want is three neutral dots that
+     * only light up under the pointer. And the behaviour: a real button sitting
+     * over our chrome has its own AppKit tracking, which our drag regions kept
+     * stealing the mouse from — that is why hovering the red one lit nothing in
+     * a windowed frame while the same gesture worked in full screen.
+     */
+    try {
+      this.win.setWindowButtonVisibility(false)
+    } catch {
+      /* not macOS — there were never any buttons to hide */
+    }
+
     this.tabs = new TabManager(this)
     windows.add(this)
     lastFocused ??= this
@@ -204,29 +219,17 @@ export class OffshoreWindow implements TabHost {
   }
 
   /**
-   * A new tab, and the cursor in whichever search the layout has already put in
-   * front of you.
+   * A new tab, cursor already in the pill the page puts in the middle of
+   * itself — the one thing a new tab has that the empty window doesn't.
    *
-   * Vertical tucks the address bar away down the side, so the page carries a
-   * pill in the middle of itself and that pill takes the cursor. Horizontal has
-   * the address bar sitting right above the page — so nothing appears in the
-   * middle of the screen, and the cursor starts up there, exactly the way it
-   * does in Chrome.
+   * The chrome decides what that means, because it is the only side that knows
+   * whether you are already sitting on a blank tab with its search put away. Ask
+   * it, the way pressing the New Tab row does, so ⌘T and the row cannot disagree
+   * — pressing the key used to make a second blank tab and hand the first one a
+   * row of its own in the sidebar.
    */
-  openNewTab(): Tab {
-    const tab = this.tabs.createTab()
-    if (settingsStore.get().tabOrientation === 'horizontal') {
-      // The chrome has to know it is looking at a fresh tab *before* it takes
-      // the cursor. State pushes are batched by a frame; the focus message is
-      // not, so it would arrive first and the address bar would open selecting
-      // the address of the tab you just left.
-      this.pushState(this.tabs.state())
-      this.win.webContents.focus()
-      this.sendToChrome('omnibox:focus')
-    } else {
-      tab.wc.focus()
-    }
-    return tab
+  openNewTab(): void {
+    this.sendToChrome('newtab:request')
   }
 
   onTabsChanged(): void {
@@ -304,13 +307,14 @@ export class OffshoreWindow implements TabHost {
     })
   }
 
-  /** Dynamic density: chrome hid/revealed itself — keep traffic lights in sync. */
-  setCollapsed(collapsed: boolean): void {
-    try {
-      this.win.setWindowButtonVisibility(!collapsed)
-    } catch {
-      /* not macOS */
-    }
+  /**
+   * The chrome draws its own traffic lights, so there is nothing here to keep in
+   * sync any more — they are three elements in the sidebar and they leave with
+   * it. Kept as a no-op because the chrome still reports its state on every
+   * collapse, and because a window that is not macOS never had buttons to hide.
+   */
+  setCollapsed(_collapsed: boolean): void {
+    /* the lights are the chrome's now — see TrafficLights in Tabs.tsx */
   }
 }
 

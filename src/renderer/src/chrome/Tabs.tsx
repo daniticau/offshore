@@ -113,6 +113,42 @@ function TabGlyph({ tab, size = 13 }: { tab: TabInfo; size?: number }): React.JS
   return <img src={tab.favicon} alt="" onError={() => setBroken(true)} />
 }
 
+/**
+ * Our own traffic lights, because AppKit's would not do either half of what a
+ * calm window wants. macOS paints its buttons the moment the window is key; we
+ * want three dots the same neutral grey as everything else until the pointer is
+ * actually on them. And AppKit's tracking loses the mouse to whatever chrome we
+ * lay around it, which is what made hovering the red one light nothing at all.
+ *
+ * Hovering anywhere on the strip lights all three at once — the group answers
+ * together, the way it does everywhere else on the platform.
+ */
+function TrafficLights(): React.JSX.Element {
+  return (
+    <div className="traffic-inline no-drag" role="group" aria-label="Window">
+      <button className="tl tl-close" title="Close" onClick={() => void offshore.window.close()}>
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M4 4l4 4M8 4l-4 4" />
+        </svg>
+      </button>
+      <button
+        className="tl tl-min"
+        title="Minimize"
+        onClick={() => void offshore.window.minimize()}
+      >
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M3.5 6h5" />
+        </svg>
+      </button>
+      <button className="tl tl-zoom" title="Zoom" onClick={() => void offshore.window.zoom()}>
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M4 8V4h4" />
+        </svg>
+      </button>
+    </div>
+  )
+}
+
 function NavButtons({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element {
   return (
     <div className="nav-buttons no-drag">
@@ -775,7 +811,7 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
       {/* The traffic lights share the nav row — the strip left of the arrows is
           theirs, and stays draggable so the window still moves by its top edge. */}
       <div className="sidebar-toolbar">
-        <div className="traffic-inline" />
+        <TrafficLights />
         <div className="toolbar-spring" />
         <NavButtons activeTab={activeTab} />
         <AppMenuButton {...props} />
@@ -1011,7 +1047,11 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
   return (
     <div className="topbar drag" onMouseLeave={props.onPeekLeave}>
       <div className="topbar-tabs-row">
-        <div className="traffic-spacer-h" />
+        {/* AppKit's buttons are hidden for both layouts, so this row draws the
+            same three the sidebar does — horizontal keeps its own spacing. */}
+        <div className="traffic-spacer-h">
+          <TrafficLights />
+        </div>
         <SpaceSwitcher
           spaces={tabsState.spaces}
           activeSpaceId={tabsState.activeSpaceId}

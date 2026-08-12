@@ -92,7 +92,9 @@ const api: OffshoreInternalApi = {
      * on the document being parsed — the document is parsed while the page is
      * still blank, and swapping then is what flashes the backdrop at you.
      */
-    painted: () => ipcRenderer.send('home:painted')
+    painted: () => ipcRenderer.send('home:painted'),
+    /** What the omnibox would offer for the same half-typed word. */
+    suggest: (input: string) => invoke('home:suggest', input)
   }
 }
 

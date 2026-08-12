@@ -117,7 +117,9 @@ const api: OffshoreApi = {
     toggleSite: (url: string) => invoke('adblock:toggle-site', url)
   },
   window: {
-    zoom: () => invoke('window:zoom')
+    zoom: () => invoke('window:zoom'),
+    close: () => invoke('window:close'),
+    minimize: () => invoke('window:minimize')
   },
   on: (channel: string, cb: (...args: unknown[]) => void): (() => void) => {
     if (!SUBSCRIBABLE.has(channel)) throw new Error(`Unknown channel: ${channel}`)

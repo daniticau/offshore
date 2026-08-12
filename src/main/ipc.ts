@@ -269,7 +269,10 @@ export function setupIpc(): void {
   ipcMain.handle('tabs:new', (e, url?: string) => {
     const w = chromeWindow(e)
     if (!w) return
-    if (!url) return w.openNewTab().id
+    if (!url) {
+      w.openNewTab()
+      return
+    }
     return w.tabs.createTab(resolveOmniboxInput(url, settingsStore.get())).id
   })
   ipcMain.handle('tabs:close', (e, id: number) => chromeWindow(e)?.tabs.closeTab(id))
@@ -549,6 +552,16 @@ export function setupIpc(): void {
   )
 
   /**
+   * The same list for the home screen's search. It asks as a tab page rather
+   * than as the chrome, so the window is the one that owns the sender — without
+   * this the panel on every new tab was the one search in the app with no
+   * type-ahead under it at all.
+   */
+  ipcMain.handle('home:suggest', (e, input: string) =>
+    isTrustedSender(e) ? buildSuggestions(String(input ?? ''), windowForTab(e.sender.id)) : []
+  )
+
+  /**
    * The home screen's search, opened and closed from either side: the chrome's
    * ✕ passes the tab it means, the page passes nothing and means itself.
    */
@@ -748,6 +761,11 @@ export function setupIpc(): void {
       else w.win.maximize()
     }
   })
+
+  // The chrome draws the traffic lights, so it needs the two verbs AppKit used
+  // to own. Zoom already had a handler — double-click on the chrome uses it.
+  ipcMain.handle('window:close', (e) => chromeWindow(e)?.win.close())
+  ipcMain.handle('window:minimize', (e) => chromeWindow(e)?.win.minimize())
 
   // ---- downloads ----
   ipcMain.handle('downloads:open', (e, id: string) => {

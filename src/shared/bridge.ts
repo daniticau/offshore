@@ -42,7 +42,8 @@ export const CHROME_EVENTS = [
   'bookmarks:edit-current',
   'chrome:toggle-hidden',
   'passwords:offer',
-  'widgets:edit'
+  'widgets:edit',
+  'newtab:request'
 ] as const
 
 export type ChromeEvent = (typeof CHROME_EVENTS)[number]
@@ -128,7 +129,11 @@ export interface OffshoreApi {
     set(patch: Partial<Settings>): Promise<Settings>
   }
   adblock: { toggleSite(url: string): Promise<boolean> }
-  window: { zoom(): Promise<void> }
+  window: {
+    zoom(): Promise<void>
+    close(): Promise<void>
+    minimize(): Promise<void>
+  }
   on(channel: ChromeEvent, cb: (...args: any[]) => void): () => void
   devshotDone(): void
 }
@@ -173,5 +178,7 @@ export interface OffshoreInternalApi {
     onSearch(cb: (open: boolean) => void): void
     /** The home screen has genuinely painted — swap gates wait on this. */
     painted(): void
+    /** What the omnibox would offer for the same half-typed word. */
+    suggest(input: string): Promise<Suggestion[]>
   }
 }

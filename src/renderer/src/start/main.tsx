@@ -88,6 +88,7 @@ function App(): React.JSX.Element {
       settings={settings}
       onPatch={patch}
       onSubmit={(input) => void internal?.open(input)}
+      fetchSuggestions={async (input) => (await internal?.home?.suggest(input)) ?? []}
       fetchWeather={async () => (await internal?.brief.weather()) ?? null}
       searchPill={pill}
       searchOpen={searchOpen}
