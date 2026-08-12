@@ -30,6 +30,7 @@ import {
   devtoolsPanelRect
 } from '@shared/types'
 import { adblock } from './adblock'
+import { HARNESS_ACTIVE } from './bootstrap'
 import { extensionsRef } from './extensions-ref'
 import { passwordVault } from './passwords'
 import {
@@ -159,7 +160,10 @@ export class Tab {
         contextIsolation: true,
         scrollBounce: true,
         safeDialogs: true,
-        additionalArguments: devOriginArgs()
+        additionalArguments: devOriginArgs(),
+        // flows drive pages in a window the harness parks off-screen — an
+        // occluded page's timers would otherwise crawl at 1Hz
+        backgroundThrottling: !HARNESS_ACTIVE
       }
     })
     this.applyBackground()

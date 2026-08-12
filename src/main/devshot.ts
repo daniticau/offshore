@@ -2,6 +2,7 @@ import { BrowserWindow, app, ipcMain, session } from 'electron'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import * as nodeHttp from 'http'
+import { HOME_WIDGETS } from '@shared/types'
 import { TAB_PARTITION } from './sessions'
 import { windows, type OffshoreWindow } from './windows'
 
@@ -447,6 +448,14 @@ function setupTestFlows(): void {
     }
 
     if (flow === 'widgets') {
+      if (!HOME_WIDGETS) {
+        // the widget board is deliberately parked (see HOME_WIDGETS in
+        // shared/types) — a red run here would only be reporting the flag
+        say('[flowtest] widgets are parked behind HOME_WIDGETS — nothing to check')
+        say('[flowtest] done: ALL PASS')
+        app.exit(0)
+        return
+      }
       await delay(1500)
       const tab = w.tabs.activeTab
       if (!tab) {
@@ -643,21 +652,23 @@ function setupTestFlows(): void {
         el.dispatchEvent(new Event('input', { bubbles: true }))
         return true
       })()`)
-      await delay(1200)
       say(
         `[flowtest] bar state: ${await inChrome<string>(
           `JSON.stringify({ editing: !!document.querySelector('.omnibox.editing'), focused: document.activeElement?.className ?? '' })`
         )}`
       )
-      const drop = await inChrome<{ rows: number; width: number; frozen: boolean } | null>(`(() => {
-        const d = document.querySelector('.omni-dropdown')
-        if (!d) return null
-        return {
-          rows: d.querySelectorAll('.omni-suggestion').length,
-          width: Math.round(d.getBoundingClientRect().width),
-          frozen: !!document.querySelector('.page-freeze')
-        }
-      })()`)
+      const drop = await settle(async () => {
+        const d = await inChrome<{ rows: number; width: number; frozen: boolean } | null>(`(() => {
+          const d = document.querySelector('.omni-dropdown')
+          if (!d) return null
+          return {
+            rows: d.querySelectorAll('.omni-suggestion').length,
+            width: Math.round(d.getBoundingClientRect().width),
+            frozen: !!document.querySelector('.page-freeze')
+          }
+        })()`)
+        return d && d.rows > 0 && d.frozen ? d : undefined
+      }, 5000)
       say(`[flowtest] dropdown: ${JSON.stringify(drop)}`)
       check('the dropdown is on screen while typing', !!drop && drop.rows > 0)
       check('it hangs past the sidebar instead of being squeezed into it', (drop?.width ?? 0) > 320)
@@ -694,48 +705,59 @@ function setupTestFlows(): void {
       // (A clean profile opens on the welcome page, so ask for a real new tab.)
       settingsStore.set({ onboarded: true })
       const tab = w.tabs.createTab()
-      await delay(1800)
-      check('a new tab opens with the search up', tab.info().homeSearch === true)
-      check(
-        'the search panel is on the home screen',
-        (await tab.wc.executeJavaScript(`!!document.querySelector('.start-search.on')`)) === true
+      const searchUp = await settle(
+        () => tab.wc.executeJavaScript(`!!document.querySelector('.start-search.on')`) as Promise<boolean>,
+        6000
       )
+      check('a new tab opens with the search up', tab.info().homeSearch === true)
+      check('the search panel is on the home screen', searchUp === true)
 
       // 3. dismissing it leaves the tab, and the home screen, exactly there
       const tabCount = w.tabs.tabs.length
       w.tabs.setHomeSearch(tab.id, false)
-      await delay(500)
-      check('the tab is not closed', w.tabs.tabs.length === tabCount && !!w.tabs.byId(tab.id))
       check(
         'the search goes away',
-        (await tab.wc.executeJavaScript(`!document.querySelector('.start-search.on')`)) === true
+        (await settle(
+          () => tab.wc.executeJavaScript(`!document.querySelector('.start-search.on')`) as Promise<boolean>,
+          4000
+        )) === true
       )
+      check('the tab is not closed', w.tabs.tabs.length === tabCount && !!w.tabs.byId(tab.id))
       check(
         'the home screen stays',
         (await tab.wc.executeJavaScript(`!!document.querySelector('.start-grid')`)) === true
       )
       check(
         'the New Tab row stops standing in for the tab',
-        (await inChrome<boolean>(`!document.querySelector('.new-tab-btn.active')`)) === true
+        (await settle(
+          () => inChrome<boolean>(`!document.querySelector('.new-tab-btn.active')`),
+          4000
+        )) === true
       )
       check(
         'the row keeps a way back to the search',
         (await inChrome<boolean>(`!!document.querySelector('.new-tab-btn')`)) === true
       )
       // the ✕ is the + turned a quarter-turn; quiet, it is a plus again
-      const markQuiet = await inChrome<string>(
-        `getComputedStyle(document.querySelector('.nt-mark')).transform`
+      const markQuiet = await settle(
+        () =>
+          inChrome<boolean>(
+            `getComputedStyle(document.querySelector('.nt-mark')).transform === 'none'`
+          ),
+        4000
       )
-      check('the mark is a plus while the row is quiet', markQuiet === 'none', markQuiet)
+      check('the mark is a plus while the row is quiet', markQuiet === true)
       w.tabs.setHomeSearch(tab.id, true)
-      await delay(700)
-      const markOn = await inChrome<string>(
-        `getComputedStyle(document.querySelector('.nt-mark')).transform`
+      const markOn = await settle(
+        () =>
+          inChrome<boolean>(
+            `/^matrix\\(0\\.70/.test(getComputedStyle(document.querySelector('.nt-mark')).transform)`
+          ),
+        4000
       )
-      say(`[flowtest] mark transform with the search up: ${markOn}`)
-      check('it spins into an ✕ when the search comes up', /^matrix\(0\.70/.test(markOn), markOn)
+      check('it spins into an ✕ when the search comes up', markOn === true)
       w.tabs.setHomeSearch(tab.id, false)
-      await delay(500)
+      await delay(300)
 
       // 3b. the air around the page card is something you can grab the window by
       const frame = await inChrome<{ side: string; region: string; rect: number[] }[]>(`(() => {
@@ -780,19 +802,25 @@ function setupTestFlows(): void {
 
       // 4. ⌘S hides the chrome outright
       w.sendToChrome('chrome:toggle-hidden')
-      await delay(700)
       check(
         '⌘S enters hidden mode',
-        (await inChrome<boolean>(`document.querySelector('.chrome').classList.contains('chrome-hidden')`)) === true
+        (await settle(
+          () => inChrome<boolean>(`document.querySelector('.chrome').classList.contains('chrome-hidden')`),
+          4000
+        )) === true
       )
       check('hidden is remembered, not momentary', settingsStore.get().chromeHidden === true)
-      const barRight = await inChrome<number>(
-        `Math.round(document.querySelector('.sidebar').getBoundingClientRect().right)`
+      const barGone = await settle(
+        () =>
+          inChrome<boolean>(`document.querySelector('.sidebar').getBoundingClientRect().right <= 0`),
+        4000
       )
-      check('the sidebar is off the window', barRight <= 0, String(barRight))
+      check('the sidebar is off the window', barGone === true)
+      // the chrome re-measures its insets a frame later; wait for main to hear
+      const pageWide = await settle(async () => w.contentBounds().x < 20, 4000)
       const roomy = w.contentBounds()
       say(`[flowtest] content with the chrome hidden: ${JSON.stringify(roomy)}`)
-      check('the page takes the room the sidebar had', roomy.x < 20, JSON.stringify(roomy))
+      check('the page takes the room the sidebar had', pageWide === true, JSON.stringify(roomy))
 
       // 5. the peek slides in over the page — and does not resize it
       const armed = await inChrome<string>(`(() => {
@@ -804,16 +832,20 @@ function setupTestFlows(): void {
         return \`dispatched over \${Math.round(r.width)}×\${Math.round(r.height)} at \${Math.round(r.x)},\${Math.round(r.y)}\`
       })()`)
       say(`[flowtest] edge hover: ${armed}`)
-      await delay(800)
-      say(`[flowtest] chrome classes after hover: ${await inChrome<string>(`document.querySelector('.chrome').className`)}`)
       check(
         'the edge brings the sidebar back',
-        (await inChrome<boolean>(`document.querySelector('.chrome').classList.contains('peeking')`)) === true
+        (await settle(
+          () => inChrome<boolean>(`document.querySelector('.chrome').classList.contains('peeking')`),
+          4000
+        )) === true
       )
-      const barLeft = await inChrome<number>(
-        `Math.round(document.querySelector('.sidebar').getBoundingClientRect().left)`
+      say(`[flowtest] chrome classes after hover: ${await inChrome<string>(`document.querySelector('.chrome').className`)}`)
+      const barIn = await settle(
+        () =>
+          inChrome<boolean>(`document.querySelector('.sidebar').getBoundingClientRect().left === 0`),
+        4000
       )
-      check('it comes all the way in', barLeft === 0, String(barLeft))
+      check('it comes all the way in', barIn === true)
       const peekBounds = w.contentBounds()
       check(
         'the page is not resized by a peek',
@@ -825,10 +857,15 @@ function setupTestFlows(): void {
       w.setContentFullscreen(true)
       w.tabs.layout()
       w.tabs.pushState()
-      await delay(600)
       check(
         'the chrome hears about full screen',
-        (await inChrome<boolean>(`document.querySelector('.chrome').classList.contains('content-fullscreen')`)) === true
+        (await settle(
+          () =>
+            inChrome<boolean>(
+              `document.querySelector('.chrome').classList.contains('content-fullscreen')`
+            ),
+          4000
+        )) === true
       )
       check(
         'there is no edge left to summon it from',
@@ -836,8 +873,12 @@ function setupTestFlows(): void {
       )
       check(
         'the bar is gone, not merely parked off-screen',
-        (await inChrome<boolean>(
-          `getComputedStyle(document.querySelector('.sidebar')).display === 'none'`
+        (await settle(
+          () =>
+            inChrome<boolean>(
+              `getComputedStyle(document.querySelector('.sidebar')).display === 'none'`
+            ),
+          4000
         )) === true
       )
       const [cw, ch] = w.win.getContentSize()

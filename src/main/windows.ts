@@ -1,7 +1,7 @@
 import { BrowserWindow, screen } from 'electron'
 import { join } from 'path'
 import type { Insets, SessionWindowV2, TabsState } from '@shared/types'
-import { HARNESS_QUIET } from './bootstrap'
+import { HARNESS_ACTIVE, HARNESS_QUIET } from './bootstrap'
 import { popupOwner } from './popups'
 import { sessionStore, settingsStore } from './stores'
 import { TabManager, type TabHost } from './tabs'
@@ -105,7 +105,11 @@ export class OffshoreWindow implements TabHost {
       webPreferences: {
         preload: join(__dirname, '../preload/index.js'),
         sandbox: false,
-        contextIsolation: true
+        contextIsolation: true,
+        // The harness parks the window off-screen; Chromium would throttle an
+        // occluded renderer's timers to 1Hz, and the chrome's own choreography
+        // (peek delays, transitions) runs on those timers.
+        backgroundThrottling: !HARNESS_ACTIVE
       }
     })
 

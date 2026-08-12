@@ -19,9 +19,11 @@ if (process.env['OFFSHORE_CLEAN_PROFILE']) {
  * OFFSHORE_TEST_FOREGROUND=1 brings back the old grabby behavior when a flow
  * genuinely needs real OS focus.
  */
-export const HARNESS_QUIET =
-  !!(process.env['OFFSHORE_TEST_FLOW'] || process.env['OFFSHORE_SHOT']) &&
-  !process.env['OFFSHORE_TEST_FOREGROUND']
+export const HARNESS_ACTIVE = !!(
+  process.env['OFFSHORE_TEST_FLOW'] || process.env['OFFSHORE_SHOT']
+)
+
+export const HARNESS_QUIET = HARNESS_ACTIVE && !process.env['OFFSHORE_TEST_FOREGROUND']
 
 if (HARNESS_QUIET) {
   try {
