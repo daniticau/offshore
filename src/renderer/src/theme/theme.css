@@ -18,6 +18,8 @@
   --ink: #0b3c50;
   --ink-soft: rgba(11, 60, 80, 0.55);
   --ink-faint: rgba(11, 60, 80, 0.34);
+  /* the resting traffic light: a dot, not a colour, until you reach for it */
+  --tl-idle: rgba(11, 60, 80, 0.22);
 
   /* ---- accent (JS overrides these from ACCENTS per accent/space) ---- */
   --accent: #1d84ad;
@@ -97,6 +99,7 @@
     --ink: #e6f1f6;
     --ink-soft: rgba(230, 241, 246, 0.6);
     --ink-faint: rgba(230, 241, 246, 0.36);
+    --tl-idle: rgba(230, 241, 246, 0.26);
 
     --accent: #4db2d8;
     --accent-strong: #8fd4ec;

@@ -68,7 +68,17 @@ export interface DevToolsState {
   docked: boolean
   /** Which side it is docked to; meaningless while undocked. */
   side: 'right' | 'bottom'
+  /**
+   * The whole panel in window coordinates, header strip included — null while
+   * the panel isn't on screen. The chrome draws under the views, so the only
+   * place it can put a close button is a strip the DevTools view leaves bare;
+   * main reserves that strip and hands over the rectangle to paint it in.
+   */
+  rect: { x: number; y: number; width: number; height: number } | null
 }
+
+/** The bare strip at the top of a docked panel, where the chrome draws its ✕. */
+export const DEVTOOLS_HEADER_H = 28
 
 export interface AdblockSettings {
   enabled: boolean

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import type { BriefWeather, Settings } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { HomeCanvas } from './HomeCanvas'
+import type { HomeSuggestion } from './HomeCanvas'
 
 interface InternalApi {
   settings: { get(): Promise<Settings | null>; set(p: Partial<Settings>): Promise<Settings> }
@@ -12,6 +13,7 @@ interface InternalApi {
   home?: {
     setSearch(open: boolean): Promise<void>
     onSearch(cb: (open: boolean) => void): void
+    suggest(input: string): Promise<HomeSuggestion[]>
   }
 }
 
@@ -68,6 +70,7 @@ function App(): React.JSX.Element {
       settings={settings}
       onPatch={patch}
       onSubmit={(input) => void internal?.open(input)}
+      fetchSuggestions={async (input) => (await internal?.home?.suggest(input)) ?? []}
       fetchWeather={async () => (await internal?.brief.weather()) ?? null}
       searchPill
       searchOpen={searchOpen}

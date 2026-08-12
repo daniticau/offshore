@@ -22,7 +22,7 @@ import type {
   TabInfo,
   TabsState
 } from '@shared/types'
-import { HOME_WIDGETS, SEARCH_ENGINES } from '@shared/types'
+import { DEVTOOLS_HEADER_H, HOME_WIDGETS, SEARCH_ENGINES } from '@shared/types'
 import { adblock } from './adblock'
 import { extensionsRef } from './extensions-ref'
 import { passwordVault } from './passwords'
@@ -694,11 +694,24 @@ export class TabManager {
     return { ...area, width: Math.max(0, dt.x - area.x - gap) }
   }
 
+  /**
+   * The front-end's own share of the panel: everything below the header strip.
+   * The strip is left bare on purpose — the chrome paints under the views, so a
+   * gap in the views is the only place a close button of ours can be seen.
+   */
+  private devtoolsViewRect(): Rectangle | null {
+    const rect = this.devtoolsRect()
+    if (!rect) return null
+    const h = rect.height - DEVTOOLS_HEADER_H
+    if (h <= 0) return null
+    return { x: rect.x, y: rect.y + DEVTOOLS_HEADER_H, width: rect.width, height: h }
+  }
+
   /** Park the docked DevTools view where it belongs, or take it off screen. */
   private placeDevTools(): void {
     const dt = this.devtools
     if (!dt || dt.view.webContents.isDestroyed()) return
-    const rect = this.devtoolsRect()
+    const rect = this.devtoolsViewRect()
     if (!rect || this.host.isOverlayOpen()) {
       dt.view.setVisible(false)
       return
@@ -902,10 +915,14 @@ export class TabManager {
   devtoolsState(): DevToolsState | null {
     const dt = this.devtools
     if (dt && !dt.view.webContents.isDestroyed()) {
-      return { tabId: dt.tabId, docked: true, side: dt.side }
+      // The header is drawn to sit on the panel, so it goes wherever the panel
+      // goes — including behind an overlay, which takes the view off screen
+      // without closing it.
+      const rect = this.host.isOverlayOpen() ? null : this.devtoolsRect()
+      return { tabId: dt.tabId, docked: true, side: dt.side, rect }
     }
     const floating = this.tabs.find((t) => !t.wc.isDestroyed() && t.wc.isDevToolsOpened())
-    return floating ? { tabId: floating.id, docked: false, side: 'right' } : null
+    return floating ? { tabId: floating.id, docked: false, side: 'right', rect: null } : null
   }
 
   /** ⌥⌘I: open DevTools wherever the settings say, or shut whatever is open. */
@@ -923,23 +940,27 @@ export class TabManager {
   openDevTools(dock?: DevToolsDock, id?: number): void {
     const tab = id == null ? this.activeTab : this.byId(id)
     if (!tab || tab.wc.isDestroyed()) return
-    const mode = dock ?? settingsStore.get().devtoolsDock
+    /*
+     * A window of their own is no longer on offer — it was the one place the
+     * panel's ✕ couldn't reach. Anyone carrying 'window' in their settings from
+     * before gets the side dock instead, rather than a mode with no way out.
+     */
+    const asked = dock ?? settingsStore.get().devtoolsDock
+    const mode: DevToolsDock = asked === 'window' ? 'right' : asked
     this.teardownDock()
     for (const t of this.tabs) {
       if (!t.wc.isDestroyed() && t.wc.isDevToolsOpened()) t.wc.closeDevTools()
     }
-    if (mode === 'window') {
-      tab.wc.openDevTools({ mode: 'detach' })
-    } else {
-      const view = new WebContentsView()
-      // opaque like every other view over page content — see Tab.applyBackground
-      view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#202124' : '#FFFFFF')
-      this.host.win.contentView.addChildView(view)
-      view.setVisible(false)
-      this.devtools = { tabId: tab.id, view, side: mode }
-      tab.wc.setDevToolsWebContents(view.webContents)
-      tab.wc.openDevTools({ mode: 'detach' })
-    }
+    const view = new WebContentsView()
+    // opaque like every other view over page content — see Tab.applyBackground
+    view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#202124' : '#FFFFFF')
+    this.host.win.contentView.addChildView(view)
+    view.setVisible(false)
+    this.devtools = { tabId: tab.id, view, side: mode }
+    tab.wc.setDevToolsWebContents(view.webContents)
+    // 'detach' is Electron's word for "not in a window of Electron's making" —
+    // the host above is ours, so this is what docks them beside the page.
+    tab.wc.openDevTools({ mode: 'detach' })
     this.layout()
     this.pushState()
   }

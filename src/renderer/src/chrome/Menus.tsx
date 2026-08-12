@@ -98,15 +98,16 @@ export function AppMenu({
         checked={dt !== null}
         onClick={run(() => void offshore.tabs.devtools())}
       />
-      {/* Where they land, and where they'll land next time — one control for both */}
+      {/* Which side they dock to, and which side they'll take next time — one
+          control for both. A window of their own is not on offer: it was the one
+          place they couldn't be closed the way Chromium closes them. */}
       <div className="cr-choice">
-        <span className="cr-choice-label">DevTools open in</span>
+        <span className="cr-choice-label">DevTools dock to</span>
         <div className="cr-segmented">
           {(
             [
               ['right', 'Side'],
-              ['bottom', 'Bottom'],
-              ['window', 'Window']
+              ['bottom', 'Bottom']
             ] as [DevToolsDock, string][]
           ).map(([id, label]) => (
             <button

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { BookmarkNode, DownloadEntry, SpaceInfo, Settings, TabInfo, TabsState } from '@shared/types'
+import { DEVTOOLS_HEADER_H } from '@shared/types'
 import { offshore } from './api'
 import type { DownloadToast, FindState } from './App'
 import { BookmarkEditPopover, BookmarksBar, BookmarksSection } from './Bookmarks'
@@ -10,7 +11,6 @@ import { SpaceSwitcher } from './SpaceSwitcher'
 import { AppMenu, ProfileMenu } from './Menus'
 import {
   IconAlert,
-  IconArrowUpRight,
   IconAudio,
   IconBack,
   IconClose,
@@ -23,7 +23,6 @@ import {
   IconMuted,
   IconPlus,
   IconReload,
-  IconSidebar,
   IconSlop,
   IconSplit,
   IconStar,
@@ -106,6 +105,42 @@ export function TabGlyph({ tab, size = 13 }: { tab: TabInfo; size?: number }): R
   return <img src={tab.favicon} alt="" onError={() => setBroken(true)} />
 }
 
+/**
+ * Our own traffic lights, because AppKit's would not do either half of what a
+ * calm window wants. macOS paints its buttons the moment the window is key; we
+ * want three dots the same neutral grey as everything else until the pointer is
+ * actually on them. And AppKit's tracking loses the mouse to whatever chrome we
+ * lay around it, which is what made hovering the red one light nothing at all.
+ *
+ * Hovering anywhere on the strip lights all three at once — the group answers
+ * together, the way it does everywhere else on the platform.
+ */
+function TrafficLights(): React.JSX.Element {
+  return (
+    <div className="traffic-inline no-drag" role="group" aria-label="Window">
+      <button className="tl tl-close" title="Close" onClick={() => void offshore.window.close()}>
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M4 4l4 4M8 4l-4 4" />
+        </svg>
+      </button>
+      <button
+        className="tl tl-min"
+        title="Minimize"
+        onClick={() => void offshore.window.minimize()}
+      >
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M3.5 6h5" />
+        </svg>
+      </button>
+      <button className="tl tl-zoom" title="Zoom" onClick={() => void offshore.window.zoom()}>
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M4 8V4h4" />
+        </svg>
+      </button>
+    </div>
+  )
+}
+
 function NavButtons({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element {
   return (
     <div className="nav-buttons no-drag">
@@ -179,35 +214,50 @@ function StarButton({
 }
 
 /**
- * DevTools, and the button that moves them. They dock beside the page by
- * default, so the second button is always the *other* place they could be —
- * out to a window when docked, back to the side when floating.
+ * One button, and it stays put. There used to be a second one beside it that
+ * sent DevTools out to a window of their own; it never worked, and the panel's
+ * own ✕ is the way out people already know from Chromium.
  */
-function DevToolsButtons({
-  tabsState,
-  settings
-}: Pick<ChromeProps, 'tabsState' | 'settings'>): React.JSX.Element {
+function DevToolsButtons({ tabsState }: Pick<ChromeProps, 'tabsState'>): React.JSX.Element {
   const dt = tabsState.devtools
-  const backTo = settings.devtoolsDock === 'window' ? 'right' : settings.devtoolsDock
   return (
-    <>
+    <button
+      className={`chrome-btn ${dt ? 'active' : ''}`}
+      title={dt ? 'Close Developer Tools (⌥⌘I)' : 'Developer Tools (⌥⌘I)'}
+      onClick={() => void offshore.tabs.devtools()}
+    >
+      <IconCode size={16} />
+    </button>
+  )
+}
+
+/**
+ * The panel's title strip, drawn in the gap main leaves above the DevTools
+ * view. It has to be positioned in window coordinates rather than laid out with
+ * everything else, because the thing it labels is a native view floating over
+ * the chrome, and only main knows where that view ended up.
+ */
+export function DevToolsHeader({
+  tabsState
+}: Pick<ChromeProps, 'tabsState'>): React.JSX.Element | null {
+  const dt = tabsState.devtools
+  if (!dt?.rect) return null
+  const { x, y, width } = dt.rect
+  return (
+    <div
+      className="devtools-head no-drag"
+      style={{ left: x, top: y, width, height: DEVTOOLS_HEADER_H }}
+    >
+      <span className="devtools-title">DevTools</span>
       <button
-        className={`chrome-btn ${dt ? 'active' : ''}`}
-        title={dt ? 'Close Developer Tools (⌥⌘I)' : 'Developer Tools (⌥⌘I)'}
+        className="devtools-close"
+        title="Close DevTools (⌥⌘I)"
+        aria-label="Close DevTools"
         onClick={() => void offshore.tabs.devtools()}
       >
-        <IconCode size={16} />
+        <IconClose size={12} />
       </button>
-      {dt && (
-        <button
-          className="chrome-btn"
-          title={dt.docked ? 'Move DevTools to its own window' : 'Dock DevTools beside the page'}
-          onClick={() => void offshore.tabs.devtoolsDock(dt.docked ? 'window' : backTo)}
-        >
-          {dt.docked ? <IconArrowUpRight size={15} /> : <IconSidebar size={15} />}
-        </button>
-      )}
-    </>
+    </div>
   )
 }
 
@@ -751,7 +801,7 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
       {/* The traffic lights share the nav row — the strip left of the arrows is
           theirs, and stays draggable so the window still moves by its top edge. */}
       <div className="sidebar-toolbar">
-        <div className="traffic-inline" />
+        <TrafficLights />
         <div className="toolbar-spring" />
         <NavButtons activeTab={activeTab} />
         <AppMenuButton {...props} />
@@ -847,7 +897,7 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
           {props.downloadsPanelOpen && <DownloadsPanel onClose={() => props.onToggleDownloadsPanel(false)} />}
         </div>
         <SplitButton tabsState={tabsState} />
-        <DevToolsButtons tabsState={tabsState} settings={props.settings} />
+        <DevToolsButtons tabsState={tabsState} />
         <button
           className="chrome-btn"
           title="Settings (⌘,)"
@@ -987,7 +1037,11 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
   return (
     <div className="topbar drag" onMouseLeave={props.onPeekLeave}>
       <div className="topbar-tabs-row">
-        <div className="traffic-spacer-h" />
+        {/* AppKit's buttons are hidden for both layouts, so this row draws the
+            same three the sidebar does — horizontal keeps its own spacing. */}
+        <div className="traffic-spacer-h">
+          <TrafficLights />
+        </div>
         <SpaceSwitcher
           spaces={tabsState.spaces}
           activeSpaceId={tabsState.activeSpaceId}
@@ -1074,7 +1128,7 @@ export function TopBar(props: ChromeProps): React.JSX.Element {
           </div>
           {/* Chromium's star lives here, and the bookmarks bar moved to the ⋮ menu */}
           <StarButton activeTab={activeTab} onEditBookmark={props.onEditBookmark} size={17} toolbar />
-          <DevToolsButtons tabsState={tabsState} settings={props.settings} />
+          <DevToolsButtons tabsState={tabsState} />
           <ProfileButton
             tabsState={tabsState}
             accentFor={props.accentFor}

@@ -43,7 +43,14 @@ body,
   /* the new-tab row belongs to the tab list — equal air above and below it */
   --tab-list-gap: 4px;
   --section-gap: 8px;
-  --traffic-h: 44px;
+  /* Apple's traffic lights, to the pixel: 12px dots, 8px apart, 20px in from
+     the window edge, and the row itself 20px down from the top. */
+  --tl-size: 12px;
+  --tl-gap: 8px;
+  --tl-inset: 20px;
+  --tl-top: 20px;
+  /* what the top row costs in height, lights and nav buttons together */
+  --toolbar-row: calc(var(--tl-top) + var(--btn-h));
   --font-chrome: 13px;
   --topbar-pad: 8px;
   --topbar-tabs-h: 32px;
@@ -71,7 +78,9 @@ body,
   --tab-btn: 20px;
   --tab-icon: 15px;
   --section-gap: 6px;
-  --traffic-h: 38px;
+  /* compact keeps Apple's dot and inset — only the drop from the top tightens,
+     so the lights stay where the eye expects them on any density */
+  --tl-top: 16px;
   --font-chrome: 12.5px;
   --topbar-pad: 6px;
   --topbar-tabs-h: 29px;
@@ -315,29 +324,125 @@ body,
   transform: translateX(calc(-1 * var(--sidebar-w) - 24px));
 }
 
-/* The nav row starts where the traffic lights end — same clearance the topbar
-   uses (gutter + 76px), minus the sidebar's own left padding. */
 /*
- * The traffic lights are macOS's own buttons, sitting over our chrome. A drag
- * region *under* them swallows the mouse before AppKit's own tracking sees it,
- * which is what made them hover late, hover once, or not light up at all. Their
- * strip is therefore explicitly not draggable — the same deal Chrome makes, where
- * you can't drag a window by its buttons either.
+ * The traffic lights are ours now (see TrafficLights in Tabs.tsx). They still
+ * must not be draggable — you cannot drag a window by its buttons on this
+ * platform, and a drag region here would swallow the pointer before the hover
+ * ever landed, which is the bug that outlived the last two attempts at it.
  */
 .traffic-inline,
 .traffic-spacer-h {
   -webkit-app-region: no-drag;
 }
+
+/*
+ * Apple's own geometry: 12px dots, 8px between them, and the group inset 20px
+ * from the window's left edge. The sidebar already pays --chrome-pad of that,
+ * so the strip only owes the difference.
+ */
 .traffic-inline {
-  width: calc(86px - var(--chrome-pad));
+  display: flex;
+  align-items: center;
+  gap: var(--tl-gap);
   flex-shrink: 0;
+  padding-left: calc(var(--tl-inset) - var(--chrome-pad));
+}
+
+.tl {
+  width: var(--tl-size);
+  height: var(--tl-size);
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: default;
+  /* the resting state: three dots the same quiet grey, no colour at all */
+  background: var(--tl-idle);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+
+/* One pointer anywhere on the strip lights the whole group, as on any Mac. */
+.traffic-inline:hover .tl-close {
+  background: #ff5f57;
+}
+.traffic-inline:hover .tl-min {
+  background: #febc2e;
+}
+.traffic-inline:hover .tl-zoom {
+  background: #28c840;
+}
+
+/* The glyphs ride along, and only then — a resting dot is an empty dot. */
+.tl svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.tl svg path {
+  stroke: rgba(0, 0, 0, 0.62);
+  stroke-width: 1.25;
+  stroke-linecap: round;
+  fill: none;
+}
+.traffic-inline:hover .tl svg {
+  opacity: 1;
+}
+.tl:active {
+  filter: brightness(0.86);
+}
+
+/* ---------- docked DevTools: the strip main leaves bare above the view ---------- */
+
+.devtools-head {
+  position: fixed;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px 0 10px;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: var(--content-bg);
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.devtools-title {
+  letter-spacing: 0.02em;
+}
+.devtools-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: default;
+  transition: background var(--dur) var(--ease-out);
+}
+.devtools-close:hover {
+  background: var(--hover);
+  color: var(--ink);
 }
 
 .sidebar-toolbar {
   display: flex;
+  /*
+   * The nav buttons sit flush against the top of the window — their top border
+   * is the window's top edge plus the standard inset, not floating above it —
+   * and the lights center on that row rather than on a taller strip of their
+   * own. One row, one centre line, both halves on it.
+   */
   align-items: center;
   gap: 3px;
-  height: var(--traffic-h);
+  height: var(--btn-h);
+  margin-top: var(--tl-top);
   flex-shrink: 0;
 }
 
@@ -1091,7 +1196,7 @@ browser-action-list {
 .mode-vertical .popup-list {
   position: fixed;
   left: var(--chrome-pad);
-  top: calc(var(--traffic-h) + var(--btn-h) + 12px);
+  top: calc(var(--toolbar-row) + var(--btn-h) + 12px);
   right: auto;
   width: calc(var(--sidebar-w) - var(--chrome-pad) * 2);
 }
@@ -1313,6 +1418,12 @@ browser-action-list {
 .traffic-spacer-h {
   width: 76px;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+/* the topbar pays its own left padding, so the strip owes less of the inset */
+.traffic-spacer-h .traffic-inline {
+  padding-left: calc(var(--tl-inset) - var(--topbar-pad));
 }
 
 /* The space between tabs is each tab's own margin, not the strip's gap — a gap
@@ -2034,6 +2145,14 @@ browser-action-list {
   bottom: calc(100% + 8px);
   right: auto;
   left: 0;
+}
+/*
+ * In the sidebar the panel keeps to the column, the way the popup list does.
+ * That is what lets it skip the freeze entirely: a panel that never crosses
+ * onto the page has nothing to hide behind and nothing to stand in for.
+ */
+.mode-vertical .dl-panel {
+  width: calc(var(--sidebar-w) - var(--chrome-pad) * 2);
 }
 .dl-panel-head {
   display: flex;

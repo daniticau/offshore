@@ -87,7 +87,9 @@ const api = {
     setSearch: (open: boolean) => invoke('home:set-search', open),
     onSearch: (cb: (open: boolean) => void) => {
       ipcRenderer.on('home:search', (_e, open: boolean) => cb(!!open))
-    }
+    },
+    /** What the omnibox would offer for the same half-typed word. */
+    suggest: (input: string) => invoke('home:suggest', input)
   }
 }
 

@@ -283,12 +283,30 @@ const DEFAULT_STYLE: Record<WidgetKey, string> = {
   moon: 'line'
 }
 
+/**
+ * A row under the search pill. This is the omnibox's own suggestion shape, kept
+ * to the fields the pill actually shows — the page is a tab like any other, so
+ * it never sees the chrome's types.
+ */
+export interface HomeSuggestion {
+  kind: 'tab' | 'url' | 'search' | 'action' | 'internal' | 'bookmark' | 'history'
+  text: string
+  url: string
+  title?: string
+}
+
 export interface HomeCanvasProps {
   settings: Settings
   /** Persist a settings change — the caller owns the copy it renders from. */
   onPatch(patch: Partial<Settings>): void
   /** A query or URL was committed in the search pill. */
   onSubmit(input: string): void
+  /**
+   * What the engine and your own tabs, bookmarks and history make of a
+   * half-typed word. Left out on the zero-tab screen, which has no search to
+   * put a list under.
+   */
+  fetchSuggestions?(input: string): Promise<HomeSuggestion[]>
   fetchWeather(): Promise<BriefWeather | null>
   /**
    * Does this screen have a search at all? On for a new tab, which is a page you
@@ -332,6 +350,7 @@ export function HomeCanvas({
   settings,
   onPatch: patch,
   onSubmit,
+  fetchSuggestions,
   fetchWeather,
   searchPill = true,
   searchOpen = true,
@@ -390,6 +409,47 @@ export function HomeCanvas({
   const showSearch = searchPill && searchOpen && !editing
   const dismissRef = useRef(onDismissSearch)
   dismissRef.current = onDismissSearch
+
+  /*
+   * The rows under the pill, and which one the arrows are on (-1 = none, so
+   * Enter still means "what I typed"). Asked for a beat after you stop typing:
+   * the type-ahead half of this list goes out over the network, and a request
+   * per keystroke would be both slower and louder than one per word.
+   */
+  const [sugs, setSugs] = useState<HomeSuggestion[]>([])
+  const [pick, setPick] = useState(-1)
+  const suggestRef = useRef(fetchSuggestions)
+  suggestRef.current = fetchSuggestions
+
+  useEffect(() => {
+    const q = text.trim()
+    if (!showSearch || !suggestRef.current || !q) {
+      setSugs([])
+      setPick(-1)
+      return undefined
+    }
+    let live = true
+    const t = setTimeout(() => {
+      void suggestRef.current?.(q).then((rows) => {
+        if (!live) return
+        setSugs(rows ?? [])
+        // a fresh list is nobody's selection yet
+        setPick(-1)
+      })
+    }, 90)
+    return () => {
+      live = false
+      clearTimeout(t)
+    }
+  }, [text, showSearch])
+
+  // Putting the search away takes its list with it.
+  useEffect(() => {
+    if (!showSearch) {
+      setSugs([])
+      setPick(-1)
+    }
+  }, [showSearch])
 
   // Only take the cursor when there is a pill to take it into — otherwise the
   // toolbar omnibox owns it and this would yank focus out from under it.
@@ -508,7 +568,23 @@ export function HomeCanvas({
     const q = text.trim()
     if (!q) return
     setText('')
+    setSugs([])
+    setPick(-1)
     onSubmit(q)
+  }
+
+  /**
+   * Take the highlighted row, or what was typed when nothing is highlighted.
+   * A row carries the url it resolved to, so picking "canva" searches for the
+   * word rather than for the letters that were actually in the box.
+   */
+  const commit = (): void => {
+    const chosen = pick >= 0 ? sugs[pick] : undefined
+    if (!chosen) return submit()
+    setText('')
+    setSugs([])
+    setPick(-1)
+    onSubmit(chosen.url || chosen.text)
   }
 
   const widgets: NewTabWidgets = settings.newTabWidgets ?? DEFAULT_SETTINGS.newTabWidgets
@@ -1018,11 +1094,51 @@ export function HomeCanvas({
                 tabIndex={showSearch ? 0 : -1}
                 aria-hidden={!showSearch}
                 onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && submit()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    commit()
+                    return
+                  }
+                  if (!sugs.length) return
+                  // Arrow off the end of the list lands back on what you typed,
+                  // which is the row Enter means when nothing is highlighted.
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setPick((p) => (p + 1 >= sugs.length ? -1 : p + 1))
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setPick((p) => (p - 1 < -1 ? sugs.length - 1 : p - 1))
+                  }
+                }}
               />
               <span className="start-measure" ref={mirrorRef} aria-hidden="true">
                 {text}
               </span>
+              {sugs.length > 0 && (
+                <div className="start-sugs" role="listbox">
+                  {sugs.map((s, i) => (
+                    <button
+                      key={`${s.kind}:${s.url}:${i}`}
+                      className={`start-sug ${i === pick ? 'on' : ''}`}
+                      role="option"
+                      aria-selected={i === pick}
+                      // mousedown, not click: the input must not lose the cursor
+                      // between pressing a row and the row being taken
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        setText('')
+                        setSugs([])
+                        setPick(-1)
+                        onSubmit(s.url || s.text)
+                      }}
+                      onMouseEnter={() => setPick(i)}
+                    >
+                      <span className="start-sug-text">{s.text}</span>
+                      {s.title && <span className="start-sug-kind">{s.title}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

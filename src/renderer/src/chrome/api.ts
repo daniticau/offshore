@@ -105,7 +105,7 @@ export interface OffshoreApi {
   }
   adblock: { toggleSite(url: string): Promise<boolean> }
   app: { info(): Promise<{ version: string } | null> }
-  window: { zoom(): Promise<void> }
+  window: { zoom(): Promise<void>; close(): Promise<void>; minimize(): Promise<void> }
   on(channel: string, cb: (...args: never[]) => void): () => void
   devshotDone(): void
 }

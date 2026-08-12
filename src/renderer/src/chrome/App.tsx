@@ -13,7 +13,7 @@ import { accentVars, useIsDark } from '../theme/useTheme'
 import { offshore, prettyHost } from './api'
 import { PasswordDialog } from './PasswordDialog'
 import { playSound, setSoundsEnabled } from './sounds'
-import { Sidebar, TopBar } from './Tabs'
+import { DevToolsHeader, Sidebar, TopBar } from './Tabs'
 
 interface DevshotPayload {
   dataUrl: string
@@ -490,7 +490,6 @@ export function App(): React.JSX.Element {
   // ---- overlay (content hidden while a chrome surface must float over it) ----
   const overlayOpen =
     omniboxOverlay ||
-    downloadsPanelOpen ||
     siteInfoOpen ||
     appMenuOpen ||
     profileMenuOpen ||
@@ -498,7 +497,17 @@ export function App(): React.JSX.Element {
     // a peeking bar hangs over the page like any other panel, so it comes in the
     // same way: the page's picture takes its place and nothing appears to move
     peeking ||
-    (mode === 'horizontal' && (bookmarkEdit !== null || popupPanelOpen))
+    /*
+     * Downloads joins the popup list here: in the sidebar it is a column-width
+     * panel that never reaches the page, so there is nothing to photograph and
+     * nothing to hide. Freezing for it cost all three of the things you'd
+     * notice — the home screen's waves stopped dead on a still, the panel came
+     * in twice (once as itself, once when the live view stood down), and it
+     * spent the first frames *behind* the page, because the chrome draws under
+     * the views until they step aside. Overhanging the page is what earns the
+     * dance, and only the topbar's panel does.
+     */
+    (mode === 'horizontal' && (bookmarkEdit !== null || popupPanelOpen || downloadsPanelOpen))
   useEffect(() => {
     void offshore.chrome.setOverlay(overlayOpen)
   }, [overlayOpen])
@@ -565,6 +574,10 @@ export function App(): React.JSX.Element {
     }
     void offshore.tabs.create().then(() => void offshore.chrome.focusPage())
   }, [])
+
+  // ⌘T, the palette's New Tab and the context menu's all land here, so the key
+  // and the row cannot mean two different things.
+  useEffect(() => offshore.on('newtab:request', (() => newTab()) as never), [newTab])
 
   // ---- find bar ----
   const findQuery = useCallback((text: string, findNext: boolean, forward = true) => {
@@ -731,6 +744,9 @@ export function App(): React.JSX.Element {
       )}
 
       {mode === 'vertical' ? <Sidebar {...chromeProps} /> : <TopBar {...chromeProps} />}
+
+      {/* The docked panel's title strip, in the gap main leaves above the view */}
+      <DevToolsHeader tabsState={tabsState} />
 
       {/* Rounded backdrop + shadow behind the web content view; also the insets source */}
       <ContentFrame>

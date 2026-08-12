@@ -27,7 +27,8 @@ const SUBSCRIBABLE = new Set([
   'chrome:toggle-hidden',
   'passwords:offer',
   'popups:blocked',
-  'widgets:edit'
+  'widgets:edit',
+  'newtab:request'
 ])
 
 const api = {
@@ -137,7 +138,9 @@ const api = {
     info: () => invoke('app:info')
   },
   window: {
-    zoom: () => invoke('window:zoom')
+    zoom: () => invoke('window:zoom'),
+    close: () => invoke('window:close'),
+    minimize: () => invoke('window:minimize')
   },
   on: (channel: string, cb: (...args: unknown[]) => void): (() => void) => {
     if (!SUBSCRIBABLE.has(channel)) throw new Error(`Unknown channel: ${channel}`)

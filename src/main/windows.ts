@@ -116,6 +116,21 @@ export class OffshoreWindow implements TabHost {
       }
     })
 
+    /*
+     * AppKit's own buttons go away and the chrome draws three of its own in
+     * their place. Two reasons. The look: macOS colors its buttons whenever the
+     * window is key, and the resting state we want is three neutral dots that
+     * only light up under the pointer. And the behaviour: a real button sitting
+     * over our chrome has its own AppKit tracking, which our drag regions kept
+     * stealing the mouse from — that is why hovering the red one lit nothing in
+     * a windowed frame while the same gesture worked in full screen.
+     */
+    try {
+      this.win.setWindowButtonVisibility(false)
+    } catch {
+      /* not macOS — there were never any buttons to hide */
+    }
+
     this.tabs = new TabManager(this)
     windows.add(this)
     lastFocused ??= this
@@ -212,9 +227,15 @@ export class OffshoreWindow implements TabHost {
   /**
    * A new tab, cursor already in the pill the page puts in the middle of
    * itself — the one thing a new tab has that the empty window doesn't.
+   *
+   * The chrome decides what that means, because it is the only side that knows
+   * whether you are already sitting on a blank tab with its search put away. Ask
+   * it, the way pressing the New Tab row does, so ⌘T and the row cannot disagree
+   * — pressing the key used to make a second blank tab and hand the first one a
+   * row of its own in the sidebar.
    */
   openNewTab(): void {
-    this.tabs.createTab().wc.focus()
+    this.sendToChrome('newtab:request')
   }
 
   onTabsChanged(): void {
@@ -292,13 +313,14 @@ export class OffshoreWindow implements TabHost {
     })
   }
 
-  /** Dynamic density: chrome hid/revealed itself — keep traffic lights in sync. */
-  setCollapsed(collapsed: boolean): void {
-    try {
-      this.win.setWindowButtonVisibility(!collapsed)
-    } catch {
-      /* not macOS */
-    }
+  /**
+   * The chrome draws its own traffic lights, so there is nothing here to keep in
+   * sync any more — they are three elements in the sidebar and they leave with
+   * it. Kept as a no-op because the chrome still reports its state on every
+   * collapse, and because a window that is not macOS never had buttons to hide.
+   */
+  setCollapsed(_collapsed: boolean): void {
+    /* the lights are the chrome's now — see TrafficLights in Tabs.tsx */
   }
 }
 
