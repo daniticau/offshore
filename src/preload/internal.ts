@@ -86,7 +86,13 @@ const api: OffshoreInternalApi = {
     setSearch: (open: boolean) => invoke('home:set-search', open),
     onSearch: (cb: (open: boolean) => void) => {
       ipcRenderer.on('home:search', (_e, open: boolean) => cb(!!open))
-    }
+    },
+    /**
+     * "There is something on screen now." A new tab is swapped in on this, not
+     * on the document being parsed — the document is parsed while the page is
+     * still blank, and swapping then is what flashes the backdrop at you.
+     */
+    painted: () => ipcRenderer.send('home:painted')
   }
 }
 

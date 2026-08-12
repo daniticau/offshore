@@ -22,6 +22,13 @@ body,
   pointer-events: auto;
 }
 
+/* Standing in for the live page while a panel has its room: it looks like the
+   home screen because it is one, but it is not the page — clicks belong to the
+   panel that asked for the space, and there is nothing here to press. */
+.start.stand-in {
+  pointer-events: none;
+}
+
 .start-stage {
   position: absolute;
   inset: 0;
@@ -162,11 +169,17 @@ body,
   color: var(--accent-strong);
   transition:
     width var(--dur-slow) var(--ease-out),
-    top var(--dur-slow) var(--ease-out),
     opacity 150ms var(--ease-out),
     visibility 150ms linear,
     transform 190ms var(--ease-spring);
 }
+/*
+ * `top` is deliberately not in that list. It comes from the board, and the board
+ * measures itself a frame after the page mounts — so a pill that eased its way
+ * to a new `top` spent that frame sliding down the screen into place, which is
+ * the entrance nobody asked for. It pops where it belongs instead: the scale and
+ * the fade are the whole animation, and they happen in one spot.
+ */
 .start-search.on {
   opacity: 1;
   visibility: visible;

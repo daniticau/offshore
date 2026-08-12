@@ -163,7 +163,10 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
     const reduced = REDUCED_MOTION()
 
     const surface = (layer: LayerSpec, tSec: number, viewPerPx: number): string => {
-      const drift = tSec * layer.speed
+      // Every harmonic is a whole number of cycles per PERIOD, so a drift wrapped
+      // at PERIOD draws exactly the same water — and the clock behind it is the
+      // wall clock now, which is a big number to be multiplying by a speed.
+      const drift = (tSec * layer.speed) % PERIOD
       let d = ''
       for (let i = 0; i <= SAMPLES; i++) {
         const x = (i / SAMPLES) * VIEW_W

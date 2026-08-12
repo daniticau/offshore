@@ -70,6 +70,44 @@ export interface DevToolsState {
   side: 'right' | 'bottom'
 }
 
+export interface Rect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** Docked DevTools take a third of the content card, within these limits. */
+export const DEVTOOLS_MIN = 260
+export const DEVTOOLS_MAX = 720
+/** Breathing room between the page and the panel beside it. */
+export const DEVTOOLS_GAP = 6
+/**
+ * The strip along the top of a docked panel, which is not the panel: the chrome
+ * draws its name and its ✕ there, the way Chromium puts a close button on its
+ * own DevTools. The front-end never sees those pixels — the view starts below
+ * them — so the button is ours to place and ours to style.
+ */
+export const DEVTOOLS_HEAD = 26
+
+/**
+ * Where docked DevTools go inside a content card, header included. Main lays the
+ * view out from this and the chrome draws the header from it, so the two can
+ * never disagree about where the panel is.
+ */
+export function devtoolsPanelRect(area: Rect, side: 'right' | 'bottom'): Rect | null {
+  if (side === 'bottom') {
+    const wanted = Math.min(DEVTOOLS_MAX, Math.max(DEVTOOLS_MIN, Math.round(area.height / 3)))
+    const height = Math.min(wanted, area.height - DEVTOOLS_MIN)
+    if (height <= DEVTOOLS_HEAD) return null
+    return { x: area.x, y: area.y + area.height - height, width: area.width, height }
+  }
+  const wanted = Math.min(DEVTOOLS_MAX, Math.max(DEVTOOLS_MIN, Math.round(area.width / 3)))
+  const width = Math.min(wanted, area.width - DEVTOOLS_MIN)
+  if (width <= 0) return null
+  return { x: area.x + area.width - width, y: area.y, width, height: area.height }
+}
+
 export interface AdblockSettings {
   enabled: boolean
   /** list id -> enabled */
@@ -559,7 +597,11 @@ export interface Insets {
  */
 export interface PageFreezeFrame {
   tabId: number
-  dataUrl: string
+  /**
+   * A photograph of the page — or null when the chrome is to draw that page
+   * itself, live, because it already knows how to (the home screen).
+   */
+  dataUrl: string | null
   bounds: { x: number; y: number; width: number; height: number }
 }
 

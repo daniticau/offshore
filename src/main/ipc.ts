@@ -261,10 +261,16 @@ function runAction(w: OffshoreWindow, id: ActionId): void {
 
 export function setupIpc(): void {
   // ---- tabs (chrome UI only) ----
+  /*
+   * A plain new tab goes through the window, which knows where the cursor
+   * belongs afterwards — the same path ⌘T takes, so the + button and the
+   * shortcut cannot drift apart. A tab asked for by address is just a tab.
+   */
   ipcMain.handle('tabs:new', (e, url?: string) => {
-    const resolved = url ? resolveOmniboxInput(url, settingsStore.get()) : undefined
-    const tab = chromeWindow(e)?.tabs.createTab(resolved)
-    return tab?.id
+    const w = chromeWindow(e)
+    if (!w) return
+    if (!url) return w.openNewTab().id
+    return w.tabs.createTab(resolveOmniboxInput(url, settingsStore.get())).id
   })
   ipcMain.handle('tabs:close', (e, id: number) => chromeWindow(e)?.tabs.closeTab(id))
   ipcMain.handle('tabs:activate', (e, id: number) => chromeWindow(e)?.tabs.activateTab(id))
@@ -555,6 +561,12 @@ export function setupIpc(): void {
     }
     const w = windowForTab(e.sender.id)
     w?.tabs.setHomeSearch(e.sender.id, !!open)
+  })
+
+  /** The home screen has its first frame up; whoever is waiting to show it can. */
+  ipcMain.on('home:painted', (e) => {
+    if (!isTrustedSender(e)) return
+    windowForTab(e.sender.id)?.tabs.byId(e.sender.id)?.markPainted()
   })
 
   // ---- palette actions ----

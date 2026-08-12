@@ -171,5 +171,7 @@ export interface OffshoreInternalApi {
   home: {
     setSearch(open: boolean): Promise<void>
     onSearch(cb: (open: boolean) => void): void
+    /** The home screen has genuinely painted — swap gates wait on this. */
+    painted(): void
   }
 }
