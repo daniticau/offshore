@@ -18,6 +18,7 @@ import {
   type AccentId,
   type ActionId,
   type DevToolsDock,
+  type Insets,
   type PasswordOffer,
   type Settings,
   type SpaceProfile,
@@ -38,13 +39,7 @@ import { openDownload, preparedSessions, revealDownload } from './sessions'
 import { searchSuggestions } from './suggest'
 import { bookmarksStore, downloadsStore, historyStore, settingsStore } from './stores'
 import { devRendererUrl, internalPageUrl, prettyHost, resolveOmniboxInput } from './util'
-import {
-  windowForChromeContents,
-  windowForTab,
-  windows,
-  type Insets,
-  type OffshoreWindow
-} from './windows'
+import { windowForChromeContents, windowForTab, windows, type OffshoreWindow } from './windows'
 
 function chromeWindow(e: IpcMainInvokeEvent | IpcMainEvent): OffshoreWindow | undefined {
   return windowForChromeContents(e.sender.id)
@@ -99,7 +94,7 @@ function validatedPageSender(e: IpcMainEvent): {
   return ok ? { entry, origin } : null
 }
 
-export function broadcast(channel: string, ...args: unknown[]): void {
+function broadcast(channel: string, ...args: unknown[]): void {
   for (const w of windows) w.sendToChrome(channel, ...args)
 }
 
@@ -239,11 +234,9 @@ function runAction(w: OffshoreWindow, id: ActionId): void {
       w.sendToChrome('spaces:begin-rename', space.id)
       break
     }
-    case 'toggle-layout': {
-      const current = settingsStore.get().tabOrientation
-      settingsStore.set({ tabOrientation: current === 'vertical' ? 'horizontal' : 'vertical' })
+    case 'toggle-layout':
+      settingsStore.toggleTabOrientation()
       break
-    }
     case 'toggle-sidebar':
       w.sendToChrome('chrome:toggle-hidden')
       break
@@ -792,9 +785,6 @@ export function setupIpc(): void {
         console.warn('[privacy] clear failed for a session:', err)
       }
     }
-  })
-  ipcMain.handle('shell:open-external', (e, url: string) => {
-    if (isTrustedSender(e) && /^https?:\/\//.test(url)) void shell.openExternal(url)
   })
   ipcMain.handle('internal:open', (e, url: string) => {
     if (!isTrustedSender(e)) return

@@ -34,7 +34,7 @@ interface PasswordsFile {
   neverSave: string[]
 }
 
-export interface PendingOffer {
+interface PendingOffer {
   offerId: string
   origin: string
   host: string
@@ -98,7 +98,7 @@ class PasswordVault {
     this.file?.save()
   }
 
-  findForOrigin(origin: string): VaultEntry[] {
+  private findForOrigin(origin: string): VaultEntry[] {
     return this.data.entries.filter((e) => e.origin === origin)
   }
 
@@ -114,7 +114,7 @@ class PasswordVault {
     return { id: pick.id, username: dec(pick.usernameEnc), password: dec(pick.passwordEnc) }
   }
 
-  markUsed(id: string, partition: string): void {
+  private markUsed(id: string, partition: string): void {
     const e = this.data.entries.find((x) => x.id === id)
     if (!e) return
     const now = Date.now()

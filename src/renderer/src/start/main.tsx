@@ -1,21 +1,12 @@
 import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { BriefWeather, Settings } from '@shared/types'
+import type { OffshoreInternalApi } from '@shared/bridge'
+import type { Settings } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { HomeCanvas } from './HomeCanvas'
 
-interface InternalApi {
-  settings: { get(): Promise<Settings | null>; set(p: Partial<Settings>): Promise<Settings> }
-  brief: { weather(): Promise<BriefWeather | null> }
-  open(url: string): Promise<void>
-  onEditWidgets?(cb: () => void): void
-  home?: {
-    setSearch(open: boolean): Promise<void>
-    onSearch(cb: (open: boolean) => void): void
-  }
-}
-
-const internal = (window as unknown as { offshoreInternal?: InternalApi }).offshoreInternal
+const internal = (window as unknown as { offshoreInternal?: OffshoreInternalApi })
+  .offshoreInternal
 
 /**
  * The new tab page — a thin shell around HomeCanvas, which the zero-tab window
@@ -45,8 +36,8 @@ function App(): React.JSX.Element {
     }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
-    internal?.onEditWidgets?.(() => setEditSignal((n) => n + 1))
-    internal?.home?.onSearch(setSearchOpen)
+    internal?.onEditWidgets(() => setEditSignal((n) => n + 1))
+    internal?.home.onSearch(setSearchOpen)
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
@@ -73,7 +64,7 @@ function App(): React.JSX.Element {
       searchOpen={searchOpen}
       onDismissSearch={() => {
         setSearchOpen(false)
-        void internal?.home?.setSearch(false)
+        void internal?.home.setSearch(false)
       }}
       autoFocus
       editSignal={editSignal}

@@ -32,7 +32,7 @@ import {
   recordBlocked,
   registerPageContents
 } from './popups'
-import { TAB_PARTITION, prepareTabSession, spacePartition, tabSession } from './sessions'
+import { TAB_PARTITION, prepareTabSession, spacePartition } from './sessions'
 import { bookmarksStore, genId, historyStore, settingsStore } from './stores'
 import {
   devRendererUrl,
@@ -45,8 +45,6 @@ import {
   toDisplayUrl
 } from './util'
 import type { OffshoreWindow } from './windows'
-
-export { TAB_PARTITION, tabSession } from './sessions'
 
 /** How long we let a brand-new renderer get its first pixels up before giving up on it. */
 const COLD_SWAP_MS = 300
@@ -63,7 +61,7 @@ interface DockedDevTools {
   side: 'right' | 'bottom'
 }
 
-export interface Space {
+interface Space {
   id: string
   name: string
   accent?: AccentId
@@ -95,7 +93,7 @@ function devOriginArgs(): string[] {
 }
 
 /** Fill saved credentials into a page when we hold some for its exact origin. */
-export function maybeAutofill(wc: WebContents, partition: string): void {
+function maybeAutofill(wc: WebContents, partition: string): void {
   if (!settingsStore.get().passwords.enabled) return
   let u: URL
   try {
@@ -116,7 +114,6 @@ export class Tab {
   readonly partition: string
   spaceId = ''
   favicon?: string
-  loadError?: string
   /** 0–100 heuristic slop score reported by the page preload */
   slopScore?: number
   /**
@@ -443,7 +440,6 @@ export class TabManager {
       this.createTab(url)
       return
     }
-    tab.loadError = undefined
     void tab.wc.loadURL(url).catch(() => {})
     tab.wc.focus()
   }
@@ -1153,7 +1149,6 @@ export class TabManager {
     })
 
     wc.on('did-navigate', (_e, url) => {
-      tab.loadError = undefined
       tab.slopScore = undefined
       tab.favicon = undefined
       if (this.pipTabId === tab.id) this.pipTabId = null
@@ -1192,7 +1187,6 @@ export class TabManager {
     wc.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
       if (!isMainFrame || errorCode === -3 || errorCode === 0) return
       tab.markReady()
-      tab.loadError = errorDescription
       const failed = validatedURL || wc.getURL()
       if (failed && !errorPageTarget(failed) && !isInternalUrl(failed)) {
         void wc.loadURL(errorPageUrl(failed, errorCode, errorDescription)).catch(() => {})
@@ -1202,7 +1196,6 @@ export class TabManager {
 
     wc.on('render-process-gone', (_e, details) => {
       if (details.reason === 'clean-exit') return
-      tab.loadError = `Page crashed (${details.reason})`
       const current = wc.getURL()
       if (current && !isInternalUrl(current)) {
         void wc.loadURL(errorPageUrl(current, 0, `crash:${details.reason}`)).catch(() => {})

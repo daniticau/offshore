@@ -87,7 +87,6 @@ export const IconTrash = svg(
     <path d="M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12" />
   </>
 )
-export const IconShield = svg(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />)
 export const IconShieldFilled = function IconShieldFilled({ size = 16, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>
@@ -135,11 +134,6 @@ export const IconFolder = svg(
   <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
 )
 export const IconChevron = svg(<path d="M9 6l6 6-6 6" />)
-export const IconBookmarkTray = svg(
-  <>
-    <path d="M7 3h10a1 1 0 0 1 1 1v16l-6-4-6 4V4a1 1 0 0 1 1-1z" />
-  </>
-)
 export const IconArrowUpRight = svg(
   <>
     <path d="M7 17L17 7" />

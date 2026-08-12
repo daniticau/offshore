@@ -1,18 +1,16 @@
 import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import type { OffshoreInternalApi } from '@shared/bridge'
 import type { Settings } from '@shared/types'
 import { DEFAULT_SETTINGS, accentColors } from '@shared/types'
+import { prettyHost } from '@shared/url'
 import { DitheredWaves } from '../theme/DitheredWaves'
 import { useIsDark } from '../theme/useTheme'
 import '../theme/theme.css'
 import './error.css'
 
-interface InternalApi {
-  settings: { get(): Promise<Settings | null> }
-  open(url: string): Promise<void>
-}
-
-const internal = (window as unknown as { offshoreInternal?: InternalApi }).offshoreInternal
+const internal = (window as unknown as { offshoreInternal?: OffshoreInternalApi })
+  .offshoreInternal
 
 const params = new URLSearchParams(window.location.search)
 const failedUrl = params.get('url') ?? ''
@@ -42,14 +40,6 @@ function variant(): { title: string; sub: string } {
   }
 }
 
-function prettyTarget(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '')
-  } catch {
-    return url
-  }
-}
-
 function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const isDark = useIsDark()
@@ -69,7 +59,7 @@ function App(): React.JSX.Element {
       <div className="error-card">
         <h1>{v.title}</h1>
         <p className="error-sub">{v.sub}</p>
-        {failedUrl && <div className="error-url">{prettyTarget(failedUrl)}</div>}
+        {failedUrl && <div className="error-url">{prettyHost(failedUrl)}</div>}
         {failedUrl && (
           <button className="error-retry" onClick={() => void internal?.open(failedUrl)}>
             Try again

@@ -16,7 +16,7 @@ import type { OffshoreWindow } from './windows'
 const GESTURE_WINDOW = 2000
 const MAX_BLOCKED_PER_TAB = 10
 
-export interface PageEntry {
+interface PageEntry {
   kind: 'tab' | 'popup'
   ownerWindow: OffshoreWindow
   partition: string
@@ -63,9 +63,8 @@ export function recordBlocked(openerWc: WebContents, url: string): void {
   list.push({ url, ts: Date.now() })
   if (list.length > MAX_BLOCKED_PER_TAB) list.shift()
   blockedByTab.set(openerWc.id, list)
-  const entry = pageRegistry.get(openerWc.id)
-  entry?.ownerWindow.sendToChrome('popups:blocked', { tabId: openerWc.id, url, ts: Date.now() })
-  entry?.ownerWindow.tabs.pushState()
+  // The chrome's "popup blocked" chip reads blockedPopups off the tab state
+  pageRegistry.get(openerWc.id)?.ownerWindow.tabs.pushState()
 }
 
 export function blockedPopups(tabId: number): BlockedPopup[] {

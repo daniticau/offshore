@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { SpaceInfo } from '@shared/types'
 import { offshore } from './api'
-import { playSound } from './sounds'
 import { IconPlus } from './icons'
 
 interface SpaceSwitcherProps {

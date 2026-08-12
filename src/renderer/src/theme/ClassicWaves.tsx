@@ -66,7 +66,7 @@ interface LayerSpec {
   foam: boolean
 }
 
-export interface ClassicWavesProps {
+interface ClassicWavesProps {
   /** back / mid / front water colors (rgba() or #hex) */
   colors: [string, string, string]
   height?: number

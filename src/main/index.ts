@@ -6,6 +6,7 @@ import { setupDevshot } from './devshot'
 import { initExtensions } from './extensions'
 import { setupIpc } from './ipc'
 import { installMenu } from './menu'
+import { passwordVault } from './passwords'
 import { flushAllStores, historyStore, sessionStore, settingsStore } from './stores'
 import { initSessions, prepareTabSession, TAB_PARTITION } from './sessions'
 import { handleOffshoreProtocol, internalPageUrl } from './util'
@@ -175,7 +176,6 @@ void app.whenReady().then(async () => {
     if (windows.size === 0) createWindow()
   })
   boot(`ready, windows=${windows.size}`)
-  console.log('[startup] ready, windows:', windows.size)
 })
 
 app.on('window-all-closed', () => {
@@ -185,4 +185,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   markQuitting()
   flushAllStores()
+  // The vault debounces its writes like the stores do, but lives apart from them
+  passwordVault.flush()
 })

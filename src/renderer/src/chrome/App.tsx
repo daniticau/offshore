@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type {
   BookmarkNode,
+  DownloadItemInfo,
+  FindResult,
   PageFreezeFrame,
   PasswordOffer,
   Settings,
@@ -18,14 +20,6 @@ import { Sidebar, TopBar } from './Tabs'
 interface DevshotPayload {
   dataUrl: string
   bounds: { x: number; y: number; width: number; height: number }
-}
-
-export interface DownloadToast {
-  id: string
-  filename: string
-  state: string
-  receivedBytes: number
-  totalBytes: number
 }
 
 export interface FindState {
@@ -156,7 +150,7 @@ export function App(): React.JSX.Element {
   const [homeEditSignal, setHomeEditSignal] = useState(0)
   const [omniboxOverlay, setOmniboxOverlay] = useState(false)
   const [find, setFind] = useState<FindState>({ open: false, text: '', activeMatch: 0, matches: 0 })
-  const [downloads, setDownloads] = useState<DownloadToast[]>([])
+  const [downloads, setDownloads] = useState<DownloadItemInfo[]>([])
   const [devshot, setDevshot] = useState<DevshotPayload | null>(null)
   const [renameSpaceId, setRenameSpaceId] = useState<string | null>(null)
   const [renameBookmarkId, setRenameBookmarkId] = useState<string | null>(null)
@@ -319,45 +313,37 @@ export function App(): React.JSX.Element {
   // ---- subscriptions ----
   useEffect(() => {
     const un: Array<() => void> = []
-    un.push(offshore.on('widgets:edit', (() => setHomeEditSignal((n) => n + 1)) as never))
+    un.push(offshore.on('widgets:edit', () => setHomeEditSignal((n) => n + 1)))
     un.push(
-      offshore.on('tabs:state', ((state: TabsState) => {
+      offshore.on('tabs:state', (state: TabsState) => {
         if (prevSpaceId.current && state.activeSpaceId !== prevSpaceId.current) {
           playSound('space-switch')
         }
         prevSpaceId.current = state.activeSpaceId
         setTabsState(state)
-      }) as never)
+      })
     )
     un.push(
-      offshore.on('settings:changed', ((s: Settings) => {
+      offshore.on('settings:changed', (s: Settings) => {
         setSettings(s)
         setSoundsEnabled(s.uiSounds)
-      }) as never)
+      })
     )
     un.push(
-      offshore.on('bookmarks:changed', ((nodes: BookmarkNode[]) => {
+      offshore.on('bookmarks:changed', (nodes: BookmarkNode[]) => {
         setBookmarks(nodes)
         setBookmarkEdit((prev) => (prev ? (nodes.find((n) => n.id === prev.id) ?? null) : null))
-      }) as never)
+      })
     )
+    un.push(offshore.on('omnibox:focus', () => setOmniboxNonce((n) => n + 1)))
+    un.push(offshore.on('find:open', () => setFind((f) => ({ ...f, open: true }))))
     un.push(
-      offshore.on('omnibox:focus', (() => {
-        setOmniboxNonce((n) => n + 1)
-      }) as never)
-    )
-    un.push(
-      offshore.on('find:open', (() => {
-        setFind((f) => ({ ...f, open: true }))
-      }) as never)
-    )
-    un.push(
-      offshore.on('find:result', ((r: { activeMatch: number; matches: number }) => {
+      offshore.on('find:result', (r: FindResult) => {
         setFind((f) => ({ ...f, activeMatch: r.activeMatch, matches: r.matches }))
-      }) as never)
+      })
     )
     un.push(
-      offshore.on('downloads:event', ((d: DownloadToast) => {
+      offshore.on('downloads:event', (d: DownloadItemInfo) => {
         setDownloads((prev) => {
           const existing = prev.find((p) => p.id === d.id)
           if (d.state === 'completed' && existing?.state !== 'completed') {
@@ -372,33 +358,18 @@ export function App(): React.JSX.Element {
             setDownloads((prev) => prev.filter((p) => p.id !== d.id))
           }, 6000)
         }
-      }) as never)
+      })
+    )
+    un.push(offshore.on('spaces:begin-rename', (id: string) => setRenameSpaceId(id)))
+    un.push(offshore.on('bookmarks:begin-rename', (id: string) => setRenameBookmarkId(id)))
+    un.push(offshore.on('passwords:offer', (offer: PasswordOffer) => setPasswordOffer(offer)))
+    un.push(
+      offshore.on('devshot:composite', (payload: DevshotPayload | null) => setDevshot(payload))
     )
     un.push(
-      offshore.on('spaces:begin-rename', ((id: string) => {
-        setRenameSpaceId(id)
-      }) as never)
-    )
-    un.push(
-      offshore.on('bookmarks:begin-rename', ((id: string) => {
-        setRenameBookmarkId(id)
-      }) as never)
-    )
-    un.push(
-      offshore.on('passwords:offer', ((offer: PasswordOffer) => {
-        setPasswordOffer(offer)
-      }) as never)
-    )
-    un.push(offshore.on('popups:blocked', (() => undefined) as never))
-    un.push(
-      offshore.on('devshot:composite', ((payload: DevshotPayload | null) => {
-        setDevshot(payload)
-      }) as never)
-    )
-    un.push(
-      offshore.on('chrome:page-freeze', ((frames: PageFreezeFrame[] | null) => {
+      offshore.on('chrome:page-freeze', (frames: PageFreezeFrame[] | null) => {
         setFreeze(frames ?? [])
-      }) as never)
+      })
     )
     const onSpaceRename = (e: Event): void => {
       setRenameSpaceId((e as CustomEvent<string>).detail)
@@ -447,8 +418,8 @@ export function App(): React.JSX.Element {
   }, [reveal])
 
   useEffect(() => {
-    const un1 = offshore.on('bookmarks:edit-current', (() => editBookmark()) as never)
-    const un2 = offshore.on('chrome:toggle-hidden', (() => toggleHidden()) as never)
+    const un1 = offshore.on('bookmarks:edit-current', () => editBookmark())
+    const un2 = offshore.on('chrome:toggle-hidden', () => toggleHidden())
     return () => {
       un1()
       un2()
@@ -474,7 +445,6 @@ export function App(): React.JSX.Element {
   // omnibox focus (⌘T/⌘L) should also reveal a tucked-away chrome
   useEffect(() => {
     if (omniboxNonce > 0 && collapsedRef.current) reveal()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [omniboxNonce])
 
   // Closing the last tab lands on the home screen, which carries no pill of its

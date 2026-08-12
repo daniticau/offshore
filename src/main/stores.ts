@@ -99,6 +99,11 @@ class SettingsStore extends EventEmitter {
     return this.file.data
   }
 
+  /** ⌘⇧B / the palette: flip between sidebar and top-bar tabs. */
+  toggleTabOrientation(): void {
+    this.set({ tabOrientation: this.get().tabOrientation === 'vertical' ? 'horizontal' : 'vertical' })
+  }
+
   flush(): void {
     this.file.saveNow()
   }

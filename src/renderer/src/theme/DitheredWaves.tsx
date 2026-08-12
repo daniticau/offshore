@@ -106,7 +106,7 @@ function buildBands(colors: [string, string, string], H: number): Band[] {
   })
 }
 
-export interface DitheredWavesProps {
+interface DitheredWavesProps {
   /** back / mid / front band colors (rgba() or #hex strings) */
   colors: [string, string, string]
   /** rendered height in css px */

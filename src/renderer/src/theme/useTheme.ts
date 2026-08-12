@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { accentColors, type AccentId, type AccentModeColors } from '@shared/types'
+import type { AccentModeColors } from '@shared/types'
 
 /** Tracks prefers-color-scheme, which main drives via nativeTheme.themeSource. */
 export function useIsDark(): boolean {
@@ -11,11 +11,6 @@ export function useIsDark(): boolean {
     return () => mq.removeEventListener('change', onChange)
   }, [])
   return dark
-}
-
-export function useAccent(accentId: AccentId): AccentModeColors {
-  const dark = useIsDark()
-  return accentColors(accentId, dark)
 }
 
 /** CSS custom-property overrides for the given accent, spread onto a root element's style. */

@@ -134,10 +134,7 @@ export function installMenu(): void {
         {
           label: 'Switch Tab Layout',
           accelerator: 'Cmd+Shift+B',
-          click: () => {
-            const current = settingsStore.get().tabOrientation
-            settingsStore.set({ tabOrientation: current === 'vertical' ? 'horizontal' : 'vertical' })
-          }
+          click: () => settingsStore.toggleTabOrientation()
         },
         { type: 'separator' },
         {

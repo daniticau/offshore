@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 /// <reference lib="dom.iterable" />
 import { contextBridge, ipcRenderer } from 'electron'
+import type { OffshoreInternalApi } from '@shared/bridge'
 
 /**
  * Preload attached to every tab (and tracked popup). Three concerns:
@@ -32,7 +33,7 @@ function isInternalDocument(): boolean {
   return false
 }
 
-const api = {
+const api: OffshoreInternalApi = {
   settings: {
     get: () => invoke('settings:get'),
     set: (patch: unknown) => invoke('settings:set', patch)
@@ -43,8 +44,6 @@ const api = {
       invoke('bookmarks:add-folder', title, parentId),
     update: (id: string, patch: { title?: string; url?: string }) =>
       invoke('bookmarks:update', id, patch),
-    move: (id: string, parentId: string | null, index: number) =>
-      invoke('bookmarks:move', id, parentId, index),
     remove: (id: string) => invoke('bookmarks:remove', id)
   },
   extensions: {
@@ -95,8 +94,6 @@ if (isInternalDocument()) {
   contextBridge.exposeInMainWorld('offshoreInternal', api)
 }
 
-export type OffshoreInternalApi = typeof api
-
 // ---------------- 2. gesture pings (popup blocker) ----------------
 
 let lastPing = 0
@@ -131,11 +128,17 @@ function visible(el: HTMLElement): boolean {
   return el.offsetParent !== null || el.getClientRects().length > 0
 }
 
-function usernameFor(pw: HTMLInputElement): HTMLInputElement | null {
+/**
+ * The field most likely holding the username for a password input: prefer
+ * fields before it in the document, then ones whose name/autocomplete says so.
+ * Capture wants a field with a value in it; fill wants one whether or not the
+ * user typed anything yet — the same walk otherwise, so it lives here once.
+ */
+function usernameFor(pw: HTMLInputElement, requireValue: boolean): HTMLInputElement | null {
   const scope: ParentNode = pw.form ?? document
   const cands = [...scope.querySelectorAll<HTMLInputElement>(
     'input[type=text], input[type=email], input[type=tel], input:not([type])'
-  )].filter((el) => visible(el) && el.value)
+  )].filter((el) => visible(el) && (!requireValue || el.value))
   if (!cands.length) return null
   const before = cands.filter(
     (el) => pw.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING
@@ -164,7 +167,7 @@ function snapshot(): void {
   const pw = currentPasswordField()
   if (!pw || isOtp(pw)) return
   if (!pw.value || pw.value.length > 512) return
-  const user = usernameFor(pw)
+  const user = usernameFor(pw, true)
   lastCandidate = {
     username: (user?.value ?? '').slice(0, 256),
     password: pw.value,
@@ -261,23 +264,7 @@ ipcRenderer.on('passwords:fill', (_e, creds: { username?: string; password?: str
       (el) => visible(el) && !isOtp(el) && el.value === ''
     )
     if (!pw) return false
-    const user = (() => {
-      const scope: ParentNode = pw.form ?? document
-      const cands = [...scope.querySelectorAll<HTMLInputElement>(
-        'input[type=text], input[type=email], input[type=tel], input:not([type])'
-      )].filter((el) => visible(el))
-      const before = cands.filter(
-        (el) => pw.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING
-      )
-      const pool = before.length ? before : cands
-      const preferred = pool.filter(
-        (el) =>
-          /username|email/.test(el.autocomplete || '') ||
-          /user|email|login|acct|account|id/i.test(`${el.name} ${el.id}`)
-      )
-      const list = preferred.length ? preferred : pool
-      return list[list.length - 1] ?? null
-    })()
+    const user = usernameFor(pw, false)
     if (user && username && user.value === '') setNative(user, username)
     setNative(pw, password)
     return true

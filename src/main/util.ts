@@ -1,9 +1,7 @@
-import { app, net } from 'electron'
+import { net } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { SEARCH_ENGINES, type Settings } from '@shared/types'
-
-export const isDev = !app.isPackaged
 
 export function devRendererUrl(): string | undefined {
   return process.env['ELECTRON_RENDERER_URL']
@@ -11,9 +9,9 @@ export function devRendererUrl(): string | undefined {
 
 export type InternalPage = 'start' | 'settings' | 'welcome' | 'error'
 
-export const INTERNAL_PAGES: readonly InternalPage[] = ['start', 'settings', 'welcome', 'error']
+const INTERNAL_PAGES: readonly InternalPage[] = ['start', 'settings', 'welcome', 'error']
 
-export function isInternalPage(page: string): page is InternalPage {
+function isInternalPage(page: string): page is InternalPage {
   return (INTERNAL_PAGES as readonly string[]).includes(page)
 }
 
@@ -147,15 +145,7 @@ export async function handleOffshoreProtocol(request: Request): Promise<Response
   }
 }
 
-export function prettyHost(url: string): string {
-  try {
-    const u = new URL(url)
-    if (u.protocol === 'offshore:') return url.replace(/\/$/, '')
-    return u.hostname.replace(/^www\./, '')
-  } catch {
-    return url
-  }
-}
+export { prettyHost } from '@shared/url'
 
 /** Chrome-like UA: drop Electron and app tokens, and reduce the Chrome version to
  * the frozen `.0.0.0` form real Chrome ships so we present an ordinary Chrome UA. */

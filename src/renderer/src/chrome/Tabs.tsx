@@ -1,7 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react'
-import type { BookmarkNode, DownloadEntry, SpaceInfo, Settings, TabInfo, TabsState } from '@shared/types'
+import type {
+  BookmarkNode,
+  DownloadEntry,
+  DownloadItemInfo,
+  SpaceInfo,
+  Settings,
+  TabInfo,
+  TabsState
+} from '@shared/types'
 import { offshore } from './api'
-import type { DownloadToast, FindState } from './App'
+import type { FindState } from './App'
 import { BookmarkEditPopover, BookmarksBar, BookmarksSection } from './Bookmarks'
 import { Omnibox } from './Omnibox'
 import { SiteInfo } from './SiteInfo'
@@ -33,7 +41,6 @@ import {
 } from './icons'
 
 declare module 'react' {
-  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace JSX {
     interface IntrinsicElements {
       'browser-action-list': React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
@@ -45,13 +52,13 @@ declare module 'react' {
   }
 }
 
-export interface ChromeProps {
+interface ChromeProps {
   tabsState: TabsState
   settings: Settings
   activeTab?: TabInfo
   shieldOff: boolean
   find: FindState
-  downloads: DownloadToast[]
+  downloads: DownloadItemInfo[]
   bookmarks: BookmarkNode[]
   renameSpaceId: string | null
   renameBookmarkId: string | null
@@ -90,7 +97,7 @@ export interface ChromeProps {
 
 /** Internal pages carry their own marks; the wave stays the badge of a fresh tab.
  * A favicon that fails to load falls back to the glyph — never the broken-image box. */
-export function TabGlyph({ tab, size = 13 }: { tab: TabInfo; size?: number }): React.JSX.Element {
+function TabGlyph({ tab, size = 13 }: { tab: TabInfo; size?: number }): React.JSX.Element {
   const [broken, setBroken] = useState(false)
   useEffect(() => setBroken(false), [tab.favicon])
   const u = tab.displayUrl
@@ -447,7 +454,7 @@ function FindBar({
   )
 }
 
-function Downloads({ downloads, compact }: { downloads: DownloadToast[]; compact?: boolean }): React.JSX.Element | null {
+function Downloads({ downloads, compact }: { downloads: DownloadItemInfo[]; compact?: boolean }): React.JSX.Element | null {
   if (!downloads.length) return null
   const items = compact ? downloads.slice(-1) : downloads
   return (

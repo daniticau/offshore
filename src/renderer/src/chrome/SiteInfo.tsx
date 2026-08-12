@@ -3,7 +3,7 @@ import type { Settings, TabInfo } from '@shared/types'
 import { offshore, prettyHost } from './api'
 import { IconLock, IconShieldFilled, IconUnlock } from './icons'
 
-export interface SiteInfoProps {
+interface SiteInfoProps {
   tab: TabInfo
   settings: Settings
   shieldOff: boolean

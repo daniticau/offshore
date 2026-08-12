@@ -179,10 +179,6 @@ class AdblockManager {
     this.counts.delete(tabId)
   }
 
-  isActive(): boolean {
-    return this.blocker !== null
-  }
-
   /** Toggle blocking for a hostname; returns true if now allowlisted (blocking off). */
   toggleSite(host: string): boolean {
     const s = settingsStore.get()

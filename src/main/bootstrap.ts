@@ -12,6 +12,26 @@ if (process.env['OFFSHORE_CLEAN_PROFILE']) {
 }
 
 /**
+ * Flow tests and the screenshot harness drive a real window, but they must not
+ * yank the keyboard away from whatever the human is doing. As an accessory app
+ * (macOS) the harness never activates, never bounces the Dock, and leaves the
+ * frontmost app exactly where it was; its window still paints and captures.
+ * OFFSHORE_TEST_FOREGROUND=1 brings back the old grabby behavior when a flow
+ * genuinely needs real OS focus.
+ */
+export const HARNESS_QUIET =
+  !!(process.env['OFFSHORE_TEST_FLOW'] || process.env['OFFSHORE_SHOT']) &&
+  !process.env['OFFSHORE_TEST_FOREGROUND']
+
+if (HARNESS_QUIET) {
+  try {
+    app.setActivationPolicy('accessory')
+  } catch {
+    /* not macOS */
+  }
+}
+
+/**
  * Startup breadcrumbs for the dev harness. Main-process stdout does not survive
  * every launch path, so OFFSHORE_BOOT_LOG=<file> gets a synchronous trace that
  * shows exactly how far startup got before it stopped.

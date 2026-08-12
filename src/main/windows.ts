@@ -1,17 +1,11 @@
 import { BrowserWindow, screen } from 'electron'
 import { join } from 'path'
-import type { SessionWindowV2, TabsState } from '@shared/types'
+import type { Insets, SessionWindowV2, TabsState } from '@shared/types'
+import { HARNESS_QUIET } from './bootstrap'
 import { popupOwner } from './popups'
 import { sessionStore, settingsStore } from './stores'
 import { TabManager, type TabHost } from './tabs'
 import { devRendererUrl, remapInternal } from './util'
-
-export interface Insets {
-  top: number
-  left: number
-  right: number
-  bottom: number
-}
 
 /** Pre-first-paint fallback only; steady-state insets are measured from the chrome DOM. */
 const DEFAULT_INSETS: Record<'vertical' | 'horizontal', Insets> = {
@@ -43,8 +37,7 @@ export function focusedOffshoreWindow(): OffshoreWindow | undefined {
 }
 
 export function windowForBrowserWindow(bw: Pick<BrowserWindow, 'id'>): OffshoreWindow | undefined {
-  for (const w of windows) if (w.win.id === bw.id) return w
-  return undefined
+  return windowForBrowserWindowId(bw.id)
 }
 
 export function windowForBrowserWindowId(id: number): OffshoreWindow | undefined {
@@ -121,7 +114,8 @@ export class OffshoreWindow implements TabHost {
     lastFocused ??= this
 
     this.win.on('resize', () => this.tabs.layout())
-    this.win.once('ready-to-show', () => this.win.show())
+    // The harness's window appears without taking the keyboard from the human
+    this.win.once('ready-to-show', () => (HARNESS_QUIET ? this.win.showInactive() : this.win.show()))
     this.win.on('closed', () => {
       this.tabs.destroy()
       windows.delete(this)

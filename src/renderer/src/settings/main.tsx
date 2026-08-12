@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import type { OffshoreInternalApi } from '@shared/bridge'
 import type {
   AccentId,
   BookmarkNode,
   DevToolsDock,
   NewTabWidgets,
-  BriefWeather,
   ExtensionInfo,
   GeocodeResult,
   PasswordMeta,
@@ -16,6 +16,7 @@ import type {
 } from '@shared/types'
 import {
   ACCENTS,
+  ADBLOCK_LISTS,
   DEFAULT_SETTINGS,
   HOME_WIDGETS,
   SEARCH_ENGINES,
@@ -28,33 +29,8 @@ import { useIsDark } from '../theme/useTheme'
 import '../theme/theme.css'
 import './settings.css'
 
-interface InternalApi {
-  settings: { get(): Promise<Settings | null>; set(p: Partial<Settings>): Promise<Settings> }
-  bookmarks: {
-    list(): Promise<BookmarkNode[]>
-    addFolder(title: string, parentId: string | null): Promise<BookmarkNode | null>
-    update(id: string, patch: { title?: string }): Promise<void>
-    move(id: string, parentId: string | null, index: number): Promise<void>
-    remove(id: string): Promise<void>
-  }
-  extensions: { list(): Promise<ExtensionInfo[]>; uninstall(id: string): Promise<void> }
-  passwords: {
-    status(): Promise<PasswordsStatus>
-    list(): Promise<PasswordMeta[]>
-    reveal(id: string): Promise<string | null>
-    copy(id: string): Promise<boolean>
-    delete(id: string): Promise<void>
-    neverList(): Promise<string[]>
-    removeNever(origin: string): Promise<void>
-  }
-  brief: { weather(): Promise<BriefWeather | null>; geocode(q: string): Promise<GeocodeResult[]> }
-  history: { clear(): Promise<void> }
-  privacy: { clearSiteData(): Promise<void> }
-  app: { info(): Promise<{ version: string } | null> }
-  open(url: string): Promise<void>
-}
-
-const internal = (window as unknown as { offshoreInternal?: InternalApi }).offshoreInternal
+const internal = (window as unknown as { offshoreInternal?: OffshoreInternalApi })
+  .offshoreInternal
 
 function Toggle({ on, onChange, disabled }: { on: boolean; onChange: (v: boolean) => void; disabled?: boolean }): React.JSX.Element {
   return (
@@ -240,7 +216,6 @@ function BookmarksSection(): React.JSX.Element {
     }
     walk(null, 0)
     return out
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, open])
 
   const commitRename = (): void => {
@@ -590,8 +565,9 @@ const NAV: { id: SectionId; label: string }[] = [
   { id: 'about', label: 'About' }
 ]
 
-/** The filter lists behind the one "block ads & trackers" switch. */
-const CORE_LISTS = ['easylist', 'easyprivacy', 'ublock-ads', 'ublock-privacy', 'ublock-unbreak', 'peter-lowe']
+/** The filter lists behind the one "block ads & trackers" switch — everything
+ * on by default; the annoyances list keeps its own toggle below. */
+const CORE_LISTS = ADBLOCK_LISTS.filter((l) => l.defaultOn).map((l) => l.id)
 
 function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)

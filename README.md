@@ -106,6 +106,11 @@ read the file, since main-process stdout does not survive every launch path. Set
 `OFFSHORE_BOOT_LOG=<file>` for a startup trace (plus uncaught-exception capture) when the app
 appears to hang before it opens a window.
 
+Flows and screenshots run **quietly**: the harness registers as an accessory app, so its window
+paints and captures without ever activating, stealing the keyboard, or bouncing the Dock — you
+keep working while it runs. `OFFSHORE_TEST_FOREGROUND=1` restores the old grab-the-focus
+behavior for the rare check that needs real OS focus.
+
 The `passwords` and `popups` flows need the renderer dev server, so run those through
 `npm run dev`. The rest also work against a production build via
 `./node_modules/.bin/electron .`. The `chrome` flow's type-ahead checks need a network

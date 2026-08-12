@@ -58,7 +58,7 @@ function completionOf(s: Suggestion): string | null {
   return s.url.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '')
 }
 
-export interface OmniboxProps {
+interface OmniboxProps {
   activeTab?: TabInfo
   compact?: boolean
   /** Bumped by the app when ⌘T/⌘L want the cursor here. */
@@ -139,7 +139,6 @@ export function Omnibox({
       el.focus()
       el.select()
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusNonce])
 
   const endEditing = useCallback(
@@ -261,7 +260,7 @@ export function Omnibox({
         /* Sits in the address's own place: idle it takes no room at all, so the
            host still reads flush left until you bring the pointer in here. */
         <button
-          className={`omni-copy omni-copy-lead ${copied ? 'done' : ''}`}
+          className={`omni-copy-lead ${copied ? 'done' : ''}`}
           title={copied ? 'Copied' : 'Copy link'}
           onClick={copyLink}
         >

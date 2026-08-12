@@ -41,7 +41,6 @@
   /* ---- shadows & scrims ---- */
   --shadow-soft: 0 10px 30px rgba(14, 92, 122, 0.16);
   --shadow-pop: 0 24px 70px rgba(10, 70, 96, 0.28);
-  --backdrop: rgba(160, 205, 228, 0.18);
 
   /* ---- semantic ---- */
   --danger: #c4442f;
@@ -59,10 +58,8 @@
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-xl: 20px;
-  --radius: var(--radius-md);
 
   /* ---- spacing (4px scale) ---- */
-  --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
   --sp-4: 16px;
@@ -79,7 +76,6 @@
   --text-base: 13px;
   --text-md: 14px;
   --text-lg: 17px;
-  --display-sm: 22px;
   --display-md: 32px;
   --display-lg: 60px;
   --display-clock: 84px;
@@ -117,7 +113,6 @@
 
     --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.5);
     --shadow-pop: 0 24px 70px rgba(0, 0, 0, 0.6);
-    --backdrop: rgba(2, 10, 16, 0.4);
 
     --danger: #ff8a75;
     --danger-bg: rgba(226, 109, 92, 0.2);
@@ -193,19 +188,6 @@ select {
   border: 0.5px solid var(--glass-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-soft);
-}
-
-.banner {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 10px 14px;
-  background: var(--glass-strong);
-  border: 0.5px solid var(--glass-border);
-  border-radius: var(--radius-md);
-  box-shadow:
-    inset 0 1px 0 var(--glass-inset-hi),
-    var(--shadow-soft);
 }
 
 .chip {

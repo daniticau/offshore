@@ -1,8 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { CHROME_EVENTS, type OffshoreApi } from '@shared/bridge'
 
 // Expose the extension browser-action element (<browser-action-list>) to the chrome UI
 try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { injectBrowserAction } = require('electron-chrome-extensions/browser-action')
   injectBrowserAction()
 } catch (err) {
@@ -11,26 +11,9 @@ try {
 
 const invoke = (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args)
 
-const SUBSCRIBABLE = new Set([
-  'tabs:state',
-  'settings:changed',
-  'bookmarks:changed',
-  'omnibox:focus',
-  'find:open',
-  'find:result',
-  'downloads:event',
-  'devshot:composite',
-  'chrome:page-freeze',
-  'spaces:begin-rename',
-  'bookmarks:begin-rename',
-  'bookmarks:edit-current',
-  'chrome:toggle-hidden',
-  'passwords:offer',
-  'popups:blocked',
-  'widgets:edit'
-])
+const SUBSCRIBABLE: ReadonlySet<string> = new Set(CHROME_EVENTS)
 
-const api = {
+const api: OffshoreApi = {
   tabs: {
     create: (url?: string) => invoke('tabs:new', url),
     close: (id: number) => invoke('tabs:close', id),
@@ -133,9 +116,6 @@ const api = {
   adblock: {
     toggleSite: (url: string) => invoke('adblock:toggle-site', url)
   },
-  app: {
-    info: () => invoke('app:info')
-  },
   window: {
     zoom: () => invoke('window:zoom')
   },
@@ -149,5 +129,3 @@ const api = {
 }
 
 contextBridge.exposeInMainWorld('offshore', api)
-
-export type OffshoreApi = typeof api

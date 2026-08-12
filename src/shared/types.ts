@@ -100,11 +100,6 @@ export interface BriefSettings {
   unit: 'auto' | 'c' | 'f'
 }
 
-export interface HomeShortcut {
-  title: string
-  url: string
-}
-
 export type AccentId = 'sea' | 'kelp' | 'dusk' | 'sand'
 export type WaveStyle = 'classic' | 'dithered'
 export type ThemePref = 'system' | 'light' | 'dark'
@@ -405,7 +400,6 @@ export interface Settings {
   popups: PopupSettings
   passwords: PasswordSettings
   brief: BriefSettings
-  homeShortcuts: HomeShortcut[]
   restoreSession: boolean
   /** Remember visited pages so they can come back as omnibox suggestions. Off by default. */
   keepHistory: boolean
@@ -548,6 +542,14 @@ export interface FindResult {
   matches: number
 }
 
+/** Space the chrome reserves around the page card, measured from its own DOM. */
+export interface Insets {
+  top: number
+  left: number
+  right: number
+  bottom: number
+}
+
 /**
  * A still of one page view. The chrome renders *under* the page views, so a
  * panel that overhangs the content can only be seen once the view is hidden —
@@ -561,6 +563,7 @@ export interface PageFreezeFrame {
   bounds: { x: number; y: number; width: number; height: number }
 }
 
+/** What rides the downloads:event channel while a download runs. */
 export interface DownloadItemInfo {
   id: string
   filename: string
@@ -737,12 +740,6 @@ export const DEFAULT_SETTINGS: Settings = {
   popups: { block: true, allowlist: [] },
   passwords: { enabled: true },
   brief: { enabled: true, locationName: '', lat: null, lon: null, unit: 'auto' },
-  homeShortcuts: [
-    { title: 'YouTube', url: 'https://www.youtube.com' },
-    { title: 'GitHub', url: 'https://github.com' },
-    { title: 'Reddit', url: 'https://www.reddit.com' },
-    { title: 'Wikipedia', url: 'https://www.wikipedia.org' }
-  ],
   restoreSession: true,
   keepHistory: false,
   searchSuggestions: true,

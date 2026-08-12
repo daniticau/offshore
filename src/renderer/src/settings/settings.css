@@ -64,7 +64,7 @@ body {
 /* Chromium's nav marker: an accent-tinted pill, not a raised card */
 .nav-item.nav-on,
 .nav-item.nav-on:hover {
-  background: var(--accent-soft, var(--selection));
+  background: var(--selection);
   color: var(--accent-strong);
   font-weight: 600;
 }
@@ -185,7 +185,7 @@ h2 {
     background var(--dur-slow) var(--ease-out);
 }
 .toggle.on {
-  background: var(--accent-soft, var(--selection));
+  background: var(--selection);
 }
 .toggle.on .knob {
   transform: translateX(20px);

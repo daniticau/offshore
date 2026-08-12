@@ -8,7 +8,7 @@
  * Renderers read `current` every frame; values are already smoothed here so
  * both wave styles feel identical.
  */
-export interface WaveCursor {
+interface WaveCursor {
   /** cursor x relative to the host, px */
   x: number
   /** 0 = far away, 1 = at/inside the water */

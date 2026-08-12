@@ -38,7 +38,7 @@ export function setupDevshot(): void {
     const extId = process.env['OFFSHORE_TEST_EXT']
     if (extId) {
       const { installExtension } = await import('electron-chrome-web-store')
-      const { tabSession } = await import('./tabs')
+      const { tabSession } = await import('./sessions')
       try {
         await installExtension(extId, { session: tabSession() })
         console.log('[devshot] installed extension', extId)
@@ -84,11 +84,8 @@ export function setupDevshot(): void {
       '[devshot] tabs:',
       JSON.stringify(w.tabs.state().tabs.map((t) => ({ id: t.id, url: t.url.slice(0, 60), active: t.id === w.tabs.activeTabId })))
     )
-    // Ensure the window is frontmost and the view painted before capturing
-    w.win.setAlwaysOnTop(true)
-    w.win.show()
-    w.win.focus()
-    w.win.moveTop()
+    // Ensure the window is painting and unoccluded before capturing
+    surface(w)
     w.tabs.setActiveVisible(true)
     await delay(600)
     const tab = w.tabs.activeTab
@@ -214,7 +211,6 @@ export function setupDevshot(): void {
     const typed = process.env['OFFSHORE_SHOT_TYPE']
     if (typed) {
       w.sendToChrome('devshot:composite', null)
-      w.win.focus()
       w.win.webContents.focus()
       w.sendToChrome('omnibox:focus')
       await delay(600)
@@ -244,6 +240,25 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+/**
+ * Get the window painting and unoccluded for a capture, or genuinely focused
+ * when OFFSHORE_TEST_FOREGROUND asks for it. Quiet (the default) means the
+ * human keeps their keyboard and their frontmost app: inactive but on top of
+ * this app's own windows, which is all capturePage needs.
+ */
+function surface(w: OffshoreWindow): void {
+  if (process.env['OFFSHORE_TEST_FOREGROUND']) {
+    w.win.setAlwaysOnTop(true)
+    w.win.show()
+    app.focus({ steal: true })
+    w.win.focus()
+    w.win.moveTop()
+    return
+  }
+  w.win.showInactive()
+  w.win.moveTop()
+}
+
 /** The harness arms before the first window exists, so poll for one. */
 async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefined> {
   const deadline = Date.now() + timeoutMs
@@ -257,7 +272,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -440,7 +455,9 @@ function setupTestFlows(): void {
         )
         .catch((e) => `err: ${e}`)
       say(`[flowtest] empty home: ${eh}`)
-      check('home screen with search bar shows', eh.includes('"home":true') && eh.includes('"search":true'))
+      // The zero-tab home carries no search panel of its own — the omnibox takes
+      // the cursor instead (see EmptyHome in App.tsx).
+      check('home screen shows without a search panel', eh.includes('"home":true') && eh.includes('"search":false'))
       // typing in the home search conjures the first tab
       w.tabs.navigate(null, 'example.com')
       await delay(1200)
@@ -560,16 +577,12 @@ function setupTestFlows(): void {
       // 1b. …and the list really stands on the page in the sidebar layout, where
       // it has to hang far past a 216px column to be worth reading at all
       /*
-       * A bar can only take the cursor if the app has it: launched behind a
-       * terminal, this window is in the background, and a renderer that is not
-       * focused cannot hand focus to an input. So claim it outright, the way the
-       * screenshot path does.
+       * The window needs to be up and painting for these checks. Real OS focus
+       * is deliberately NOT taken (the human keeps their keyboard); the steps
+       * below drive the omnibox through synthetic events instead, which is the
+       * same code path a keystroke takes once the cursor is there.
        */
-      w.win.setAlwaysOnTop(true)
-      w.win.show()
-      w.win.moveTop()
-      app.focus({ steal: true })
-      w.win.focus()
+      surface(w)
       /*
        * Focusing the window hands the cursor to the page (see OffshoreWindow's
        * 'focus' handler) and that lands asynchronously — ask for the omnibox in

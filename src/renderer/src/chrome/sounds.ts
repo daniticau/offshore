@@ -4,7 +4,7 @@
  * and under ~150ms. Sound is a garnish, never an error.
  */
 
-export type SoundName =
+type SoundName =
   | 'tab-close'
   | 'download-complete'
   | 'bookmark-saved'

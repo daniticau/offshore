@@ -77,7 +77,6 @@ export function BookmarksSection({ nodes, renameId, onRenameDone }: BookmarksSec
       setOpen(pruned)
       saveOpen(pruned)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes])
 
   const flat = useMemo(() => {

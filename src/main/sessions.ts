@@ -1,6 +1,7 @@
 import { app, session, shell, type Session } from 'electron'
 import { existsSync } from 'fs'
 import { basename, join } from 'path'
+import type { DownloadItemInfo } from '@shared/types'
 import { adblock } from './adblock'
 import { downloadsStore } from './stores'
 import { clientHintHeaders, handleOffshoreProtocol, normalizeUserAgent } from './util'
@@ -143,14 +144,15 @@ function setupDownloads(ses: Session): void {
       totalBytes: item.getTotalBytes(),
       startedAt: Date.now()
     })
-    const send = (state: string): void => {
-      broadcastFn('downloads:event', {
+    const send = (state: DownloadItemInfo['state']): void => {
+      const info: DownloadItemInfo = {
         id,
         filename: basename(target),
         state,
         receivedBytes: item.getReceivedBytes(),
         totalBytes: item.getTotalBytes()
-      })
+      }
+      broadcastFn('downloads:event', info)
     }
     item.on('updated', (_ev, state) => send(state === 'interrupted' ? 'interrupted' : 'progressing'))
     item.once('done', (_ev, state) => {

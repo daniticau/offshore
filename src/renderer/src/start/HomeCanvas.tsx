@@ -9,7 +9,7 @@ import { useIsDark } from '../theme/useTheme'
 import '../theme/theme.css'
 import './start.css'
 
-export type WidgetKey = keyof NewTabWidgets
+type WidgetKey = keyof NewTabWidgets
 
 /** Each character keys on its value, so only changed digits roll in. */
 function SlidingClock({ time, className }: { time: string; className?: string }): React.JSX.Element {
@@ -283,7 +283,7 @@ const DEFAULT_STYLE: Record<WidgetKey, string> = {
   moon: 'line'
 }
 
-export interface HomeCanvasProps {
+interface HomeCanvasProps {
   settings: Settings
   /** Persist a settings change — the caller owns the copy it renders from. */
   onPatch(patch: Partial<Settings>): void
@@ -563,7 +563,6 @@ export function HomeCanvas({
     // back into the order the widgets are listed in, so the − badges stagger
     // down the page rather than in whatever order the cells were resolved
     return new Map(enabledKeys.filter((k) => out.has(k)).map((k) => [k, out.get(k)!]))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fingerprint])
 
   // Write placements back so they stop being a guess: an old layout from before
@@ -579,7 +578,6 @@ export function HomeCanvas({
       changed = true
     }
     if (changed) patchRef.current({ newTabWidgetLayout: { ...layout, ...next } })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placement])
 
   const hasLocation = settings.brief?.lat != null

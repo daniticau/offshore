@@ -5,7 +5,7 @@ import { ElectronChromeExtensions } from 'electron-chrome-extensions'
 import { installChromeWebStore } from 'electron-chrome-web-store'
 import type { ExtensionInfo } from '@shared/types'
 import { extensionsRef } from './extensions-ref'
-import { tabSession } from './tabs'
+import { tabSession } from './sessions'
 import {
   createWindow,
   focusedOffshoreWindow,

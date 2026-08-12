@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import type { OffshoreInternalApi } from '@shared/bridge'
 import type { NewTabWidgets, SearchEngineId, Settings, TabOrientation, ThemePref } from '@shared/types'
 import { DEFAULT_SETTINGS, SEARCH_ENGINES, accentColors } from '@shared/types'
 import { playArrival, playTone } from '../chrome/sounds'
@@ -9,12 +10,8 @@ import { useIsDark } from '../theme/useTheme'
 import '../theme/theme.css'
 import './welcome.css'
 
-interface InternalApi {
-  settings: { get(): Promise<Settings | null>; set(p: Partial<Settings>): Promise<Settings> }
-  open(url: string): Promise<void>
-}
-
-const internal = (window as unknown as { offshoreInternal?: InternalApi }).offshoreInternal
+const internal = (window as unknown as { offshoreInternal?: OffshoreInternalApi })
+  .offshoreInternal
 
 const STEPS = 5
 
@@ -70,7 +67,7 @@ function App(): React.JSX.Element {
         Skip
       </button>
 
-      <div className={`slides step-${step}`}>
+      <div className="slides">
         {/* 1 — hero */}
         <section className={slideClass(0)}>
           <Logo />
