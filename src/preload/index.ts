@@ -103,6 +103,10 @@ const api: OffshoreApi = {
     open: (tabId: number, url: string) => invoke('popups:open', tabId, url),
     allowSite: (tabId: number) => invoke('popups:allow-site', tabId)
   },
+  slop: {
+    readAnyway: (tabId: number) => invoke('slop:read-anyway', tabId),
+    setAllowed: (tabId: number, allowed: boolean) => invoke('slop:set-allowed', tabId, allowed)
+  },
   downloads: {
     list: () => invoke('downloads:list'),
     clear: () => invoke('downloads:clear'),

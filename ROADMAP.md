@@ -28,8 +28,10 @@ Notes from the founder (2026-08-06) — gripes with other browsers and what Offs
   auto-installed on first launch, `drm` test flow proves the key system answers.
 - [x] **Inline omnibox** — the palette became a real toolbar input: type-ahead completion,
   dropdown suggestions, focus lands there on every new tab.
-- [x] **AI slop detector** — deterministic prose heuristics in the page preload, 0–100 score,
-  tiny toolbar badge. The core tenet, shipped without a model.
+- [x] **AI slop detector** — deterministic prose heuristics in the page preload, 0–100 score
+  with counted signals, a scored chip + report panel in the chrome, the veil over 55+ pages
+  (read anyway / never veil this site), and a verdict line in the site panel. The core tenet,
+  still shipped without a model.
 - [x] **Chrome-style downloads panel**, bookmarks-bar quick toggle, last-tab keeps the window,
   live cursor-reactive waves, widget context menu, sliding clock digits.
 - [x] **Helium toolbar** — site-info popover (connection, Shield, popups, per-site data clear),

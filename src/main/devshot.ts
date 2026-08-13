@@ -2,7 +2,7 @@ import { BrowserWindow, app, ipcMain, session } from 'electron'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import * as nodeHttp from 'http'
-import { HOME_WIDGETS } from '@shared/types'
+import { HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_VEIL_MIN, type SlopReport } from '@shared/types'
 import { TAB_PARTITION } from './sessions'
 import { windows, type OffshoreWindow } from './windows'
 
@@ -510,6 +510,7 @@ function setupTestFlows(): void {
     }
 
     if (flow === 'slop') {
+      const { settingsStore } = await import('./stores')
       const sloppy = `<html><body><article>${Array.from({ length: 14 }, () => `
         <p>In today's fast-paced digital landscape, it's important to note that businesses must
         delve into the ever-evolving landscape of technology. Moreover, this comprehensive guide
@@ -530,18 +531,109 @@ function setupTestFlows(): void {
       })
       await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
       const port = (server.address() as { port: number }).port
+      const tab = (): typeof w.tabs.activeTab => w.tabs.activeTab
+      const inPage = (js: string): Promise<unknown> => tab()!.wc.executeJavaScript(js)
+      const inChrome = (js: string): Promise<unknown> => w.win.webContents.executeJavaScript(js)
+      // A navigation wipes the old verdict before the new one lands — wait out
+      // both halves, or the probe reads the previous page's report.
+      const freshReport = async (): Promise<SlopReport | undefined> => {
+        await settle(async () => (tab()?.slop === undefined ? true : undefined), 8000)
+        return settle(async () => tab()?.slop, 12_000)
+      }
 
+      // -- a heavy page gets scored, veiled, and worn on the chrome --
       w.tabs.navigate(null, `http://127.0.0.1:${port}/slop`)
-      await delay(4500)
-      const slopScore = w.tabs.activeTab?.slopScore ?? 0
-      say(`[flowtest] slop page score: ${slopScore}`)
-      check('slop page flagged', slopScore >= 25, `score=${slopScore}`)
+      const report = await freshReport()
+      say(
+        `[flowtest] slop page score: ${report?.score ?? 'none'} — ${(report?.signals ?? [])
+          .slice(0, 3)
+          .map((s) => `${s.label} ×${s.count}`)
+          .join(', ')}`
+      )
+      check('slop page flagged', (report?.score ?? 0) >= SLOP_FLAG_MIN, `score=${report?.score}`)
+      check('slop page scores veil-heavy', (report?.score ?? 0) >= SLOP_VEIL_MIN, `score=${report?.score}`)
+      check('report carries its receipts', (report?.signals.length ?? 0) > 0)
+      const veiled = await settle(
+        async () => ((await inPage(`!!document.getElementById('offshore-slop-veil')`)) ? true : undefined),
+        4000
+      )
+      check('veil raised over the page', tab()?.slop?.veil === 'up' && veiled === true)
 
+      const chip = await settle(async () => {
+        const raw = (await inChrome(
+          `JSON.stringify({chip: !!document.querySelector('.slop-chip'),
+                           score: document.querySelector('.slop-score')?.textContent ?? ''})`
+        )) as string
+        const p = JSON.parse(raw) as { chip: boolean; score: string }
+        return p.chip ? p : undefined
+      }, 4000)
+      check('chip on the address bar carries the score', chip?.score === String(report?.score ?? ''), JSON.stringify(chip))
+      const chipShape = JSON.parse(
+        (await inChrome(
+          `(() => { const c = document.querySelector('.slop-chip')
+             const s = c ? c.querySelector('svg') : null
+             return JSON.stringify({ w: c ? c.getBoundingClientRect().width : 0,
+                                     svg: s ? s.getBoundingClientRect().width : 0 }) })()`
+        )) as string
+      ) as { w: number; svg: number }
+      // the actions cluster squares its buttons at 24px — the chip must opt out
+      // or the icon gets flex-squeezed to nothing beside the digits
+      check('chip wears the icon beside the number', chipShape.svg >= 10 && chipShape.w > 28, JSON.stringify(chipShape))
+
+      // -- the chip opens the report --
+      await inChrome(`document.querySelector('.slop-chip')?.click()`)
+      const panel = await settle(async () => {
+        const raw = (await inChrome(
+          `JSON.stringify({panel: !!document.querySelector('.slop-panel'),
+                           signals: document.querySelectorAll('.slop-signal').length,
+                           read: !!document.querySelector('.slop-action.primary')})`
+        )) as string
+        const p = JSON.parse(raw) as { panel: boolean; signals: number; read: boolean }
+        return p.panel ? p : undefined
+      }, 4000)
+      check('chip opens the slop report', !!panel)
+      check('report lists the tells it counted', (panel?.signals ?? 0) > 0, `signals=${panel?.signals}`)
+      check('report offers Read anyway while veiled', panel?.read === true)
+      await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
+
+      // -- Read anyway lifts the veil for this visit --
+      await inPage(
+        `document.getElementById('offshore-slop-veil').shadowRoot.querySelector('.read').click()`
+      )
+      const lifted = await settle(async () => (tab()?.slop?.veil === 'lifted' ? true : undefined), 4000)
+      const overlayGone = await inPage(`!document.getElementById('offshore-slop-veil')`)
+      check('Read anyway lifts the veil', lifted === true && overlayGone === true)
+
+      // -- a fresh load is a fresh offer --
+      tab()!.wc.reload()
+      const reVeiled = await settle(async () => (tab()?.slop?.veil === 'up' ? true : undefined), 12_000)
+      check('a fresh load veils again', reVeiled === true)
+
+      // -- Always show this site spares it from then on --
+      await inPage(
+        `document.getElementById('offshore-slop-veil').shadowRoot.querySelector('.allow').click()`
+      )
+      const allowed = await settle(
+        async () => (settingsStore.get().slop.allowlist.includes('127.0.0.1') ? true : undefined),
+        4000
+      )
+      check('Always show adds the site to the never-veil list', allowed === true)
+      w.tabs.navigate(null, `http://127.0.0.1:${port}/slop`)
+      const spared = await freshReport()
+      check(
+        'allowed site keeps the chip, loses the veil',
+        (spared?.score ?? 0) >= SLOP_VEIL_MIN && spared?.veil === undefined,
+        `score=${spared?.score} veil=${spared?.veil}`
+      )
+
+      // -- honest prose stays untouched --
       w.tabs.navigate(null, `http://127.0.0.1:${port}/clean`)
-      await delay(4500)
-      const cleanScore = w.tabs.activeTab?.slopScore ?? 0
-      say(`[flowtest] clean page score: ${cleanScore}`)
-      check('honest prose not flagged', cleanScore < 25, `score=${cleanScore}`)
+      const cleanReport = await freshReport()
+      say(`[flowtest] clean page score: ${cleanReport?.score ?? 'none'}`)
+      check('honest prose not flagged', (cleanReport?.score ?? 0) < SLOP_FLAG_MIN, `score=${cleanReport?.score}`)
+      const cleanChip = await inChrome(`!document.querySelector('.slop-chip')`)
+      check('no chip on honest prose', cleanChip === true)
+
       server.close()
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)

@@ -853,11 +853,29 @@ function App(): React.JSX.Element {
                   <div className="row-title">
                     AI slop detector
                     <div className="row-sub">
-                      A tiny badge appears when a page reads like machine-generated filler. Detected
-                      with plain local heuristics — no AI involved, nothing leaves your Mac.
+                      Scores every page for the tells of machine-generated filler — stock phrases,
+                      formula structure. A chip on the address bar carries the score; press it for
+                      the full report. Plain local heuristics: no AI involved, nothing leaves your Mac.
                     </div>
                   </div>
-                  <Toggle on={settings.slopDetector} onChange={(v) => patch({ slopDetector: v })} />
+                  <Toggle
+                    on={settings.slop.detector}
+                    onChange={(v) => patch({ slop: { ...settings.slop, detector: v } })}
+                  />
+                </div>
+                <div className="row">
+                  <div className="row-title">
+                    Veil heavy slop
+                    <div className="row-sub">
+                      A page scoring 55 or worse gets a veil before you sink time into it — one
+                      click reads it anyway, one click spares the site forever.
+                    </div>
+                  </div>
+                  <Toggle
+                    on={settings.slop.veil}
+                    disabled={!settings.slop.detector}
+                    onChange={(v) => patch({ slop: { ...settings.slop, veil: v } })}
+                  />
                 </div>
               </div>
 
@@ -918,6 +936,30 @@ function App(): React.JSX.Element {
                                 popups: {
                                   ...settings.popups,
                                   allowlist: settings.popups.allowlist.filter((h) => h !== host)
+                                }
+                              })
+                            }
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {settings.slop.allowlist.length > 0 && (
+                  <div className="row column">
+                    <div className="row-title">Sites never veiled</div>
+                    <div className="chips">
+                      {settings.slop.allowlist.map((host) => (
+                        <span className="chip" key={host}>
+                          {host}
+                          <button
+                            onClick={() =>
+                              patch({
+                                slop: {
+                                  ...settings.slop,
+                                  allowlist: settings.slop.allowlist.filter((h) => h !== host)
                                 }
                               })
                             }

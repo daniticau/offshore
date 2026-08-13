@@ -78,13 +78,22 @@ function mergeSettings(base: Settings, patch: Partial<Settings>): Settings {
     newTabWidgetLayout: { ...base.newTabWidgetLayout, ...(patch.newTabWidgetLayout ?? {}) },
     popups: { ...base.popups, ...(patch.popups ?? {}) },
     passwords: { ...base.passwords, ...(patch.passwords ?? {}) },
-    brief: { ...base.brief, ...(patch.brief ?? {}) }
+    brief: { ...base.brief, ...(patch.brief ?? {}) },
+    slop: { ...base.slop, ...(patch.slop ?? {}) }
   }
 }
 
 class SettingsStore extends EventEmitter {
   private file = new JsonFile<Settings>('settings.json', DEFAULT_SETTINGS, {
-    migrate: (parsed, fallback) => mergeSettings(fallback, parsed as Partial<Settings>)
+    migrate: (parsed, fallback) => {
+      const merged = mergeSettings(fallback, parsed as Partial<Settings>)
+      // the detector's switch used to be a flat boolean; keep an old "off"
+      const legacy = (parsed as { slopDetector?: unknown })?.slopDetector
+      if (legacy === false && (parsed as { slop?: unknown })?.slop === undefined) {
+        merged.slop = { ...merged.slop, detector: false }
+      }
+      return merged
+    }
   })
 
   get(): Settings {
