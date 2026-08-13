@@ -17,6 +17,7 @@ import type {
   PageFreezeFrame,
   SessionSpaceV2,
   SessionWindowV2,
+  SlopReport,
   SpaceInfo,
   SpaceProfile,
   TabInfo,
@@ -126,8 +127,8 @@ export class Tab {
   readonly partition: string
   spaceId = ''
   favicon?: string
-  /** 0–100 heuristic slop score reported by the page preload */
-  slopScore?: number
+  /** The slop detector's verdict, reported by the page preload */
+  slop?: SlopReport
   /**
    * Is the home screen's search still up? A new tab opens with it in front of
    * the widgets, and dismissing it leaves the home page there — the tab does not
@@ -264,7 +265,7 @@ export class Tab {
       blockedCount: adblock.counts.get(this.id) ?? 0,
       blockedPopups: blockedPopupCount(this.id),
       isBookmarked: bookmarksStore.isBookmarked(effectiveUrl),
-      slopScore: this.slopScore,
+      slop: this.slop,
       homeSearch: this.homeSearch && (errorTarget ?? toDisplayUrl(url)).startsWith('offshore://start')
     }
   }
@@ -1218,7 +1219,7 @@ export class TabManager {
       // a tab that was waiting on the home screen's paint and went somewhere
       // else instead is back to the ordinary signals
       if (!isHomePage(url)) tab.ungate()
-      tab.slopScore = undefined
+      tab.slop = undefined
       tab.favicon = undefined
       if (this.pipTabId === tab.id) this.pipTabId = null
       adblock.resetCount(tab.id)
@@ -1230,6 +1231,9 @@ export class TabManager {
     wc.on('did-navigate-in-page', (_e, url, isMainFrame) => {
       if (isMainFrame) {
         if (!isInternalUrl(url) && settingsStore.get().keepHistory) historyStore.record(url)
+        // an SPA route change is a new page in the old document — ask the
+        // detector to look again (the standing verdict holds until it answers)
+        wc.send('slop:rescan')
         this.pushState()
       }
     })

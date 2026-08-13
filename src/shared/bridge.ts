@@ -117,6 +117,12 @@ export interface OffshoreApi {
     open(tabId: number, url: string): Promise<void>
     allowSite(tabId: number): Promise<void>
   }
+  slop: {
+    /** Lift a standing veil on this tab — the reader wants the page anyway. */
+    readAnyway(tabId: number): Promise<void>
+    /** Put this tab's site on (or take it off) the never-veil list. */
+    setAllowed(tabId: number, allowed: boolean): Promise<void>
+  }
   extensions: { has(): Promise<boolean> }
   downloads: {
     list(): Promise<DownloadEntry[]>

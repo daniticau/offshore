@@ -26,8 +26,8 @@ export interface TabInfo {
   blockedCount: number
   blockedPopups: number
   isBookmarked: boolean
-  /** 0–100 heuristic "reads like AI slop" score for the loaded page */
-  slopScore?: number
+  /** The slop detector's verdict on the loaded page; absent until it reports */
+  slop?: SlopReport
   /**
    * A home screen with its search still up. Only ever true for a blank new tab:
    * the search is a panel over the home page, and dismissing it leaves the page.
@@ -129,6 +129,43 @@ export interface PopupSettings {
   /** Block popups that aren't backed by a recent user gesture */
   block: boolean
   /** hostnames allowed to open popups freely */
+  allowlist: string[]
+}
+
+// ---------------- Slop detector ----------------
+
+/** The chip appears in the address bar from this score up. */
+export const SLOP_FLAG_MIN = 25
+/** The veil (when enabled) covers the page from this score up. */
+export const SLOP_VEIL_MIN = 55
+
+/** One tell the detector counted — a stock phrase, a structural habit. */
+export interface SlopSignal {
+  label: string
+  count: number
+}
+
+/**
+ * What the page preload's prose scan reported for the loaded page. Pure local
+ * heuristics — the score is deterministic and the signals are the receipts.
+ */
+export interface SlopReport {
+  /** 0–100; see SLOP_FLAG_MIN / SLOP_VEIL_MIN for what the chrome does with it */
+  score: number
+  /** words of prose the scan judged from */
+  words: number
+  /** the tells found, heaviest first, at most a handful */
+  signals: SlopSignal[]
+  /** 'up' = the veil covers the page now; 'lifted' = the reader clicked through */
+  veil?: 'up' | 'lifted'
+}
+
+export interface SlopSettings {
+  /** Scan pages for the tells of machine-generated filler */
+  detector: boolean
+  /** Cover heavy-scoring pages with a veil before you sink time into them */
+  veil: boolean
+  /** hostnames the veil never covers */
   allowlist: string[]
 }
 
@@ -465,7 +502,7 @@ export interface Settings {
   /** Per-widget cell, size + style, set by dragging in the page's edit mode. */
   newTabWidgetLayout: Partial<Record<keyof NewTabWidgets, WidgetLayout>>
   /** Local heuristic prose analysis that flags AI-generated-looking pages. No AI involved. */
-  slopDetector: boolean
+  slop: SlopSettings
   /** Pop playing video into a floating mini-player when its tab is backgrounded */
   autoPip: boolean
   /** Tiny interface sounds (tab close, download done, …) */
@@ -799,7 +836,7 @@ export const DEFAULT_SETTINGS: Settings = {
   newTabWidgets: { clock: true, date: false, greeting: false, weather: false, forecast: false, sun: false, moon: false },
   newTabWidgetOrder: ['clock', 'date', 'greeting', 'weather', 'forecast', 'sun', 'moon'],
   newTabWidgetLayout: {},
-  slopDetector: true,
+  slop: { detector: true, veil: true, allowlist: [] },
   autoPip: true,
   uiSounds: true,
   toolbarDensity: 'compact',

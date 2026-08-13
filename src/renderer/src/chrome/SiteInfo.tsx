@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
 import type { Settings, TabInfo } from '@shared/types'
+import { SLOP_FLAG_MIN } from '@shared/types'
 import { offshore, prettyHost } from './api'
-import { IconLock, IconShieldFilled, IconUnlock } from './icons'
+import { IconLock, IconShieldFilled, IconSlop, IconUnlock } from './icons'
 
 interface SiteInfoProps {
   tab: TabInfo
@@ -74,6 +75,21 @@ export function SiteInfo({ tab, settings, shieldOff, onToggleShield, onClose }: 
           </button>
         )}
       </div>
+
+      {settings.slop.detector && (
+        <div className="si-row">
+          <span className="si-icon si-slop">
+            <IconSlop size={14} />
+          </span>
+          <span className="si-text">
+            {!tab.slop
+              ? 'Slop detector — not enough prose to judge'
+              : tab.slop.score >= SLOP_FLAG_MIN
+                ? `Reads like filler — slop score ${tab.slop.score}/100`
+                : `Reads fine — slop score ${tab.slop.score}/100`}
+          </span>
+        </div>
+      )}
 
       <div className="si-divider" />
 

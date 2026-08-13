@@ -293,18 +293,21 @@ ipcRenderer.on('passwords:fill', (_e, creds: { username?: string; password?: str
 // Offshore's core promise is the web without slop. This is deliberately NOT a
 // model: it's a deterministic prose scan for the tells of machine-generated
 // filler — stock phrases, formulaic transitions, uniform structure. It runs
-// once per page, locally, on at most ~20k characters, and reports a 0–100
-// score to the chrome, which shows a tiny badge. Nothing leaves the machine.
+// locally on at most ~20k characters and reports a 0–100 score with its
+// receipts (which tells, how many) to main, which owns what happens next: a
+// chip in the address bar, and for heavy pages a veil main asks this preload
+// to raise. Nothing leaves the machine.
 
+// Straight-apostrophe forms only — the text is normalized before matching.
 const SLOP_PHRASES = [
   'delve into',
   'delving into',
   "let's dive in",
   'dive deep into',
   'deep dive into',
-  'in today’s fast-paced',
   "in today's fast-paced",
   'ever-evolving landscape',
+  'ever-evolving world',
   'ever-changing landscape',
   'digital landscape',
   'navigate the complexities',
@@ -331,9 +334,7 @@ const SLOP_PHRASES = [
   'holistic approach',
   'leverage the power',
   'harness the power',
-  'it’s important to note',
   "it's important to note",
-  'it’s worth noting',
   "it's worth noting",
   'it is important to note',
   'it is worth noting',
@@ -347,17 +348,26 @@ const SLOP_PHRASES = [
   'look no further',
   'crucial role in',
   'pivotal role in',
+  'plays a vital role',
+  'cannot be overstated',
   'significant strides',
   'comprehensive guide',
   'ultimate guide',
-  'let’s explore',
   "let's explore",
+  "let's take a closer look",
+  "it's no secret that",
   'without further ado',
   'in this article, we',
   'in this blog post',
-  'whether you’re a',
   "whether you're a",
   'so, what are you waiting for',
+  'say goodbye to',
+  "we've got you covered",
+  "you've come to the right place",
+  'to the next level',
+  'the bottom line is',
+  'in this day and age',
+  'actionable insights',
   'nestled in',
   'bustling',
   'boasts a',
@@ -369,27 +379,50 @@ const SLOP_PHRASES = [
 const SLOP_STARTERS =
   /(^|[.!?]\s+)(However|Moreover|Furthermore|Additionally|Overall|Ultimately|Importantly|Notably|Firstly|Secondly|Lastly|In essence|In short)[, ]/g
 
-function collectProse(): string {
+/** Headings machine articles reach for on the way out the door. */
+const SLOP_HEADINGS =
+  /^(in\s+)?(conclusion|final thoughts|key takeaways|the bottom line|wrapping (it\s+)?up|in a nutshell|summing up)\b/i
+
+interface ProseSample {
+  text: string
+  words: number
+  /** word count of each paragraph, for the uniformity check */
+  paraWords: number[]
+  scope: ParentNode
+}
+
+function collectProse(): ProseSample | null {
   const roots = document.querySelectorAll('article, main, [role="main"]')
   const scope: ParentNode = roots.length ? roots[0] : document.body
-  if (!scope) return ''
+  if (!scope) return null
   const parts: string[] = []
+  const paraWords: number[] = []
   let total = 0
-  for (const p of scope.querySelectorAll('p, li, h2, h3')) {
+  for (const p of scope.querySelectorAll('p, li, h2, h3, blockquote')) {
     const t = (p as HTMLElement).innerText
     if (!t || t.length < 30) continue
     parts.push(t)
+    if (p.tagName === 'P') paraWords.push(t.split(/\s+/).length)
     total += t.length
     if (total > 20_000) break
   }
-  return parts.join('\n')
+  const text = parts.join('\n')
+  return { text, words: text ? text.split(/\s+/).length : 0, paraWords, scope }
 }
 
-function scoreSlop(text: string): { score: number; signals: string[] } {
-  const words = text.split(/\s+/).length
-  if (words < 150) return { score: 0, signals: [] }
-  const lower = text.toLowerCase()
-  const signals: string[] = []
+interface WeighedSignal {
+  label: string
+  count: number
+  weight: number
+}
+
+function scoreSlop(sample: ProseSample): { score: number; signals: { label: string; count: number }[] } {
+  const { text, words, paraWords, scope } = sample
+  const lower = text.toLowerCase().replace(/[’‘]/g, "'")
+  const per1k = 1000 / words
+  const signals: WeighedSignal[] = []
+
+  // -- the prose itself --
   let hits = 0
   for (const phrase of SLOP_PHRASES) {
     let idx = lower.indexOf(phrase)
@@ -400,31 +433,257 @@ function scoreSlop(text: string): { score: number; signals: string[] } {
     }
     if (count > 0) {
       hits += count
-      if (signals.length < 6) signals.push(phrase.trim())
+      signals.push({ label: `“${phrase.replace(/,$/, '')}”`, count, weight: count * 9 * per1k })
     }
   }
   const starters = (text.match(SLOP_STARTERS) ?? []).length
+  if (starters > 2) {
+    signals.push({
+      label: 'formulaic transitions (However, Moreover…)',
+      count: starters,
+      weight: (starters - 2) * 3.5 * per1k
+    })
+  }
   const notOnly = (lower.match(/not only\b[\s\S]{0,80}?\bbut also\b/g) ?? []).length
+  if (notOnly > 0) {
+    signals.push({ label: 'not only … but also', count: notOnly, weight: notOnly * 8 * per1k })
+  }
   const emDashes = (text.match(/—/g) ?? []).length
-  const per1k = 1000 / words
+  const emWeight = Math.max(0, emDashes * per1k - 3) * 1.2
+  if (emWeight > 0) signals.push({ label: 'em-dash habit', count: emDashes, weight: emWeight })
+
+  // -- the shape of the piece --
+  let structural = 0
+  let closers = 0
+  let emojiHeads = 0
+  for (const h of scope.querySelectorAll('h2, h3')) {
+    const t = ((h as HTMLElement).innerText ?? '').trim()
+    if (SLOP_HEADINGS.test(t)) closers += 1
+    if (/^\p{Extended_Pictographic}/u.test(t)) emojiHeads += 1
+  }
+  if (closers > 0) {
+    const w = Math.min(10, closers * 5)
+    structural += w
+    signals.push({ label: 'conclusion-shaped headings', count: closers, weight: w })
+  }
+  if (emojiHeads >= 3) {
+    const w = Math.min(10, emojiHeads * 2)
+    structural += w
+    signals.push({ label: 'emoji-headed sections', count: emojiHeads, weight: w })
+  }
+  const boldLed = scope.querySelectorAll('li > strong:first-child, li > b:first-child').length
+  if (boldLed >= 4) {
+    structural += 7
+    signals.push({ label: 'boldface listicle', count: boldLed, weight: 7 })
+  }
+  if (paraWords.length >= 8) {
+    const mean = paraWords.reduce((a, b) => a + b, 0) / paraWords.length
+    const sd = Math.sqrt(paraWords.reduce((a, b) => a + (b - mean) ** 2, 0) / paraWords.length)
+    if (mean > 20 && sd / mean < 0.32) {
+      structural += 8
+      signals.push({ label: 'uniform paragraph rhythm', count: paraWords.length, weight: 8 })
+    }
+  }
+
   const density =
-    hits * 9 * per1k + Math.max(0, starters - 2) * 3.5 * per1k + notOnly * 8 * per1k + Math.max(0, emDashes * per1k - 3) * 1.2
-  const score = Math.round(Math.min(100, density * 10))
-  return { score, signals }
+    hits * 9 * per1k +
+    Math.max(0, starters - 2) * 3.5 * per1k +
+    notOnly * 8 * per1k +
+    emWeight
+  const score = Math.round(Math.min(100, density + structural))
+  signals.sort((a, b) => b.weight - a.weight)
+  return { score, signals: signals.slice(0, 8).map(({ label, count }) => ({ label, count })) }
 }
 
-function runSlopScan(): void {
-  if (!/^https?:$/.test(location.protocol)) return
+let slopRetry: ReturnType<typeof setTimeout> | null = null
+function runSlopScan(retriesLeft = 2): void {
+  if (!/^https?:$/.test(location.protocol) || isInternalDocument()) return
   try {
-    const { score, signals } = scoreSlop(collectProse())
-    if (score >= 25) ipcRenderer.send('slop:report', { score, signals })
+    const sample = collectProse()
+    if (!sample || sample.words < 150) {
+      // client-rendered pages fill in late — look again shortly, then let it go
+      if (retriesLeft > 0) {
+        if (slopRetry) clearTimeout(slopRetry)
+        slopRetry = setTimeout(() => runSlopScan(retriesLeft - 1), 1600)
+      }
+      return
+    }
+    const { score, signals } = scoreSlop(sample)
+    ipcRenderer.send('slop:report', { score, words: sample.words, signals })
   } catch {
     /* scoring must never break a page */
   }
 }
 
 if (document.readyState === 'complete') {
-  setTimeout(runSlopScan, 1200)
+  setTimeout(() => runSlopScan(), 700)
 } else {
-  window.addEventListener('load', () => setTimeout(runSlopScan, 1200), { once: true })
+  window.addEventListener('load', () => setTimeout(() => runSlopScan(), 700), { once: true })
 }
+
+// Main hears about in-page navigations (SPA route changes) and asks for a
+// fresh verdict; the old one stands until the new one lands, so an anchor
+// jump never flickers the chip.
+let slopRescan: ReturnType<typeof setTimeout> | null = null
+ipcRenderer.on('slop:rescan', () => {
+  if (slopRescan) clearTimeout(slopRescan)
+  slopRescan = setTimeout(() => runSlopScan(), 1000)
+})
+
+// ---------------- 5. the veil (raised over heavy slop, on main's say-so) ----------------
+//
+// "So you don't read it before you know" — the page loads, the scan reports,
+// and if the score clears the veil line main sends 'slop:veil'. The page blurs
+// behind a small card: read anyway, or spare the site forever. The overlay is
+// a courtesy, not a boundary — any page script could remove it, which is fine,
+// because the reader it serves is the one in front of the window.
+
+let veilHost: HTMLElement | null = null
+
+function dropVeil(): void {
+  veilHost?.remove()
+  veilHost = null
+}
+
+function raiseVeil(score: number): void {
+  if (veilHost || !document.documentElement) return
+  const host = document.createElement('div')
+  host.id = 'offshore-slop-veil'
+  const shadow = host.attachShadow({ mode: 'open' })
+  shadow.innerHTML = `
+    <style>
+      .scrim {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(240, 246, 248, 0.55);
+        backdrop-filter: blur(22px) saturate(0.8);
+        -webkit-backdrop-filter: blur(22px) saturate(0.8);
+        animation: veil-in 240ms ease-out;
+      }
+      .card {
+        box-sizing: border-box;
+        max-width: 440px;
+        padding: 30px 32px 24px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.88);
+        border: 0.5px solid rgba(9, 40, 54, 0.14);
+        box-shadow: 0 24px 70px rgba(9, 40, 54, 0.22);
+        color: #14323f;
+        font-family: -apple-system, system-ui, sans-serif;
+        text-align: center;
+      }
+      .glyph { color: #c98a3a; }
+      h1 {
+        margin: 10px 0 8px;
+        font-family: ui-serif, Georgia, serif;
+        font-weight: 500;
+        font-size: 23px;
+        letter-spacing: -0.01em;
+      }
+      p {
+        margin: 0 0 18px;
+        font-size: 13px;
+        line-height: 1.55;
+        color: rgba(20, 50, 63, 0.72);
+      }
+      .row { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+      button {
+        appearance: none;
+        border: none;
+        font: inherit;
+        cursor: pointer;
+        border-radius: 999px;
+      }
+      .read {
+        padding: 9px 22px;
+        font-size: 13.5px;
+        font-weight: 600;
+        color: #f4fafc;
+        background: #14323f;
+      }
+      .read:hover { filter: brightness(1.18); }
+      .allow {
+        padding: 7px 14px;
+        font-size: 12px;
+        font-weight: 500;
+        color: rgba(20, 50, 63, 0.6);
+        background: transparent;
+      }
+      .allow:hover { color: rgba(20, 50, 63, 0.9); }
+      .fine {
+        margin: 14px 0 0;
+        font-size: 11px;
+        color: rgba(20, 50, 63, 0.45);
+      }
+      @media (prefers-color-scheme: dark) {
+        .scrim { background: rgba(10, 18, 22, 0.6); }
+        .card {
+          background: rgba(24, 34, 40, 0.92);
+          border-color: rgba(210, 235, 244, 0.14);
+          box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+          color: #dcebf1;
+        }
+        p { color: rgba(220, 235, 241, 0.7); }
+        .read { color: #10262f; background: #dcebf1; }
+        .allow { color: rgba(220, 235, 241, 0.55); }
+        .allow:hover { color: rgba(220, 235, 241, 0.9); }
+        .fine { color: rgba(220, 235, 241, 0.4); }
+      }
+      @keyframes veil-in { from { opacity: 0; } }
+    </style>
+    <div class="scrim" role="dialog" aria-label="AI slop warning">
+      <div class="card">
+        <svg class="glyph" width="34" height="34" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 13c2-2.4 4-2.4 6 0s4 2.4 6 0" />
+          <path d="M4 4l16 16" />
+          <path d="M16 5.5l0.9 2.1 2.1 0.9-2.1 0.9-0.9 2.1-0.9-2.1-2.1-0.9 2.1-0.9z" />
+        </svg>
+        <h1>This page reads like AI slop</h1>
+        <p>
+          Slop score ${Math.round(score)}/100 — stock phrases and formula structure, counted
+          by plain heuristics on this Mac. No AI involved, nothing sent anywhere.
+        </p>
+        <div class="row">
+          <button class="read">Read anyway</button>
+          <button class="allow">Always show this site</button>
+        </div>
+        <p class="fine">The veil has an off switch in Settings → Shield.</p>
+      </div>
+    </div>`
+  const scrim = shadow.querySelector('.scrim') as HTMLElement
+  // the page beneath must not scroll along while it is veiled
+  scrim.addEventListener('wheel', (e) => e.preventDefault(), { passive: false })
+  scrim.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false })
+  scrim.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      dropVeil()
+      ipcRenderer.send('slop:veil-lifted')
+    }
+  })
+  shadow.querySelector('.read')?.addEventListener('click', () => {
+    dropVeil()
+    ipcRenderer.send('slop:veil-lifted')
+  })
+  shadow.querySelector('.allow')?.addEventListener('click', () => {
+    dropVeil()
+    ipcRenderer.send('slop:allow-site')
+  })
+  document.documentElement.appendChild(host)
+  veilHost = host
+  ;(shadow.querySelector('.read') as HTMLElement | null)?.focus()
+}
+
+ipcRenderer.on('slop:veil', (_e, on: boolean, score?: number) => {
+  try {
+    if (on) raiseVeil(Number(score) || 0)
+    else dropVeil()
+  } catch {
+    /* the veil must never break a page either */
+  }
+})

@@ -12,9 +12,13 @@ skips.
 ## Features
 
 - **Real Chromium engine** — same Blink/V8 as Chrome; sites can't tell the difference
-- **AI slop detector** — a tiny badge appears when a page reads like machine-generated filler.
-  Pure local heuristics (stock phrases, formulaic structure) — no AI involved, nothing leaves
-  your Mac. The web as it was meant to be surfed.
+- **AI slop detector** — every page is scored 0–100 for the tells of machine-generated filler
+  (stock phrases, formula structure), by plain local heuristics: no AI involved, nothing leaves
+  your Mac. A flagged page wears a scored chip on the address bar; press it for the report —
+  which tells were counted, and how often. A page scoring 55+ gets **the veil**: a frosted
+  card over it before you sink time into it, one click to read anyway, one to never veil that
+  site (managed in Settings → Shield). The site panel carries the quiet verdict for every
+  page. The web as it was meant to be surfed.
 - **Protected content plays** — Widevine DRM via castLabs Electron for Content Security, so
   Netflix, Spotify Web, and friends actually work (dev builds are VMP-signed out of the box)
 - **Spaces** — per-window named tab sets with animated switching (⌘⌥←/→), per-space accent

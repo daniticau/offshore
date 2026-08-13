@@ -16,6 +16,7 @@ import { BookmarkEditPopover, BookmarksBar, BookmarksSection } from './Bookmarks
 import { Omnibox } from './Omnibox'
 import { SiteInfo } from './SiteInfo'
 import { PopupChip } from './PasswordDialog'
+import { SlopChip } from './Slop'
 import { SpaceSwitcher } from './SpaceSwitcher'
 import { AppMenu, ProfileMenu } from './Menus'
 import {
@@ -32,7 +33,6 @@ import {
   IconMuted,
   IconPlus,
   IconReload,
-  IconSlop,
   IconSplit,
   IconStar,
   IconStarFilled,
@@ -86,6 +86,8 @@ interface ChromeProps {
   onRenameBookmarkDone: () => void
   onToggleDownloadsPanel: (open: boolean) => void
   onTogglePopupPanel: (open: boolean) => void
+  slopPanelOpen: boolean
+  onToggleSlopPanel: (open: boolean) => void
   appMenuOpen: boolean
   onToggleAppMenu: (open: boolean) => void
   profileMenuOpen: boolean
@@ -294,7 +296,14 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
   // when you actually want to know. Blocking itself is unchanged.
   const actions = (
     <>
-      <SlopChip activeTab={activeTab} settings={props.settings} />
+      {activeTab && (
+        <SlopChip
+          tab={activeTab}
+          settings={props.settings}
+          open={props.slopPanelOpen}
+          onToggle={props.onToggleSlopPanel}
+        />
+      )}
       {activeTab && (
         <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
       )}
@@ -326,18 +335,6 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
         />
       )}
     </div>
-  )
-}
-
-function SlopChip({ activeTab, settings }: { activeTab?: TabInfo; settings: Settings }): React.JSX.Element | null {
-  if (!settings.slopDetector || !activeTab?.slopScore || activeTab.slopScore < 25) return null
-  return (
-    <span
-      className="chrome-btn slop-chip"
-      title={`Reads like AI-generated filler (slop score ${activeTab.slopScore}/100).\nDetected locally with plain heuristics — no AI involved, nothing leaves your Mac.`}
-    >
-      <IconSlop size={14} />
-    </span>
   )
 }
 
