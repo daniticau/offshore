@@ -377,7 +377,33 @@ export function App(): React.JSX.Element {
 
   // ---- subscriptions ----
   useEffect(() => {
+    /*
+     * Chromium hands initial focus to the first tabbable toolbar button, which
+     * then wears a keyboard ring nobody asked for — and it does so on its own
+     * schedule, after mount. So until the human has actually touched anything,
+     * a button that receives focus gives it straight back. Inputs are exempt
+     * (⌘T and ⌘L legitimately hand the omnibox the cursor), and the first real
+     * keydown or pointerdown ends the rule, so tabbing to a control still shows
+     * its ring.
+     */
+    let interacted = false
+    const markInteracted = (): void => {
+      interacted = true
+    }
+    const dropAutoFocus = (e: FocusEvent): void => {
+      const t = e.target as HTMLElement | null
+      if (!interacted && t?.tagName === 'BUTTON') t.blur()
+    }
+    window.addEventListener('pointerdown', markInteracted, true)
+    window.addEventListener('keydown', markInteracted, true)
+    window.addEventListener('focusin', dropAutoFocus)
+
     const un: Array<() => void> = []
+    un.push(() => {
+      window.removeEventListener('pointerdown', markInteracted, true)
+      window.removeEventListener('keydown', markInteracted, true)
+      window.removeEventListener('focusin', dropAutoFocus)
+    })
     un.push(offshore.on('widgets:edit', () => setHomeEditSignal((n) => n + 1)))
     un.push(
       offshore.on('tabs:state', (state: TabsState) => {

@@ -393,6 +393,16 @@ body,
 .tl:active {
   filter: brightness(0.86);
 }
+/* pointer targets only — a keyboard ring is not part of this control */
+.tl:focus,
+.tl:focus-visible {
+  outline: none;
+}
+/* the zoom triangles are solid, like Apple's */
+.tl svg .tri {
+  fill: rgba(0, 0, 0, 0.62);
+  stroke: none;
+}
 
 /* ---------- docked DevTools: the strip main leaves bare above the view ---------- */
 
@@ -561,6 +571,30 @@ body,
   padding: 0 11px;
   border-radius: var(--radius-row);
   font-size: var(--text-md);
+}
+/*
+ * Sidebar: the dropdown reads as an extension of the pill. Same inset, same
+ * icon box, same gap, same type as the omnibox itself (see .omnibox:not(.compact)),
+ * so a suggestion's first letter sits exactly under the one you typed —
+ * the treatment the top bar already gets from .omnibox.compact below.
+ */
+.omnibox:not(.compact) .omni-dropdown {
+  padding: 6px 0;
+  overflow: hidden;
+}
+.omnibox:not(.compact) .omni-suggestion {
+  gap: 8px;
+  padding: 0 calc(10px - 0.5px);
+  border-radius: 0;
+  font-size: var(--font-chrome);
+}
+.omnibox:not(.compact) .s-icon {
+  width: var(--tab-icon);
+  height: 18px;
+}
+.omnibox:not(.compact) .s-favicon {
+  width: 15px;
+  height: 15px;
 }
 .omni-suggestion.selected {
   background: var(--selection);

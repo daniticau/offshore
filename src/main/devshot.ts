@@ -673,6 +673,28 @@ function setupTestFlows(): void {
       check('the dropdown is on screen while typing', !!drop && drop.rows > 0)
       check('it hangs past the sidebar instead of being squeezed into it', (drop?.width ?? 0) > 320)
       check('the page steps aside behind it', drop?.frozen === true)
+      // The list reads as an extension of the pill: a suggestion's first letter
+      // sits exactly under the one you typed, in the same size type.
+      const align = await inChrome<{ input: number; text: number; fi: string; fs: string } | null>(
+        `(() => {
+          const input = document.querySelector('.omni-input')
+          const st = document.querySelector('.omni-suggestion .s-text')
+          if (!input || !st) return null
+          return {
+            input: Math.round(input.getBoundingClientRect().left * 2) / 2,
+            text: Math.round(st.getBoundingClientRect().left * 2) / 2,
+            fi: getComputedStyle(input).fontSize,
+            fs: getComputedStyle(st).fontSize
+          }
+        })()`
+      )
+      say(`[flowtest] dropdown alignment: ${JSON.stringify(align)}`)
+      check(
+        'suggestion text lines up with what you typed',
+        !!align && Math.abs(align.input - align.text) <= 1.5,
+        JSON.stringify(align)
+      )
+      check('suggestion type is the size of the bar type', !!align && align.fi === align.fs, JSON.stringify(align))
       /*
        * Give the address bar back, and make sure it really went.
        *

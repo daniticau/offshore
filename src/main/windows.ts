@@ -4,7 +4,7 @@ import type { Insets, SessionWindowV2, TabsState } from '@shared/types'
 import { HARNESS_ACTIVE, HARNESS_QUIET } from './bootstrap'
 import { popupOwner } from './popups'
 import { sessionStore, settingsStore } from './stores'
-import { TabManager, type TabHost } from './tabs'
+import { TabManager, type Tab, type TabHost } from './tabs'
 import { devRendererUrl, remapInternal } from './util'
 
 /** Pre-first-paint fallback only; steady-state insets are measured from the chrome DOM. */
@@ -234,6 +234,29 @@ export class OffshoreWindow implements TabHost {
    */
   openNewTab(): void {
     this.sendToChrome('newtab:request')
+  }
+
+  /**
+   * Actually make the tab — the other half of newtab:request, called by the
+   * chrome once it has decided a real tab is what's wanted. The cursor lands
+   * where the layout keeps its search: vertical's new tab carries a pill in the
+   * middle of the page, so the page takes it; horizontal has the address bar
+   * right above the page, so the cursor starts up there, the way Chrome does it.
+   */
+  newTabNow(): Tab {
+    const tab = this.tabs.createTab()
+    if (settingsStore.get().tabOrientation === 'horizontal') {
+      // The chrome has to know it is looking at a fresh tab *before* it takes
+      // the cursor. State pushes are batched by a frame; the focus message is
+      // not, so it would arrive first and the address bar would open selecting
+      // the address of the tab you just left.
+      this.pushState(this.tabs.state())
+      this.win.webContents.focus()
+      this.sendToChrome('omnibox:focus')
+    } else {
+      tab.wc.focus()
+    }
+    return tab
   }
 
   onTabsChanged(): void {

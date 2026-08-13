@@ -126,7 +126,14 @@ function TabGlyph({ tab, size = 13 }: { tab: TabInfo; size?: number }): React.JS
 function TrafficLights(): React.JSX.Element {
   return (
     <div className="traffic-inline no-drag" role="group" aria-label="Window">
-      <button className="tl tl-close" title="Close" onClick={() => void offshore.window.close()}>
+      {/* tabIndex -1 throughout: window buttons are pointer targets, and one of
+          them picking up initial keyboard focus wears a ring no Mac light has */}
+      <button
+        className="tl tl-close"
+        title="Close"
+        tabIndex={-1}
+        onClick={() => void offshore.window.close()}
+      >
         <svg viewBox="0 0 12 12" aria-hidden="true">
           <path d="M4 4l4 4M8 4l-4 4" />
         </svg>
@@ -134,15 +141,23 @@ function TrafficLights(): React.JSX.Element {
       <button
         className="tl tl-min"
         title="Minimize"
+        tabIndex={-1}
         onClick={() => void offshore.window.minimize()}
       >
         <svg viewBox="0 0 12 12" aria-hidden="true">
           <path d="M3.5 6h5" />
         </svg>
       </button>
-      <button className="tl tl-zoom" title="Zoom" onClick={() => void offshore.window.zoom()}>
+      {/* Apple's zoom glyph: two triangles pointing to opposite corners */}
+      <button
+        className="tl tl-zoom"
+        title="Zoom"
+        tabIndex={-1}
+        onClick={() => void offshore.window.zoom()}
+      >
         <svg viewBox="0 0 12 12" aria-hidden="true">
-          <path d="M4 8V4h4" />
+          <path className="tri" d="M3.1 6.9V3.1h3.8z" />
+          <path className="tri" d="M8.9 5.1v3.8H5.1z" />
         </svg>
       </button>
     </div>

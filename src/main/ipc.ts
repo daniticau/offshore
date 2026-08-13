@@ -269,10 +269,9 @@ export function setupIpc(): void {
   ipcMain.handle('tabs:new', (e, url?: string) => {
     const w = chromeWindow(e)
     if (!w) return
-    if (!url) {
-      w.openNewTab()
-      return
-    }
+    // No url is the chrome's own newTab() asking for a real tab — make one.
+    // (It must NOT route back through openNewTab, which asks the chrome.)
+    if (!url) return w.newTabNow().id
     return w.tabs.createTab(resolveOmniboxInput(url, settingsStore.get())).id
   })
   ipcMain.handle('tabs:close', (e, id: number) => chromeWindow(e)?.tabs.closeTab(id))
