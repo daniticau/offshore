@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import type { Settings, TabInfo } from '@shared/types'
 import { offshore, prettyHost } from './api'
-import { IconLock, IconShieldFilled, IconUnlock } from './icons'
+import { IconLock, IconPencil, IconShieldFilled, IconUnlock } from './icons'
 
 interface SiteInfoProps {
   tab: TabInfo
@@ -75,8 +75,32 @@ export function SiteInfo({ tab, settings, shieldOff, onToggleShield, onClose }: 
         )}
       </div>
 
+      {tab.editCount > 0 && (
+        <div className="si-row">
+          <span className="si-icon si-pencil">
+            <IconPencil size={13} />
+          </span>
+          <span className="si-text">
+            {tab.editsOn
+              ? `${tab.editCount} page edit${tab.editCount === 1 ? '' : 's'} on this site`
+              : 'Page edits are off for this site'}
+          </span>
+          <button
+            className="si-action"
+            onClick={() => void offshore.pageEdits.setSiteEnabled(!tab.editsOn)}
+          >
+            {tab.editsOn ? 'Turn off' : 'Turn on'}
+          </button>
+        </div>
+      )}
+
       <div className="si-divider" />
 
+      {tab.editCount > 0 && (
+        <button className="si-wide" onClick={() => void offshore.pageEdits.clearSite()}>
+          Forget this site’s page edits
+        </button>
+      )}
       <button
         className="si-wide"
         onClick={() => {

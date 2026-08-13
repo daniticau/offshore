@@ -2167,6 +2167,32 @@ browser-action-list {
   background: var(--hover);
 }
 
+/* ---------- page-edit chip ---------- */
+
+.edit-chip {
+  position: relative;
+}
+.edit-chip.active {
+  color: var(--accent-strong);
+  background: var(--glass-strong);
+}
+/* the site holds saved edits — a quiet mark, not an alarm */
+.edit-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-strong);
+}
+.edit-dot.off {
+  background: var(--ink-faint);
+}
+.si-pencil {
+  color: var(--accent-strong);
+}
+
 /* ---------- downloads panel ---------- */
 
 .dl-anchor {

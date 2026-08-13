@@ -73,6 +73,27 @@ export function setupDevshot(): void {
         .catch(() => false)
       await delay(500)
     }
+    /**
+     * OFFSHORE_SHOT_EDITPAGE=1: flip page-edit mode on and select something,
+     * so the capture shows the pill, the selection box and the toolbar.
+     */
+    if (process.env['OFFSHORE_SHOT_EDITPAGE']) {
+      w.tabs.toggleEditMode()
+      await delay(500)
+      await w.tabs.activeTab?.wc
+        .executeJavaScript(
+          `(() => { const el = document.querySelector('main h1, main p, h1, p, div')
+             if (!el) return false
+             const r = el.getBoundingClientRect()
+             el.dispatchEvent(new PointerEvent('pointerdown', {
+               bubbles: true, composed: true, button: 0,
+               clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
+             }))
+             return true })()`
+        )
+        .catch(() => false)
+      await delay(400)
+    }
     if (process.env['OFFSHORE_TEST_BOOKMARK']) {
       const { bookmarksStore } = await import('./stores')
       const tab = w.tabs.activeTab
@@ -306,7 +327,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|pageedits
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -542,6 +563,181 @@ function setupTestFlows(): void {
       const cleanScore = w.tabs.activeTab?.slopScore ?? 0
       say(`[flowtest] clean page score: ${cleanScore}`)
       check('honest prose not flagged', cleanScore < 25, `score=${cleanScore}`)
+      server.close()
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
+    if (flow === 'pageedits') {
+      /**
+       * The whole life of a page edit: made with the pointer, remembered by
+       * main, replayed onto a reload, defended against a re-render, and taken
+       * back. The page is a little SPA on purpose — its banner re-inserts
+       * itself every 700ms, which is exactly the fight LinkedIn would put up.
+       */
+      const page = `<html><body>
+        <div id="banner" style="height:60px;background:#c00">the banner</div>
+        <main>
+          <h1 id="headline">Original headline</h1>
+          <article id="story"><p>The story text.</p></article>
+          <x-widget id="widget"></x-widget>
+        </main>
+        <script>
+          customElements.define('x-widget', class extends HTMLElement {
+            constructor() {
+              super()
+              const root = this.attachShadow({ mode: 'open' })
+              const b = document.createElement('button')
+              b.id = 'inner'
+              b.textContent = 'in the shadows'
+              root.append(b)
+            }
+          })
+          setInterval(() => {
+            if (!document.getElementById('banner')) {
+              const d = document.createElement('div')
+              d.id = 'banner'
+              d.style.cssText = 'height:60px;background:#c00'
+              d.textContent = 'the banner is back'
+              document.body.prepend(d)
+            }
+          }, 700)
+        </script>
+      </body></html>`
+      const server = nodeHttp.createServer((_req, res) => {
+        res.setHeader('content-type', 'text/html')
+        res.end(page)
+      })
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+      const port = (server.address() as { port: number }).port
+      const { pageEditsStore } = await import('./pageedits')
+      // the dev profile persists across runs; this flow owns its host's ledger
+      pageEditsStore.clear('127.0.0.1')
+
+      w.tabs.navigate(null, `http://127.0.0.1:${port}/`)
+      await delay(2500)
+      const tab = w.tabs.activeTab!
+
+      // 1. edit mode goes on, and the tab says so
+      w.tabs.toggleEditMode()
+      await delay(400)
+      check('edit mode reaches the tab state', tab.info().editing === true)
+      const overlay = await tab.wc.executeJavaScript(`!!document.querySelector('offshore-page-edit')`)
+      check('the editor overlay is on the page', overlay === true)
+
+      // 2. pick the banner with the pointer and hide it with the keyboard
+      await tab.wc.executeJavaScript(`(() => {
+        const el = document.getElementById('banner')
+        const r = el.getBoundingClientRect()
+        const o = { bubbles: true, composed: true, clientX: r.left + 10, clientY: r.top + 10, button: 0 }
+        el.dispatchEvent(new PointerEvent('pointerdown', o))
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+        return true
+      })()`)
+      const hidden = await settle(
+        () =>
+          tab.wc.executeJavaScript(
+            `getComputedStyle(document.getElementById('banner')).display === 'none'`
+          ) as Promise<boolean>,
+        4000
+      )
+      check('picked element is hidden', hidden === true)
+      check('the edit reached the ledger', pageEditsStore.count('127.0.0.1') === 1)
+
+      // 2b. rewrite the headline in place: Enter opens the editor, ⌘Enter saves
+      const editable = await tab.wc.executeJavaScript(`(() => {
+        const el = document.getElementById('headline')
+        const r = el.getBoundingClientRect()
+        el.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, composed: true, button: 0, clientX: r.left + 5, clientY: r.top + 5
+        }))
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        return el.isContentEditable
+      })()`)
+      check('Enter on a selection opens the text editor', editable === true)
+      await tab.wc.executeJavaScript(`(() => {
+        const el = document.getElementById('headline')
+        el.textContent = 'Typed by hand'
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }))
+        return true
+      })()`)
+      const committed = await settle(async () => {
+        const done = (await tab.wc.executeJavaScript(
+          `!document.getElementById('headline').isContentEditable && document.getElementById('headline').hasAttribute('data-offshore-text')`
+        )) as boolean
+        return done && pageEditsStore.count('127.0.0.1') === 2 ? true : undefined
+      }, 4000)
+      check('⌘Enter commits the rewrite to the ledger', committed === true)
+
+      // 2c. a pick inside a web component takes the whole widget, not its guts
+      await tab.wc.executeJavaScript(`(() => {
+        const inner = document.getElementById('widget').shadowRoot.getElementById('inner')
+        inner.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true, button: 0 }))
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+        return true
+      })()`)
+      const widgetGone = await settle(async () => {
+        const gone = (await tab.wc.executeJavaScript(
+          `getComputedStyle(document.getElementById('widget')).display === 'none'`
+        )) as boolean
+        return gone && pageEditsStore.count('127.0.0.1') === 3 ? true : undefined
+      }, 4000)
+      check('a shadow-DOM pick hides the whole component', widgetGone === true)
+
+      // 3. the page fights back; the observer puts it away again
+      await tab.wc.executeJavaScript(`document.getElementById('banner').remove(), 0`)
+      const rehidden = await settle(async () => {
+        const s = (await tab.wc.executeJavaScript(`(() => {
+          const el = document.getElementById('banner')
+          return el ? getComputedStyle(el).display : 'gone'
+        })()`)) as string
+        return s === 'none' ? true : undefined
+      }, 5000)
+      check('a re-rendered element is re-hidden', rehidden === true)
+
+      // 4. re-recording the same element replaces its record instead of stacking
+      pageEditsStore.record('127.0.0.1', {
+        op: 'text',
+        selector: '#headline',
+        value: 'Rewritten by Offshore',
+        path: '/'
+      })
+      check('same-selector rewrite replaces, not appends', pageEditsStore.count('127.0.0.1') === 3)
+      w.tabs.toggleEditMode()
+      await delay(300)
+      check('edit mode ends on request', tab.info().editing === false)
+      tab.wc.reload()
+      await delay(2500)
+      const applied = await tab.wc.executeJavaScript(`JSON.stringify({
+        banner: getComputedStyle(document.getElementById('banner')).display,
+        headline: document.getElementById('headline').textContent
+      })`)
+      say(`[flowtest] after reload: ${applied}`)
+      check('hide survives a reload', String(applied).includes('"banner":"none"'))
+      check('text edit survives a reload', String(applied).includes('Rewritten by Offshore'))
+      check('tab info counts every edit', tab.info().editCount === 3)
+
+      // 5. switching the site off restores the page without forgetting anything
+      pageEditsStore.setEnabled('127.0.0.1', false)
+      w.tabs.refreshPageEdits('127.0.0.1')
+      const restored = await settle(async () => {
+        const s = (await tab.wc.executeJavaScript(`JSON.stringify({
+          banner: getComputedStyle(document.getElementById('banner')).display,
+          headline: document.getElementById('headline').textContent
+        })`)) as string
+        return s.includes('"banner":"block"') && s.includes('Original headline') ? true : undefined
+      }, 5000)
+      check('turning the site off restores the page live', restored === true)
+      check('the ledger still holds the edits', pageEditsStore.count('127.0.0.1') === 3)
+
+      // 6. forgetting the site really forgets
+      pageEditsStore.clear('127.0.0.1')
+      w.tabs.refreshPageEdits('127.0.0.1')
+      await delay(300)
+      check('clearing empties the ledger', pageEditsStore.count('127.0.0.1') === 0)
+      check('tab info agrees', tab.info().editCount === 0)
+
       server.close()
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)

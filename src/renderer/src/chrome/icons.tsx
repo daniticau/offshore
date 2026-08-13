@@ -57,6 +57,12 @@ export const IconSearch = svg(
     <path d="M21 21l-4.35-4.35" />
   </>
 )
+export const IconPencil = svg(
+  <>
+    <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+    <path d="m15 5 4 4" />
+  </>
+)
 export const IconGlobe = svg(
   <>
     <circle cx="12" cy="12" r="9" />

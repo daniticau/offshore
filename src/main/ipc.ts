@@ -27,6 +27,7 @@ import {
 import { adblock } from './adblock'
 import { fetchWeather, geocode } from './brief'
 import { listExtensions, uninstallExtension } from './extensions'
+import { pageEditsStore } from './pageedits'
 import { passwordVault } from './passwords'
 import {
   allowPopupsForSite,
@@ -73,8 +74,8 @@ function isTrustedSender(e: IpcMainInvokeEvent): boolean {
   return false
 }
 
-/** Page senders (tabs + tracked popups) allowed on the password/gesture channels. */
-function validatedPageSender(e: IpcMainEvent): {
+/** Page senders (tabs + tracked popups) allowed on the password/gesture/edit channels. */
+function validatedPageSender(e: IpcMainEvent | IpcMainInvokeEvent): {
   entry: NonNullable<ReturnType<typeof pageEntry>>
   origin: URL
 } | null {
@@ -239,6 +240,9 @@ function runAction(w: OffshoreWindow, id: ActionId): void {
       break
     case 'toggle-sidebar':
       w.sendToChrome('chrome:toggle-hidden')
+      break
+    case 'edit-page':
+      w.tabs.toggleEditMode()
       break
     case 'open-settings':
       w.tabs.createTab(internalPageUrl('settings'))
@@ -653,6 +657,76 @@ export function setupIpc(): void {
     return adblock.toggleSite(prettyHost(url))
   })
 
+  // ---- page edits ----
+  /** The host a chrome-side ask is about: wherever the active tab is. */
+  const activeEditHost = (e: IpcMainInvokeEvent): { w: OffshoreWindow; host: string } | null => {
+    const w = chromeWindow(e)
+    const url = w?.tabs.activeTab?.wc.getURL() ?? ''
+    if (!w || !/^https?:/.test(url)) return null
+    return { w, host: prettyHost(url) }
+  }
+
+  ipcMain.handle('pageedit:toggle', (e) => chromeWindow(e)?.tabs.toggleEditMode())
+  ipcMain.handle('pageedit:clear-site', (e) => {
+    const t = activeEditHost(e)
+    if (!t) return
+    pageEditsStore.clear(t.host)
+    for (const w of windows) w.tabs.refreshPageEdits(t.host)
+  })
+  ipcMain.handle('pageedit:set-site-enabled', (e, on: boolean) => {
+    const t = activeEditHost(e)
+    if (!t) return
+    pageEditsStore.setEnabled(t.host, !!on)
+    for (const w of windows) w.tabs.refreshPageEdits(t.host)
+  })
+
+  /*
+   * Records come from the page preload, and the page is the least trusted
+   * thing in the building — so the host an edit lands under is derived from
+   * the sender frame's real origin, never from the payload. A page can only
+   * ever shape how it itself renders on this machine.
+   */
+  ipcMain.handle('pageedit:record', (e, payload: Record<string, unknown>) => {
+    const v = validatedPageSender(e)
+    if (!v || v.entry.kind !== 'tab') return null
+    const edit = pageEditsStore.record(prettyHost(v.origin.href), {
+      op: payload?.op,
+      selector: payload?.selector,
+      value: payload?.value,
+      path: payload?.path,
+      label: payload?.label
+    })
+    if (edit) v.entry.ownerWindow.tabs.pushState()
+    return edit
+  })
+  ipcMain.handle('pageedit:remove', (e, id: string) => {
+    const v = validatedPageSender(e)
+    if (!v || v.entry.kind !== 'tab' || typeof id !== 'string') return
+    pageEditsStore.remove(prettyHost(v.origin.href), id)
+    v.entry.ownerWindow.tabs.pushState()
+  })
+  /** The page's own Done button — mode state lives in main, so main is told. */
+  ipcMain.handle('pageedit:exit', (e) => {
+    const v = validatedPageSender(e)
+    if (!v || v.entry.kind !== 'tab') return
+    const w = v.entry.ownerWindow
+    const tab = w.tabs.byId(e.sender.id)
+    if (tab) w.tabs.setEditMode(tab, false)
+  })
+
+  // the settings page's ledger view
+  ipcMain.handle('pageedit:list', (e) => (isTrustedSender(e) ? pageEditsStore.list() : []))
+  ipcMain.handle('pageedit:clear-host', (e, host: string) => {
+    if (!isTrustedSender(e) || typeof host !== 'string') return
+    pageEditsStore.clear(host)
+    for (const w of windows) w.tabs.refreshPageEdits(host)
+  })
+  ipcMain.handle('pageedit:set-host-enabled', (e, host: string, on: boolean) => {
+    if (!isTrustedSender(e) || typeof host !== 'string') return
+    pageEditsStore.setEnabled(host, !!on)
+    for (const w of windows) w.tabs.refreshPageEdits(host)
+  })
+
   // ---- popups ----
   ipcMain.on('gesture:activity', (e) => {
     if (pageEntry(e.sender.id)) noteGesture(e.sender.id)
@@ -833,6 +907,10 @@ export function setupIpc(): void {
   })
   bookmarksStore.on('changed', () => {
     broadcast('bookmarks:changed', bookmarksStore.list())
+    for (const w of windows) w.tabs.pushState()
+  })
+  // edit counts ride TabInfo, so every window re-reads them on any change
+  pageEditsStore.on('changed', () => {
     for (const w of windows) w.tabs.pushState()
   })
   adblock.onCountChanged = (tabId) => {

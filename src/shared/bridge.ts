@@ -11,6 +11,7 @@ import type {
   PasswordMeta,
   PasswordsStatus,
   Settings,
+  SiteEdits,
   SpaceProfile,
   Suggestion,
   TabsState
@@ -129,6 +130,14 @@ export interface OffshoreApi {
     set(patch: Partial<Settings>): Promise<Settings>
   }
   adblock: { toggleSite(url: string): Promise<boolean> }
+  pageEdits: {
+    /** Flip page-edit mode on the active tab. */
+    toggle(): Promise<void>
+    /** Forget every edit saved for the active tab's site. */
+    clearSite(): Promise<void>
+    /** Keep the active tab's site edits but stop (or resume) applying them. */
+    setSiteEnabled(on: boolean): Promise<void>
+  }
   window: {
     zoom(): Promise<void>
     close(): Promise<void>
@@ -168,6 +177,11 @@ export interface OffshoreInternalApi {
     geocode(q: string): Promise<GeocodeResult[]>
   }
   history: { clear(): Promise<void> }
+  pageEdits: {
+    list(): Promise<SiteEdits[]>
+    clear(host: string): Promise<void>
+    setEnabled(host: string, on: boolean): Promise<void>
+  }
   privacy: { clearSiteData(): Promise<void> }
   app: { info(): Promise<{ version: string } | null> }
   open(url: string): Promise<void>
