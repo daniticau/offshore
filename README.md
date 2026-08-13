@@ -19,6 +19,11 @@ skips.
   card over it before you sink time into it, one click to read anyway, one to never veil that
   site (managed in Settings → Shield). The site panel carries the quiet verdict for every
   page. The web as it was meant to be surfed.
+- **Page edits** — press ⇧⌘E (or the pencil in the address bar) and reshape any page: click to
+  hide an element, rewrite its text in place, or focus the page down to one thing. Edits are
+  remembered per site and replayed on every visit — deleted feed modules stay deleted, even when
+  the site re-renders them — with undo, a per-site off switch, and a ledger in Settings. No
+  extension, no userScripts permission: the browser owns the page, so the editor is built in.
 - **Protected content plays** — Widevine DRM via castLabs Electron for Content Security, so
   Netflix, Spotify Web, and friends actually work (dev builds are VMP-signed out of the box)
 - **Spaces** — per-window named tab sets with animated switching (⌘⌥←/→), per-space accent
@@ -102,6 +107,7 @@ OFFSHORE_TEST_FLOW=drm npm run dev         # Widevine CDM present and answering
 OFFSHORE_TEST_FLOW=split npm run dev       # split view: geometry, activation, dissolution
 OFFSHORE_TEST_FLOW=lasttab npm run dev     # closing the last tab keeps the window
 OFFSHORE_TEST_FLOW=slop npm run dev        # slop detector flags filler, spares honest prose
+OFFSHORE_TEST_FLOW=pageedits npm run dev   # pick → hide/rewrite, survives re-renders & reloads
 ```
 
 Each flow writes its `[flowtest]` transcript to `OFFSHORE_TEST_LOG=<file>` as well as stdout —

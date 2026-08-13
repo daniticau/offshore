@@ -28,6 +28,12 @@ export interface TabInfo {
   isBookmarked: boolean
   /** The slop detector's verdict on the loaded page; absent until it reports */
   slop?: SlopReport
+  /** This tab is in page-edit mode right now (per-document; ends on navigate). */
+  editing: boolean
+  /** Saved page edits for this tab's host — the chip and site panel read these. */
+  editCount: number
+  /** False when the host's edits are switched off without being thrown away. */
+  editsOn: boolean
   /**
    * A home screen with its search still up. Only ever true for a blank new tab:
    * the search is a panel over the home page, and dismissing it leaves the page.
@@ -515,6 +521,42 @@ export interface Settings {
   onboarded: boolean
 }
 
+// ---------------- Page edits ----------------
+
+/**
+ * One remembered change to a page, replayed on every future visit.
+ *
+ * 'hide' takes an element (and everything that re-renders into its place)
+ * off the page. 'text' rewrites an element's content. 'focus' hides every
+ * sibling along the element's ancestor chain — the page becomes that element.
+ */
+export type PageEditOp = 'hide' | 'text' | 'focus'
+
+export interface PageEdit {
+  id: string
+  op: PageEditOp
+  selector: string
+  /** op 'text': the replacement markup, sanitized before it is ever applied */
+  value?: string
+  /**
+   * op 'text': the exact pathname the edit was made on. Hiding generalizes
+   * across a site — the same rail is unwanted on every profile — but rewritten
+   * words stay on the page where they were written, or an edited headline
+   * would stamp itself onto every article the selector happens to match.
+   */
+  path?: string
+  /** How the element read when it was picked — the settings list shows this. */
+  label?: string
+  createdAt: number
+}
+
+export interface SiteEdits {
+  host: string
+  /** Off = keep the edits but stop applying them (the site panel's toggle). */
+  enabled: boolean
+  edits: PageEdit[]
+}
+
 // ---------------- Bookmarks (v2: tree) ----------------
 
 export interface BookmarkNode {
@@ -561,6 +603,7 @@ export type ActionId =
   | 'new-space'
   | 'toggle-layout'
   | 'toggle-sidebar'
+  | 'edit-page'
   | 'open-settings'
   | 'open-downloads'
   | 'show-welcome'
@@ -581,6 +624,7 @@ export const ACTION_DEFS: ActionDef[] = [
   { id: 'new-space', label: 'New Space', keywords: 'workspace create' },
   { id: 'toggle-layout', label: 'Switch Tab Layout', keywords: 'sidebar top bar horizontal vertical' },
   { id: 'toggle-sidebar', label: 'Toggle Sidebar', keywords: 'hide show collapse' },
+  { id: 'edit-page', label: 'Edit This Page', keywords: 'modify remove hide delete element text focus refit' },
   { id: 'open-settings', label: 'Open Settings', keywords: 'preferences options' },
   { id: 'open-downloads', label: 'Open Downloads Folder', keywords: 'finder files' },
   { id: 'show-welcome', label: 'Show Welcome', keywords: 'onboarding intro tour' },

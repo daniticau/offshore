@@ -138,6 +138,12 @@ export function installMenu(): void {
         },
         { type: 'separator' },
         {
+          label: 'Edit This Page',
+          accelerator: 'Cmd+Shift+E',
+          click: withActive((w) => w.tabs.toggleEditMode())
+        },
+        { type: 'separator' },
+        {
           label: 'Actual Size',
           accelerator: 'Cmd+0',
           click: withActive((w) => w.tabs.activeTab?.wc.setZoomLevel(0))

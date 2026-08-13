@@ -33,6 +33,7 @@ import {
 import { adblock } from './adblock'
 import { HARNESS_ACTIVE } from './bootstrap'
 import { extensionsRef } from './extensions-ref'
+import { pageEditsStore } from './pageedits'
 import { passwordVault } from './passwords'
 import {
   blockedPopupCount,
@@ -48,6 +49,7 @@ import {
   errorPageUrl,
   internalPageUrl,
   isInternalUrl,
+  prettyHost,
   remapInternal,
   resolveOmniboxInput,
   toDisplayUrl
@@ -129,6 +131,8 @@ export class Tab {
   favicon?: string
   /** The slop detector's verdict, reported by the page preload */
   slop?: SlopReport
+  /** Page-edit mode is a property of the document, so navigation ends it. */
+  editing = false
   /**
    * Is the home screen's search still up? A new tab opens with it in front of
    * the widgets, and dismissing it leaves the home page there — the tab does not
@@ -250,6 +254,7 @@ export class Tab {
       /* navigation history unavailable during teardown */
     }
     const effectiveUrl = errorTarget ?? url
+    const editHost = /^https?:/.test(url) && !errorTarget && !isInternalUrl(url) ? prettyHost(url) : ''
     return {
       id: this.id,
       spaceId: this.spaceId,
@@ -266,6 +271,9 @@ export class Tab {
       blockedPopups: blockedPopupCount(this.id),
       isBookmarked: bookmarksStore.isBookmarked(effectiveUrl),
       slop: this.slop,
+      editing: this.editing,
+      editCount: editHost ? pageEditsStore.count(editHost) : 0,
+      editsOn: editHost ? pageEditsStore.enabled(editHost) : true,
       homeSearch: this.homeSearch && (errorTarget ?? toDisplayUrl(url)).startsWith('offshore://start')
     }
   }
@@ -490,6 +498,48 @@ export class TabManager {
     if (isHomePage(url)) tab.gateOnPaint()
     void tab.wc.loadURL(url).catch(() => {})
     tab.wc.focus()
+  }
+
+  // ---- page edits ----
+
+  /** ⇧⌘E, the pencil chip, the context menu: flip edit mode on a real page. */
+  toggleEditMode(id?: number): void {
+    const tab = id == null ? this.activeTab : this.byId(id)
+    const url = tab?.wc.getURL() ?? ''
+    if (!tab || !/^https?:/.test(url) || isInternalUrl(url)) return
+    this.setEditMode(tab, !tab.editing)
+  }
+
+  setEditMode(tab: Tab, on: boolean): void {
+    if (tab.editing === on || tab.wc.isDestroyed()) return
+    tab.editing = on
+    tab.wc.send('pageedit:mode', on)
+    // the engine's own keys (Esc, Delete, ⌘Z) only hear a focused page
+    if (on) tab.wc.focus()
+    this.pushState()
+  }
+
+  /** Hand a freshly parsed document the edits its site has on file. */
+  sendPageEdits(tab: Tab): void {
+    const url = tab.wc.getURL()
+    if (!/^https?:/.test(url) || isInternalUrl(url)) return
+    const site = pageEditsStore.forHost(prettyHost(url))
+    if (site && site.enabled && site.edits.length) tab.wc.send('pageedit:apply', site.edits)
+  }
+
+  /**
+   * A host's ledger changed shape (cleared, or switched off/on) — bring every
+   * tab already sitting on that host in line without waiting for a reload.
+   */
+  refreshPageEdits(host: string): void {
+    for (const tab of this.tabs) {
+      const url = tab.wc.getURL()
+      if (!/^https?:/.test(url) || isInternalUrl(url) || prettyHost(url) !== host) continue
+      const site = pageEditsStore.forHost(host)
+      if (site && site.enabled && site.edits.length) tab.wc.send('pageedit:apply', site.edits)
+      else tab.wc.send('pageedit:reset')
+    }
+    this.pushState()
   }
 
   /**
@@ -1221,6 +1271,8 @@ export class TabManager {
       if (!isHomePage(url)) tab.ungate()
       tab.slop = undefined
       tab.favicon = undefined
+      // edit mode belongs to the document that was being edited
+      tab.editing = false
       if (this.pipTabId === tab.id) this.pipTabId = null
       adblock.resetCount(tab.id)
       if (!isInternalUrl(url) && settingsStore.get().keepHistory) historyStore.record(url)
@@ -1250,6 +1302,7 @@ export class TabManager {
     wc.on('dom-ready', () => {
       tab.markReady()
       maybeAutofill(wc, tab.partition)
+      this.sendPageEdits(tab)
     })
 
     // Internal pages never load in subframes (privileged bridge lives there)
@@ -1455,6 +1508,13 @@ export class TabManager {
       /* extension menus are best-effort */
     }
 
+    if (/^https?:/.test(wc.getURL()) && !isInternalUrl(wc.getURL())) {
+      add({
+        label: tab.editing ? 'Done Editing Page' : 'Edit This Page',
+        accelerator: 'Cmd+Shift+E',
+        click: () => this.setEditMode(tab, !tab.editing)
+      })
+    }
     add({ label: 'Inspect Element', click: () => wc.inspectElement(params.x, params.y) })
     menu.popup({ window: this.host.win })
   }

@@ -2,9 +2,10 @@
 /// <reference lib="dom.iterable" />
 import { contextBridge, ipcRenderer } from 'electron'
 import type { OffshoreInternalApi } from '@shared/bridge'
+import { initPageEdit } from './pageedit'
 
 /**
- * Preload attached to every tab (and tracked popup). Three concerns:
+ * Preload attached to every tab (and tracked popup). Four concerns:
  *
  * 1. The privileged offshoreInternal bridge — exposed ONLY on Offshore's own
  *    pages (offshore:// in prod, the exact dev-server origin in dev). Main
@@ -12,6 +13,7 @@ import type { OffshoreInternalApi } from '@shared/bridge'
  * 2. Gesture pings — feed the popup blocker's transient-activation model.
  * 3. Password capture + autofill — credentials only ever travel over dedicated
  *    channels that main validates against the sender frame's real origin.
+ * 4. The page editor (see pageedit.ts) — dormant until main flips it on.
  */
 
 const invoke = (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args)
@@ -66,6 +68,11 @@ const api: OffshoreInternalApi = {
   history: {
     clear: () => invoke('history:clear')
   },
+  pageEdits: {
+    list: () => invoke('pageedit:list'),
+    clear: (host: string) => invoke('pageedit:clear-host', host),
+    setEnabled: (host: string, on: boolean) => invoke('pageedit:set-host-enabled', host, on)
+  },
   privacy: {
     clearSiteData: () => invoke('privacy:clear-site-data')
   },
@@ -100,6 +107,9 @@ const api: OffshoreInternalApi = {
 
 if (isInternalDocument()) {
   contextBridge.exposeInMainWorld('offshoreInternal', api)
+} else if (/^https?:$/.test(location.protocol)) {
+  // real pages get the editor; Offshore's own pages have widgets instead
+  initPageEdit()
 }
 
 // ---------------- 2. gesture pings (popup blocker) ----------------
