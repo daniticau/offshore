@@ -79,7 +79,8 @@ function mergeSettings(base: Settings, patch: Partial<Settings>): Settings {
     popups: { ...base.popups, ...(patch.popups ?? {}) },
     passwords: { ...base.passwords, ...(patch.passwords ?? {}) },
     brief: { ...base.brief, ...(patch.brief ?? {}) },
-    slop: { ...base.slop, ...(patch.slop ?? {}) }
+    slop: { ...base.slop, ...(patch.slop ?? {}) },
+    cleaner: { ...base.cleaner, ...(patch.cleaner ?? {}) }
   }
 }
 

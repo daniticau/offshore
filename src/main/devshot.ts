@@ -327,7 +327,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|pageedits
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|pageedits|cleaner
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -532,6 +532,17 @@ function setupTestFlows(): void {
 
     if (flow === 'slop') {
       const { settingsStore } = await import('./stores')
+      // the "Always show" click below lands in the shared profile's allowlist —
+      // strip it on the way in so the flow can run twice, and again on the way out
+      const stripAllow = (): void => {
+        const s = settingsStore.get()
+        if (s.slop.allowlist.includes('127.0.0.1')) {
+          settingsStore.set({
+            slop: { ...s.slop, allowlist: s.slop.allowlist.filter((h) => h !== '127.0.0.1') }
+          })
+        }
+      }
+      stripAllow()
       const sloppy = `<html><body><article>${Array.from({ length: 14 }, () => `
         <p>In today's fast-paced digital landscape, it's important to note that businesses must
         delve into the ever-evolving landscape of technology. Moreover, this comprehensive guide
@@ -655,6 +666,146 @@ function setupTestFlows(): void {
       const cleanChip = await inChrome(`!document.querySelector('.slop-chip')`)
       check('no chip on honest prose', cleanChip === true)
 
+      stripAllow()
+      // flows leave over app.exit, which skips the debounced save — write now
+      settingsStore.flush()
+      server.close()
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
+    if (flow === 'cleaner') {
+      /**
+       * The two built-ins working together: the slop scan washes flagged
+       * paragraphs by tier, Clean mode hides exactly what the wash marked,
+       * Focus mode hides the furniture — and both survive a reload.
+       */
+      const slopPara = `In today's fast-paced digital landscape, it's important to note that you must
+        delve into the ever-evolving landscape of tools. Moreover, this comprehensive guide will
+        unlock the potential of your workflow — a game-changer that will revolutionize the way you
+        work. Furthermore, when it comes to navigating the complexities of modern software, a
+        holistic approach stands as a testament to seamless integration. Ultimately, embark on a
+        journey to elevate your results with this treasure trove of actionable insights.`
+      const honestPara = `The tide came in around four and we hauled the skiff past the wrack line.
+        Tom checked the traps while I sorted bait, cold to the wrist, and the gulls worked the
+        shallows where the creek cuts the flat. Nothing about the afternoon asked to be improved.
+        We tied off at the pilings, hosed the deck, and walked up the hill before the light went.`
+      const page = `<html><body>
+        <div id="sticky" style="position:fixed;top:0;left:0;right:0;height:48px;background:#333;color:#fff">subscribe to our newsletter</div>
+        <main>
+          <article>
+            ${Array.from({ length: 3 }, (_, i) => `<p id="slop${i}">${slopPara}</p>`).join('')}
+            <p id="honest">${honestPara}</p>
+          </article>
+        </main>
+        <aside id="rail" class="sidebar-related"><p>You may also like: ten weird tricks.</p></aside>
+      </body></html>`
+      const server = nodeHttp.createServer((_req, res) => {
+        res.setHeader('content-type', 'text/html')
+        res.end(page)
+      })
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+      const port = (server.address() as { port: number }).port
+      const { pageEditsStore } = await import('./pageedits')
+      const { settingsStore } = await import('./stores')
+      pageEditsStore.clear('127.0.0.1')
+
+      w.tabs.navigate(null, `http://127.0.0.1:${port}/`)
+      const tab = w.tabs.activeTab!
+
+      // 1. the wash: slop paragraphs wear marks and tints, honest prose doesn't
+      const washed = await settle(async () => {
+        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
+          marked: document.querySelectorAll('[data-offshore-slop]').length,
+          red: document.getElementById('slop0').getAttribute('data-offshore-slop'),
+          tint: document.getElementById('slop0').style.backgroundColor !== '',
+          honest: document.getElementById('honest').hasAttribute('data-offshore-slop')
+        })`)) as string
+        return /"marked":[1-9]/.test(d) ? d : undefined
+      }, 8000)
+      say(`[flowtest] wash: ${washed}`)
+      check('slop paragraphs wear the mark', /"marked":3/.test(String(washed)), String(washed))
+      check('the heaviest tier is red', /"red":"red"/.test(String(washed)))
+      check('flagged blocks are tinted', /"tint":true/.test(String(washed)))
+      check('honest prose is left alone', /"honest":false/.test(String(washed)))
+
+      // 2. Clean mode hides exactly what the wash marked
+      pageEditsStore.setMode('127.0.0.1', 'clean', true)
+      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
+      const cleaned = await settle(async () => {
+        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
+          slop: getComputedStyle(document.getElementById('slop0')).display,
+          honest: getComputedStyle(document.getElementById('honest')).display
+        })`)) as string
+        return d.includes('"slop":"none"') ? d : undefined
+      }, 5000)
+      say(`[flowtest] clean: ${cleaned}`)
+      check('Clean hides the flagged prose', String(cleaned).includes('"slop":"none"'))
+      check('Clean spares the honest paragraph', String(cleaned).includes('"honest":"block"'))
+
+      // 3. Focus mode hides the rail and the sticky bar, not the article
+      pageEditsStore.setMode('127.0.0.1', 'focus', true)
+      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
+      const focused = await settle(async () => {
+        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
+          rail: getComputedStyle(document.getElementById('rail')).display,
+          sticky: getComputedStyle(document.getElementById('sticky')).display,
+          article: getComputedStyle(document.querySelector('article')).display
+        })`)) as string
+        return d.includes('"rail":"none"') && d.includes('"sticky":"none"') ? d : undefined
+      }, 5000)
+      say(`[flowtest] focus: ${focused}`)
+      check('Focus hides the related rail', String(focused).includes('"rail":"none"'))
+      check('Focus hides the sticky bar', String(focused).includes('"sticky":"none"'))
+      check('Focus leaves the article standing', String(focused).includes('"article":"block"'))
+
+      // 4. both switches survive a reload — Clean has to wait for the wash
+      tab.wc.reload()
+      const survived = await settle(async () => {
+        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
+          slop: getComputedStyle(document.getElementById('slop0')).display,
+          rail: getComputedStyle(document.getElementById('rail')).display
+        })`).catch(() => '')) as string
+        return d.includes('"slop":"none"') && d.includes('"rail":"none"') ? d : undefined
+      }, 10_000)
+      check('Clean and Focus survive a reload', survived !== undefined, String(survived))
+
+      // 5. the highlight switch clears the tint but keeps the verdict machinery
+      pageEditsStore.setMode('127.0.0.1', 'clean', false)
+      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
+      const s = settingsStore.get()
+      settingsStore.set({ slop: { ...s.slop, highlight: false } })
+      const untinted = await settle(async () => {
+        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
+          tint: document.getElementById('slop0').style.backgroundColor,
+          marked: document.querySelectorAll('[data-offshore-slop]').length
+        })`)) as string
+        return d.includes('"tint":""') ? d : undefined
+      }, 5000)
+      say(`[flowtest] highlight off: ${untinted}`)
+      check('turning highlight off clears the wash', String(untinted).includes('"tint":""'))
+      check('the marks stay for Clean mode', /"marked":3/.test(String(untinted)))
+
+      // 6. switches off restore the page
+      pageEditsStore.setMode('127.0.0.1', 'focus', false)
+      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
+      const restored = await settle(async () => {
+        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
+          slop: getComputedStyle(document.getElementById('slop0')).display,
+          rail: getComputedStyle(document.getElementById('rail')).display
+        })`)) as string
+        return d.includes('"slop":"block"') && d.includes('"rail":"block"') ? d : undefined
+      }, 5000)
+      check('everything comes back when the modes go off', restored !== undefined, String(restored))
+      // scoped to this flow's host — the shared profile may hold the human's own edits
+      check('a hollow site leaves the ledger', pageEditsStore.forHost('127.0.0.1') === undefined)
+
+      settingsStore.set({ slop: { ...settingsStore.get().slop, highlight: true } })
+      pageEditsStore.clear('127.0.0.1')
+      // flows leave over app.exit, which skips the debounced save — write now
+      pageEditsStore.flush()
+      settingsStore.flush()
       server.close()
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)
@@ -830,6 +981,8 @@ function setupTestFlows(): void {
       check('clearing empties the ledger', pageEditsStore.count('127.0.0.1') === 0)
       check('tab info agrees', tab.info().editCount === 0)
 
+      // flows leave over app.exit, which skips the debounced save — write now
+      pageEditsStore.flush()
       server.close()
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)

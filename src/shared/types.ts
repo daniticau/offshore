@@ -34,6 +34,8 @@ export interface TabInfo {
   editCount: number
   /** False when the host's edits are switched off without being thrown away. */
   editsOn: boolean
+  /** The Page Cleaner's per-site switches, as stored for this tab's host. */
+  modes: PageModes
   /**
    * A home screen with its search still up. Only ever true for a blank new tab:
    * the search is a panel over the home page, and dismissing it leaves the page.
@@ -169,10 +171,32 @@ export interface SlopReport {
 export interface SlopSettings {
   /** Scan pages for the tells of machine-generated filler */
   detector: boolean
+  /** Wash flagged prose yellow → orange → red, block by block, in the page */
+  highlight: boolean
   /** Cover heavy-scoring pages with a veil before you sink time into them */
   veil: boolean
   /** hostnames the veil never covers */
   allowlist: string[]
+}
+
+/** The block-tint thresholds: a paragraph wears the deepest tier it clears. */
+export const SLOP_BLOCK_TIERS = [
+  { tier: 'red', min: 65 },
+  { tier: 'orange', min: 45 },
+  { tier: 'yellow', min: 25 }
+] as const
+
+/** The Page Cleaner's per-site switches: what it takes off a page, and keeps off. */
+export interface PageModes {
+  /** Hide every block of prose the slop detector flagged */
+  clean: boolean
+  /** Hide the furniture around the content — rails, promos, sticky overlays */
+  focus: boolean
+}
+
+export interface CleanerSettings {
+  /** Master switch for the Page Cleaner (the Clean / Focus page modes) */
+  enabled: boolean
 }
 
 export interface PasswordSettings {
@@ -509,6 +533,8 @@ export interface Settings {
   newTabWidgetLayout: Partial<Record<keyof NewTabWidgets, WidgetLayout>>
   /** Local heuristic prose analysis that flags AI-generated-looking pages. No AI involved. */
   slop: SlopSettings
+  /** The Page Cleaner built-in: Clean / Focus modes for any page */
+  cleaner: CleanerSettings
   /** Pop playing video into a floating mini-player when its tab is backgrounded */
   autoPip: boolean
   /** Tiny interface sounds (tab close, download done, …) */
@@ -555,6 +581,8 @@ export interface SiteEdits {
   /** Off = keep the edits but stop applying them (the site panel's toggle). */
   enabled: boolean
   edits: PageEdit[]
+  /** The Page Cleaner's switches for this host; absent = both off. */
+  modes?: Partial<PageModes>
 }
 
 // ---------------- Bookmarks (v2: tree) ----------------
@@ -880,7 +908,8 @@ export const DEFAULT_SETTINGS: Settings = {
   newTabWidgets: { clock: true, date: false, greeting: false, weather: false, forecast: false, sun: false, moon: false },
   newTabWidgetOrder: ['clock', 'date', 'greeting', 'weather', 'forecast', 'sun', 'moon'],
   newTabWidgetLayout: {},
-  slop: { detector: true, veil: true, allowlist: [] },
+  slop: { detector: true, highlight: true, veil: true, allowlist: [] },
+  cleaner: { enabled: true },
   autoPip: true,
   uiSounds: true,
   toolbarDensity: 'compact',

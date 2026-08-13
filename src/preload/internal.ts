@@ -2,7 +2,8 @@
 /// <reference lib="dom.iterable" />
 import { contextBridge, ipcRenderer } from 'electron'
 import type { OffshoreInternalApi } from '@shared/bridge'
-import { initPageEdit } from './pageedit'
+import { SLOP_BLOCK_TIERS } from '@shared/types'
+import { initPageEdit, slopMarksChanged } from './pageedit'
 
 /**
  * Preload attached to every tab (and tracked popup). Four concerns:
@@ -393,11 +394,19 @@ const SLOP_STARTERS =
 const SLOP_HEADINGS =
   /^(in\s+)?(conclusion|final thoughts|key takeaways|the bottom line|wrapping (it\s+)?up|in a nutshell|summing up)\b/i
 
+interface ProseBlock {
+  el: HTMLElement
+  text: string
+  words: number
+}
+
 interface ProseSample {
   text: string
   words: number
   /** word count of each paragraph, for the uniformity check */
   paraWords: number[]
+  /** the prose elements themselves, for the block-by-block wash */
+  blocks: ProseBlock[]
   scope: ParentNode
 }
 
@@ -407,17 +416,24 @@ function collectProse(): ProseSample | null {
   if (!scope) return null
   const parts: string[] = []
   const paraWords: number[] = []
+  const blocks: ProseBlock[] = []
   let total = 0
   for (const p of scope.querySelectorAll('p, li, h2, h3, blockquote')) {
     const t = (p as HTMLElement).innerText
     if (!t || t.length < 30) continue
     parts.push(t)
-    if (p.tagName === 'P') paraWords.push(t.split(/\s+/).length)
+    const words = t.split(/\s+/).length
+    if (p.tagName === 'P') paraWords.push(words)
+    // only real prose runs get washed — a heading or stub line never does,
+    // and a list item only counts through its own text, not its sublist's
+    if (p.tagName !== 'H2' && p.tagName !== 'H3' && words >= 20) {
+      blocks.push({ el: p as HTMLElement, text: t, words })
+    }
     total += t.length
     if (total > 20_000) break
   }
   const text = parts.join('\n')
-  return { text, words: text ? text.split(/\s+/).length : 0, paraWords, scope }
+  return { text, words: text ? text.split(/\s+/).length : 0, paraWords, blocks, scope }
 }
 
 interface WeighedSignal {
@@ -505,6 +521,102 @@ function scoreSlop(sample: ProseSample): { score: number; signals: { label: stri
   return { score, signals: signals.slice(0, 8).map(({ label, count }) => ({ label, count })) }
 }
 
+// ---- the wash: flagged prose wears its score, block by block ----
+//
+// The page-level verdict says "this page reads like filler"; the wash says
+// *which sentences*. Each prose block is scored alone and tinted yellow →
+// orange → red by how hard it leans on the tells. The tint is a low-alpha
+// background written through the CSSOM (page CSP never gets a say), and the
+// mark is a data attribute the Page Cleaner's Clean mode hides by.
+
+const SLOP_MARK = 'data-offshore-slop'
+const TIER_WASH: Record<string, string> = {
+  yellow: 'rgba(250, 204, 21, 0.16)',
+  orange: 'rgba(249, 115, 22, 0.16)',
+  red: 'rgba(239, 68, 68, 0.17)'
+}
+
+/** What main says the settings want: mark at all (detector), tint the marks. */
+let slopStyle = { mark: true, tint: true }
+const washed = new Map<HTMLElement, { bg: string; priority: string }>()
+
+/**
+ * A block's score runs on a different scale from the page's: hits per hundred
+ * words, not per thousand, tuned so one stock phrase in an honest paragraph
+ * stays unmarked, two make yellow, and a paragraph built out of the phrasebook
+ * goes red. The floor keeps a short block from riding one phrase into a tier.
+ */
+function scoreBlock(block: ProseBlock): number {
+  const lower = block.text.toLowerCase().replace(/[’‘]/g, "'")
+  const per100 = 100 / Math.max(block.words, 80)
+  let hits = 0
+  for (const phrase of SLOP_PHRASES) {
+    let idx = lower.indexOf(phrase)
+    let count = 0
+    while (idx !== -1 && count < 4) {
+      count += 1
+      idx = lower.indexOf(phrase, idx + phrase.length)
+    }
+    hits += count
+  }
+  const starters = (block.text.match(SLOP_STARTERS) ?? []).length
+  const notOnly = (lower.match(/not only\b[\s\S]{0,80}?\bbut also\b/g) ?? []).length
+  return Math.round(Math.min(100, hits * 25 * per100 + starters * 8 * per100 + notOnly * 20 * per100))
+}
+
+function tintOne(el: HTMLElement): void {
+  if (washed.has(el)) return
+  washed.set(el, {
+    bg: el.style.getPropertyValue('background-color'),
+    priority: el.style.getPropertyPriority('background-color')
+  })
+  const tier = el.getAttribute(SLOP_MARK) ?? 'yellow'
+  el.style.setProperty('background-color', TIER_WASH[tier] ?? TIER_WASH.yellow, 'important')
+}
+
+function untintOne(el: HTMLElement): void {
+  const saved = washed.get(el)
+  if (!saved) return
+  washed.delete(el)
+  if (saved.bg) el.style.setProperty('background-color', saved.bg, saved.priority)
+  else el.style.removeProperty('background-color')
+}
+
+/** Score each block, wear the marks, and tint them if the settings say so. */
+function washBlocks(blocks: ProseBlock[]): void {
+  const flagged = new Set<HTMLElement>()
+  if (slopStyle.mark) {
+    for (const block of blocks) {
+      const s = scoreBlock(block)
+      const tier = SLOP_BLOCK_TIERS.find((t) => s >= t.min)
+      if (!tier) continue
+      flagged.add(block.el)
+      block.el.setAttribute(SLOP_MARK, tier.tier)
+      if (slopStyle.tint) tintOne(block.el)
+      else untintOne(block.el)
+    }
+  }
+  // marks from the last pass that didn't survive this one come off entirely
+  for (const el of document.querySelectorAll<HTMLElement>(`[${SLOP_MARK}]`)) {
+    if (flagged.has(el)) continue
+    untintOne(el)
+    el.removeAttribute(SLOP_MARK)
+  }
+  // Clean mode hides by these marks — tell it the ground shifted
+  slopMarksChanged()
+}
+
+ipcRenderer.on('slop:style', (_e, style: { mark?: boolean; tint?: boolean }) => {
+  const next = { mark: style?.mark !== false, tint: style?.tint !== false }
+  const changed = next.mark !== slopStyle.mark || next.tint !== slopStyle.tint
+  slopStyle = next
+  // flipping a switch takes effect on the page you're looking at, not the next one
+  if (changed) {
+    if (!slopStyle.mark) washBlocks([])
+    else runSlopScan(0)
+  }
+})
+
 let slopRetry: ReturnType<typeof setTimeout> | null = null
 function runSlopScan(retriesLeft = 2): void {
   if (!/^https?:$/.test(location.protocol) || isInternalDocument()) return
@@ -519,6 +631,7 @@ function runSlopScan(retriesLeft = 2): void {
       return
     }
     const { score, signals } = scoreSlop(sample)
+    washBlocks(sample.blocks)
     ipcRenderer.send('slop:report', { score, words: sample.words, signals })
   } catch {
     /* scoring must never break a page */

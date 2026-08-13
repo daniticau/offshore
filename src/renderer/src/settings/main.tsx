@@ -582,6 +582,8 @@ function PageEditsSection(): React.JSX.Element {
               <div className="row-sub clamp">
                 {s.edits.length === 1 ? '1 edit' : `${s.edits.length} edits`}
                 {s.enabled ? '' : ' — off'}
+                {s.modes?.clean ? ' · Clean on' : ''}
+                {s.modes?.focus ? ' · Focus on' : ''}
                 {s.edits[s.edits.length - 1]?.label ? ` · latest: ${s.edits[s.edits.length - 1].label}` : ''}
               </div>
             </div>
@@ -937,6 +939,20 @@ function App(): React.JSX.Element {
                 </div>
                 <div className="row">
                   <div className="row-title">
+                    Highlight flagged prose
+                    <div className="row-sub">
+                      Wash the blocks that carry the tells, right in the page — yellow for a
+                      lean, orange for a habit, red for the worst of it.
+                    </div>
+                  </div>
+                  <Toggle
+                    on={settings.slop.highlight}
+                    disabled={!settings.slop.detector}
+                    onChange={(v) => patch({ slop: { ...settings.slop, highlight: v } })}
+                  />
+                </div>
+                <div className="row">
+                  <div className="row-title">
                     Veil heavy slop
                     <div className="row-sub">
                       A page scoring 55 or worse gets a veil before you sink time into it — one
@@ -1054,6 +1070,47 @@ function App(): React.JSX.Element {
             <section>
               <h2>Extensions</h2>
               <div className="card">
+                <div className="row">
+                  <div className="row-title">
+                    Built into Offshore
+                    <div className="row-sub">
+                      Two extensions that ship with the browser — no store, no install, nothing
+                      leaves your Mac.
+                    </div>
+                  </div>
+                </div>
+                <div className="row">
+                  <div className="ext-info">
+                    <span className="ext-icon builtin">☔</span>
+                    <div className="row-title">
+                      Slop Detector
+                      <div className="row-sub">
+                        Scores every page for machine-generated filler and washes the guilty prose
+                        yellow → orange → red. Tuning lives in Settings → Shield.
+                      </div>
+                    </div>
+                  </div>
+                  <Toggle
+                    on={settings.slop.detector}
+                    onChange={(v) => patch({ slop: { ...settings.slop, detector: v } })}
+                  />
+                </div>
+                <div className="row">
+                  <div className="ext-info">
+                    <span className="ext-icon builtin">✨</span>
+                    <div className="row-title">
+                      Page Cleaner
+                      <div className="row-sub">
+                        Clean and Focus modes for any page, from the sparkle beside the address —
+                        Clean hides flagged slop, Focus hides the clutter around the content.
+                      </div>
+                    </div>
+                  </div>
+                  <Toggle
+                    on={settings.cleaner.enabled}
+                    onChange={(v) => patch({ cleaner: { enabled: v } })}
+                  />
+                </div>
                 {extensions.map((ext) => (
                   <div className="row" key={ext.id}>
                     <div className="ext-info">

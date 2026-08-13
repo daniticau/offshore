@@ -370,6 +370,8 @@ export function setupIpc(): void {
     for (const w of windows) {
       let changed = false
       for (const tab of w.tabs.tabs) {
+        // the wash follows the switches live, verdict or no verdict yet
+        tab.wc.send('slop:style', { mark: s.slop.detector, tint: s.slop.detector && s.slop.highlight })
         if (!tab.slop) continue
         if (!s.slop.detector) {
           tab.slop = undefined
@@ -391,6 +393,22 @@ export function setupIpc(): void {
   }
   settingsStore.on('changed', (next: Settings, prev: Settings) => {
     if (JSON.stringify(next.slop) !== JSON.stringify(prev.slop)) reapplySlopPolicy()
+    // the Page Cleaner's master switch acts on pages already open
+    if (next.cleaner.enabled !== prev.cleaner.enabled) {
+      for (const w of windows) {
+        for (const tab of w.tabs.tabs) w.tabs.sendPageModes(tab)
+        w.tabs.pushState()
+      }
+    }
+  })
+
+  // ---- the Page Cleaner's switches ----
+  ipcMain.handle('pagemode:set', (e, mode: string, on: boolean) => {
+    if (mode !== 'clean' && mode !== 'focus') return
+    const t = activeEditHost(e)
+    if (!t || !settingsStore.get().cleaner.enabled) return
+    pageEditsStore.setMode(t.host, mode, !!on)
+    for (const w of windows) w.tabs.refreshPageEdits(t.host)
   })
 
   ipcMain.on(

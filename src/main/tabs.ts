@@ -274,6 +274,7 @@ export class Tab {
       editing: this.editing,
       editCount: editHost ? pageEditsStore.count(editHost) : 0,
       editsOn: editHost ? pageEditsStore.enabled(editHost) : true,
+      modes: editHost ? pageEditsStore.modes(editHost) : { clean: false, focus: false },
       homeSearch: this.homeSearch && (errorTarget ?? toDisplayUrl(url)).startsWith('offshore://start')
     }
   }
@@ -525,6 +526,25 @@ export class TabManager {
     if (!/^https?:/.test(url) || isInternalUrl(url)) return
     const site = pageEditsStore.forHost(prettyHost(url))
     if (site && site.enabled && site.edits.length) tab.wc.send('pageedit:apply', site.edits)
+    this.sendPageModes(tab)
+    this.sendSlopStyle(tab)
+  }
+
+  /** The Page Cleaner's switches for wherever this tab is, as they stand now. */
+  sendPageModes(tab: Tab): void {
+    const url = tab.wc.getURL()
+    if (!/^https?:/.test(url) || isInternalUrl(url) || tab.wc.isDestroyed()) return
+    const modes = settingsStore.get().cleaner.enabled
+      ? pageEditsStore.modes(prettyHost(url))
+      : { clean: false, focus: false }
+    tab.wc.send('pagemode:apply', modes)
+  }
+
+  /** Whether the slop scan should mark blocks at all, and tint what it marks. */
+  sendSlopStyle(tab: Tab): void {
+    if (tab.wc.isDestroyed()) return
+    const s = settingsStore.get()
+    tab.wc.send('slop:style', { mark: s.slop.detector, tint: s.slop.detector && s.slop.highlight })
   }
 
   /**
@@ -538,6 +558,7 @@ export class TabManager {
       const site = pageEditsStore.forHost(host)
       if (site && site.enabled && site.edits.length) tab.wc.send('pageedit:apply', site.edits)
       else tab.wc.send('pageedit:reset')
+      this.sendPageModes(tab)
     }
     this.pushState()
   }

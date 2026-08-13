@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events'
-import type { PageEdit, PageEditOp, SiteEdits } from '@shared/types'
+import type { PageEdit, PageEditOp, PageModes, SiteEdits } from '@shared/types'
 import { JsonFile, genId } from './stores'
 
 /**
@@ -40,10 +40,29 @@ class PageEditsStore extends EventEmitter {
     return this.forHost(host)?.enabled ?? true
   }
 
-  /** Sites that actually hold edits, for the settings page. */
+  /** The Page Cleaner's switches for a host; absent site = both off. */
+  modes(host: string): PageModes {
+    const m = this.forHost(host)?.modes
+    return { clean: m?.clean === true, focus: m?.focus === true }
+  }
+
+  setMode(host: string, mode: keyof PageModes, on: boolean): void {
+    if (!host) return
+    const site = (this.file.data.sites[host] ??= { host, enabled: true, edits: [] })
+    const modes = (site.modes ??= {})
+    if (modes[mode] === on) return
+    modes[mode] = on
+    // a site holding nothing at all has no business staying in the ledger
+    if (!on && !site.edits.length && !modes.clean && !modes.focus) {
+      delete this.file.data.sites[host]
+    }
+    this.commit()
+  }
+
+  /** Sites that actually hold edits or a mode switch, for the settings page. */
   list(): SiteEdits[] {
     return Object.values(this.file.data.sites)
-      .filter((s) => s.edits.length > 0)
+      .filter((s) => s.edits.length > 0 || s.modes?.clean || s.modes?.focus)
       .sort((a, b) => a.host.localeCompare(b.host))
   }
 
@@ -98,7 +117,9 @@ class PageEditsStore extends EventEmitter {
     const before = site.edits.length
     site.edits = site.edits.filter((e) => e.id !== id)
     if (site.edits.length === before) return
-    if (site.edits.length === 0) delete this.file.data.sites[host]
+    if (site.edits.length === 0 && !site.modes?.clean && !site.modes?.focus) {
+      delete this.file.data.sites[host]
+    }
     this.commit()
   }
 

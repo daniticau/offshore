@@ -123,7 +123,8 @@ const api: OffshoreApi = {
   pageEdits: {
     toggle: () => invoke('pageedit:toggle'),
     clearSite: () => invoke('pageedit:clear-site'),
-    setSiteEnabled: (on: boolean) => invoke('pageedit:set-site-enabled', on)
+    setSiteEnabled: (on: boolean) => invoke('pageedit:set-site-enabled', on),
+    setMode: (mode: 'clean' | 'focus', on: boolean) => invoke('pagemode:set', mode, on)
   },
   window: {
     zoom: () => invoke('window:zoom'),

@@ -63,6 +63,12 @@ export const IconPencil = svg(
     <path d="m15 5 4 4" />
   </>
 )
+export const IconSparkle = svg(
+  <>
+    <path d="M11 4l1.7 4.6L17.3 10l-4.6 1.7L11 16.3l-1.7-4.6L4.7 10l4.6-1.4Z" />
+    <path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8Z" />
+  </>
+)
 export const IconGlobe = svg(
   <>
     <circle cx="12" cy="12" r="9" />

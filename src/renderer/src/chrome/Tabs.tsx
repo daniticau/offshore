@@ -15,6 +15,7 @@ import type { FindState } from './App'
 import { BookmarkEditPopover, BookmarksBar, BookmarksSection } from './Bookmarks'
 import { Omnibox } from './Omnibox'
 import { SiteInfo } from './SiteInfo'
+import { ModesChip } from './Cleaner'
 import { PopupChip } from './PasswordDialog'
 import { SlopChip } from './Slop'
 import { SpaceSwitcher } from './SpaceSwitcher'
@@ -89,6 +90,8 @@ interface ChromeProps {
   onTogglePopupPanel: (open: boolean) => void
   slopPanelOpen: boolean
   onToggleSlopPanel: (open: boolean) => void
+  modesPanelOpen: boolean
+  onToggleModesPanel: (open: boolean) => void
   appMenuOpen: boolean
   onToggleAppMenu: (open: boolean) => void
   profileMenuOpen: boolean
@@ -307,6 +310,14 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
       )}
       {activeTab && (
         <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
+      )}
+      {activeTab && (
+        <ModesChip
+          tab={activeTab}
+          settings={props.settings}
+          open={props.modesPanelOpen}
+          onToggle={props.onToggleModesPanel}
+        />
       )}
       <EditChip activeTab={activeTab} />
       {/* The star belongs to the address, so it rides the address bar in both

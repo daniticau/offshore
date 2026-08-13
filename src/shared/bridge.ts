@@ -143,6 +143,8 @@ export interface OffshoreApi {
     clearSite(): Promise<void>
     /** Keep the active tab's site edits but stop (or resume) applying them. */
     setSiteEnabled(on: boolean): Promise<void>
+    /** Flip a Page Cleaner switch (Clean / Focus) for the active tab's site. */
+    setMode(mode: 'clean' | 'focus', on: boolean): Promise<void>
   }
   window: {
     zoom(): Promise<void>

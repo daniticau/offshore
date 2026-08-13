@@ -1,7 +1,17 @@
 /// <reference lib="dom" />
 /// <reference lib="dom.iterable" />
 import { ipcRenderer } from 'electron'
-import type { PageEdit } from '@shared/types'
+import type { PageEdit, PageModes } from '@shared/types'
+
+/**
+ * The slop scan (internal.ts) tells the Page Cleaner when block marks change,
+ * so Clean mode can put freshly flagged prose away without polling. Set by
+ * initPageEdit; a no-op on documents that never got an editor.
+ */
+let marksChangedHook: (() => void) | null = null
+export function slopMarksChanged(): void {
+  marksChangedHook?.()
+}
 
 /**
  * The page editor: point at anything on a page, and change it — for good.
@@ -166,6 +176,7 @@ export function initPageEdit(): void {
     // a page that rewrites <html>'s children can take our overlay with it
     if (ui && !ui.host.isConnected) document.documentElement.appendChild(ui.host)
     for (const edit of edits.values()) applyEdit(edit)
+    applyModes()
   }
 
   /**
@@ -174,8 +185,12 @@ export function initPageEdit(): void {
    * puts it away again. Sweeps are debounced and idempotent, so even a
    * chatty page costs a few querySelectors four times a second.
    */
+  function watching(): boolean {
+    return edits.size > 0 || modes.clean || modes.focus
+  }
+
   function ensureObserver(): void {
-    if (observer || edits.size === 0) return
+    if (observer || !watching()) return
     observer = new MutationObserver(() => {
       if (scanTimer == null) scanTimer = window.setTimeout(scan, 240)
     })
@@ -183,9 +198,107 @@ export function initPageEdit(): void {
   }
 
   function settleObserver(): void {
-    if (observer && edits.size === 0) {
+    if (observer && !watching()) {
       observer.disconnect()
       observer = null
+    }
+  }
+
+  // ---------------- the Page Cleaner's modes ----------------
+  //
+  // Clean hides what the slop scan marked; Focus hides the furniture around
+  // the content. Both are per-site switches main flips over 'pagemode:apply',
+  // both hide with the same display:none-and-remember move the manual editor
+  // uses, and both are re-asserted by the same observer, so a re-render can't
+  // bring the clutter back.
+
+  const MODE_MARK = 'data-offshore-mode'
+  let modes: PageModes = { clean: false, focus: false }
+  const hiddenByMode: Record<'clean' | 'focus', Map<HTMLElement, { display: string; priority: string }>> = {
+    clean: new Map(),
+    focus: new Map()
+  }
+
+  /** The signature of things that sit beside the reading, not in it. */
+  const FOCUS_NOISE = [
+    'aside',
+    '[role="complementary"]',
+    '[class*="sidebar" i]',
+    '[id*="sidebar" i]',
+    '[class*="related" i]',
+    '[class*="recommend" i]',
+    '[class*="newsletter" i]',
+    '[class*="subscribe" i]',
+    '[class*="promo" i]',
+    '[class*="sponsor" i]',
+    '[class*="advert" i]',
+    '[id*="advert" i]',
+    '[class*="social" i]',
+    '[class*="share" i]',
+    '[class*="trending" i]',
+    '[class*="popular" i]',
+    '[class*="cookie" i]',
+    '[class*="consent" i]'
+  ].join(', ')
+
+  function modeHide(mode: 'clean' | 'focus', el: HTMLElement): void {
+    const bucket = hiddenByMode[mode]
+    if (bucket.has(el)) return
+    bucket.set(el, {
+      display: el.style.getPropertyValue('display'),
+      priority: el.style.getPropertyPriority('display')
+    })
+    el.style.setProperty('display', 'none', 'important')
+    el.setAttribute(MODE_MARK, mode)
+  }
+
+  function modeRestore(mode: 'clean' | 'focus'): void {
+    const bucket = hiddenByMode[mode]
+    for (const [el, saved] of bucket) {
+      if (el.getAttribute(MODE_MARK) === mode) el.removeAttribute(MODE_MARK)
+      if (saved.display) el.style.setProperty('display', saved.display, saved.priority)
+      else el.style.removeProperty('display')
+    }
+    bucket.clear()
+  }
+
+  /** Never hide the reading itself, the page's frame, or anything of ours. */
+  function offLimits(el: HTMLElement): boolean {
+    if (ours(el) || el === document.body || el === document.documentElement) return true
+    // Offshore's other in-page surfaces (the slop veil) are not page clutter
+    if (el.id.startsWith('offshore-') || el.tagName.toLowerCase().startsWith('offshore-')) return true
+    const scope = document.querySelector('article, main, [role="main"]')
+    return !!scope && el.contains(scope)
+  }
+
+  function applyModes(): void {
+    if (modes.clean) {
+      for (const el of document.querySelectorAll<HTMLElement>('[data-offshore-slop]')) {
+        if (!offLimits(el) && !el.hasAttribute(MARK)) modeHide('clean', el)
+      }
+    } else if (hiddenByMode.clean.size) {
+      modeRestore('clean')
+    }
+
+    if (modes.focus) {
+      for (const el of document.querySelectorAll<HTMLElement>(FOCUS_NOISE)) {
+        if (!offLimits(el) && !el.hasAttribute(MARK)) modeHide('focus', el)
+      }
+      // overlays that ride the viewport — sticky bars, floating prompts. Only
+      // the shallow layers are asked: that is where pages mount them.
+      for (const el of document.querySelectorAll<HTMLElement>('body > *, body > * > *')) {
+        if (offLimits(el) || el.hasAttribute(MODE_MARK) || el.hasAttribute(MARK)) continue
+        const cs = getComputedStyle(el)
+        if (cs.position !== 'fixed' && cs.position !== 'sticky') continue
+        if (cs.display === 'none') continue
+        const r = el.getBoundingClientRect()
+        const viewport = Math.max(1, innerWidth) * Math.max(1, innerHeight)
+        const wide = r.width >= innerWidth * 0.8 && r.height >= 32
+        const big = (r.width * r.height) / viewport >= 0.04
+        if (wide || big) modeHide('focus', el)
+      }
+    } else if (hiddenByMode.focus.size) {
+      modeRestore('focus')
     }
   }
 
@@ -741,6 +854,17 @@ export function initPageEdit(): void {
   }
 
   // ---------------- wiring ----------------
+
+  marksChangedHook = () => {
+    if (modes.clean) applyModes()
+  }
+
+  ipcRenderer.on('pagemode:apply', (_e, next: Partial<PageModes>) => {
+    modes = { clean: next?.clean === true, focus: next?.focus === true }
+    applyModes()
+    ensureObserver()
+    settleObserver()
+  })
 
   ipcRenderer.on('pageedit:mode', (_e, on: boolean) => {
     if (on) enterMode()

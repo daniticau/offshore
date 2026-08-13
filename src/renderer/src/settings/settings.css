@@ -469,6 +469,14 @@ button.link:hover {
   background: var(--press);
   display: inline-block;
 }
+/* the two built-ins wear a glyph, not a favicon */
+.ext-icon.builtin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  background: var(--press);
+}
 .ext-version {
   font-size: var(--text-xs);
   color: var(--ink-faint);
