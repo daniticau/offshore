@@ -40,7 +40,12 @@ function isInternalDocument(): boolean {
 const api: OffshoreInternalApi = {
   settings: {
     get: () => invoke('settings:get'),
-    set: (patch: unknown) => invoke('settings:set', patch)
+    set: (patch: unknown) => invoke('settings:set', patch),
+    // main only sends this channel to internal documents (see ipc.ts), and the
+    // bridge itself only exists on them — a web page can never subscribe
+    onChanged: (cb) => {
+      ipcRenderer.on('settings:changed', (_e, s) => cb(s))
+    }
   },
   bookmarks: {
     list: () => invoke('bookmarks:list'),
@@ -548,6 +553,10 @@ const SLOP_MARK = 'data-offshore-slop'
  * below the spec'd start values: on zero-padding blocks the first glyph's
  * side bearing kisses the stripe, and softer paint keeps that a gutter
  * accent rather than a collision (the sanctioned dial — never width).
+ *
+ * Graded SEMANTIC color — deliberately exempt from Muted. A muted chrome
+ * still shows yellow/orange/red bars in pages: the grade is a verdict about
+ * the prose, not part of the water's identity. Do not "fix" this in a sweep.
  */
 const TIER_BAR: Record<string, string> = {
   yellow: 'rgba(212, 158, 66, 0.55)',

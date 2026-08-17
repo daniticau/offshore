@@ -1038,7 +1038,7 @@ export function HomeCanvas({
                     −
                   </button>
                   <div
-                    className={`widget-inner ${editing && !dragging ? 'jiggle' : ''}`}
+                    className={`widget-inner ${editing && !dragging ? 'jiggle ambient' : ''}`}
                     style={editing && !dragging ? { animationDelay: `${(i % 3) * -0.14}s` } : undefined}
                   >
                     {inner}
@@ -1191,9 +1191,17 @@ export function HomeCanvas({
 
       {settings.appearance?.waves !== false &&
         (settings.appearance?.waveStyle === 'classic' ? (
-          <ClassicWaves colors={[acc.waveA, acc.waveB, acc.waveC]} height={200} />
+          <ClassicWaves
+            colors={[acc.waveA, acc.waveB, acc.waveC]}
+            height={200}
+            still={settings.appearance?.muted === true}
+          />
         ) : (
-          <DitheredWaves colors={[acc.waveA, acc.waveB, acc.waveC]} height={190} />
+          <DitheredWaves
+            colors={[acc.waveA, acc.waveB, acc.waveC]}
+            height={190}
+            still={settings.appearance?.muted === true}
+          />
         ))}
     </div>
   )

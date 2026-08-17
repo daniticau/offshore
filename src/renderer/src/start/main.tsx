@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import type { OffshoreInternalApi } from '@shared/bridge'
 import type { MorningAnswer, Settings } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
+import { applyMuted } from '../theme/useTheme'
 import { HomeCanvas } from './HomeCanvas'
 
 const internal = (window as unknown as { offshoreInternal?: OffshoreInternalApi })
@@ -71,11 +72,15 @@ function App(): React.JSX.Element {
   }
 
   useEffect(() => {
+    const take = (s: Settings): void => {
+      setSettings(s)
+      applyMuted(s.appearance?.muted === true)
+    }
     const load = (): void => {
       if (!internal) return
       void internal.settings
         .get()
-        .then((s) => s && setSettings(s))
+        .then((s) => s && take(s))
         .catch(() => undefined)
         .finally(() => {
           reportPainted()
@@ -83,9 +88,10 @@ function App(): React.JSX.Element {
         })
     }
     load()
-    // Settings changes reach the chrome, not tab pages — so re-read whenever
-    // this page comes back into view (layout switched, widgets edited on the
-    // zero-tab screen) instead of showing a stale home.
+    // Main pushes settings changes to internal pages live (a Muted or accent
+    // flip must land while this page is on screen); the visibility re-read
+    // stays as belt-and-braces for anything the push predates.
+    internal?.settings.onChanged(take)
     const onVisible = (): void => {
       if (document.visibilityState === 'visible') load()
     }

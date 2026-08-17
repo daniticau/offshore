@@ -11,6 +11,8 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
+  /* the chrome's wash — --depth recomputes here against the inline accent vars */
+  background: var(--depth);
 }
 
 .error-card {

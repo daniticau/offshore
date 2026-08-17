@@ -22,3 +22,8 @@ export function accentVars(acc: AccentModeColors): Record<string, string> {
     '--tint-bottom': acc.tintBottom
   }
 }
+
+/** Muted rides the root element so theme.css token overrides see it. */
+export function applyMuted(muted: boolean): void {
+  document.documentElement.classList.toggle('muted', muted)
+}

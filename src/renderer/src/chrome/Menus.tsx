@@ -87,6 +87,13 @@ export function AppMenu({
         label={settings.tabOrientation === 'vertical' ? 'Tabs on Top' : 'Tabs in Sidebar'}
         onClick={run(() => void offshore.actions.run('toggle-layout'))}
       />
+      <MenuRow
+        label="Muted"
+        checked={settings.appearance.muted}
+        onClick={run(() =>
+          onPatchSettings({ appearance: { ...settings.appearance, muted: !settings.appearance.muted } })
+        )}
+      />
       <MenuSep />
       <MenuRow
         label="Downloads"

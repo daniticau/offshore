@@ -162,6 +162,12 @@ export interface OffshoreInternalApi {
   settings: {
     get(): Promise<Settings | null>
     set(patch: Partial<Settings>): Promise<Settings>
+    /**
+     * Fires whenever settings change anywhere in the app — main pushes to
+     * internal pages only (offshore:// / the dev origin), so a visible start
+     * page hears a Muted or accent flip live instead of on the next refocus.
+     */
+    onChanged(cb: (s: Settings) => void): void
   }
   bookmarks: {
     list(): Promise<BookmarkNode[]>

@@ -8,12 +8,23 @@
  * Renderers read `current` every frame; values are already smoothed here so
  * both wave styles feel identical.
  */
-interface WaveCursor {
+export interface WaveCursor {
   /** cursor x relative to the host, px */
   x: number
   /** 0 = far away, 1 = at/inside the water */
   strength: number
 }
+
+/**
+ * The instant the still water is drawn at — one agreed frame of the one ocean.
+ * Not the wall clock: a fixed instant means every window, tab and screenshot
+ * shows the identical frame, and the appearance flow's frame-hash assertion
+ * has a stable target.
+ */
+export const WAVE_STILL_TIME = 0
+
+/** A cursor that was never in the water — what a stilled renderer reads. */
+export const DEAD_CURSOR: WaveCursor = { x: -10_000, strength: 0 }
 
 /**
  * The water is one ocean, and every screen showing it is a window onto the same

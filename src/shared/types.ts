@@ -1,3 +1,8 @@
+// The muting derivation lives beside the palette it grays. mute.ts imports
+// only the AccentModeColors *type* back from here, so the cycle is erased at
+// compile time and tsc sees a straight line.
+import { muteAccentColors } from './mute'
+
 // ---------------- Tabs & spaces ----------------
 
 export type SpaceProfile = 'shared' | 'separate'
@@ -311,6 +316,13 @@ export interface AppearanceSettings {
   accent: AccentId
   /** A custom accent hex (e.g. "#7a4de0"); when set it overrides the preset. */
   accentCustom?: string | null
+  /**
+   * Gray the water and still every wave — color and motion both.
+   * Independent of `waves`: `waves: false` removes the waves entirely, while
+   * `muted: true` stills them (gray, one frozen frame). Muted with waves off
+   * simply shows no water at all.
+   */
+  muted: boolean
 }
 
 // ---------------- Accents (light + dark) ----------------
@@ -554,10 +566,15 @@ export function customAccentColors(hex: string, dark: boolean): AccentModeColors
   }
 }
 
-/** The palette the whole app should use: custom hex wins over the preset. */
+/**
+ * The palette the whole app should use: custom hex wins over the preset, and
+ * Muted (one derivation, shared/mute.ts) grays whatever won.
+ */
 export function resolveAccentColors(appearance: AppearanceSettings, dark: boolean): AccentModeColors {
-  if (appearance.accentCustom) return customAccentColors(appearance.accentCustom, dark)
-  return accentColors(appearance.accent, dark)
+  const base = appearance.accentCustom
+    ? customAccentColors(appearance.accentCustom, dark)
+    : accentColors(appearance.accent, dark)
+  return appearance.muted ? muteAccentColors(base) : base
 }
 
 // ---------------- Settings ----------------
@@ -659,6 +676,7 @@ export type ActionId =
   | 'open-downloads'
   | 'show-welcome'
   | 'cycle-theme'
+  | 'toggle-muted'
 
 export interface ActionDef {
   id: ActionId
@@ -679,7 +697,8 @@ export const ACTION_DEFS: ActionDef[] = [
   { id: 'open-settings', label: 'Open Settings', keywords: 'preferences options' },
   { id: 'open-downloads', label: 'Open Downloads Folder', keywords: 'finder files' },
   { id: 'show-welcome', label: 'Show Welcome', keywords: 'onboarding intro tour' },
-  { id: 'cycle-theme', label: 'Cycle Theme', keywords: 'dark light system appearance mode' }
+  { id: 'cycle-theme', label: 'Cycle Theme', keywords: 'dark light system appearance mode' },
+  { id: 'toggle-muted', label: 'Toggle Muted', keywords: 'calm quiet gray grey still water mood' }
 ]
 
 export interface Suggestion {
@@ -1041,6 +1060,6 @@ export const DEFAULT_SETTINGS: Settings = {
   uiSounds: true,
   toolbarDensity: 'compact',
   devtoolsDock: 'right',
-  appearance: { theme: 'system', waves: true, waveStyle: 'dithered', accent: 'sea' },
+  appearance: { theme: 'system', waves: true, waveStyle: 'dithered', accent: 'sea', muted: false },
   onboarded: false
 }

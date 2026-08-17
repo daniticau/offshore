@@ -43,7 +43,7 @@ import {
 import { openDownload, preparedSessions, revealDownload } from './sessions'
 import { searchSuggestions } from './suggest'
 import { bookmarksStore, downloadsStore, historyStore, settingsStore, shieldStatsStore } from './stores'
-import { devRendererUrl, internalPageUrl, prettyHost, resolveOmniboxInput } from './util'
+import { devRendererUrl, internalPageUrl, isInternalUrl, prettyHost, resolveOmniboxInput } from './util'
 import { windowForChromeContents, windowForTab, windows, type OffshoreWindow } from './windows'
 
 function chromeWindow(e: IpcMainInvokeEvent | IpcMainEvent): OffshoreWindow | undefined {
@@ -262,6 +262,11 @@ function runAction(w: OffshoreWindow, id: ActionId): void {
       const order = ['system', 'light', 'dark'] as const
       const next = order[(order.indexOf(s.appearance.theme) + 1) % order.length]
       settingsStore.set({ appearance: { ...s.appearance, theme: next } })
+      break
+    }
+    case 'toggle-muted': {
+      const s = settingsStore.get()
+      settingsStore.set({ appearance: { ...s.appearance, muted: !s.appearance.muted } })
       break
     }
   }
@@ -1074,6 +1079,19 @@ export function setupIpc(): void {
   // ---- store change broadcasting ----
   settingsStore.on('changed', (next: Settings) => {
     broadcast('settings:changed', next)
+    /*
+     * Internal tab pages (start/settings/welcome/error) hear it too, so a Muted
+     * or accent flip lands on a visible start page live rather than on the next
+     * refocus. Security invariant: only internal documents — the full Settings
+     * object must never be sent toward a web page's WebContents. isInternalUrl
+     * is offshore:// in prod and the exact dev-server origin in dev, the same
+     * trust boundary the internal preload gates its bridge by.
+     */
+    for (const w of windows) {
+      for (const t of w.tabs.tabs) {
+        if (isInternalUrl(t.wc.getURL())) t.wc.send('settings:changed', next)
+      }
+    }
   })
   bookmarksStore.on('changed', () => {
     broadcast('bookmarks:changed', bookmarksStore.list())

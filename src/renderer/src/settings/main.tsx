@@ -28,7 +28,7 @@ import {
 } from '@shared/types'
 import { Favicon } from '../theme/Favicon'
 import { moonPhase, timezoneCity } from '../theme/moon'
-import { useIsDark } from '../theme/useTheme'
+import { applyMuted, useIsDark } from '../theme/useTheme'
 import '../theme/theme.css'
 import './settings.css'
 
@@ -844,7 +844,13 @@ function App(): React.JSX.Element {
       if (s) {
         setSettings(s)
         setRulesDraft(s.adblock.customRules)
+        applyMuted(s.appearance?.muted === true)
       }
+    })
+    // stay live: a Muted/accent/theme flip from the chrome lands here too
+    internal?.settings.onChanged((s) => {
+      setSettings(s)
+      applyMuted(s.appearance?.muted === true)
     })
     void internal?.extensions.list().then((e) => e && setExtensions(e))
     void internal?.focus.sites().then((s) => s && setFocusSites(s))
@@ -1021,6 +1027,22 @@ function App(): React.JSX.Element {
                       ['dark', 'Dark']
                     ]}
                     onChange={(v) => patch({ appearance: { ...settings.appearance, theme: v } })}
+                  />
+                </div>
+                <div className="row">
+                  <div className="row-title">
+                    Mood
+                    <div className="row-sub">Muted grays the whole chrome and stills the water.</div>
+                  </div>
+                  <Segmented<'water' | 'muted'>
+                    value={settings.appearance.muted ? 'muted' : 'water'}
+                    options={[
+                      ['water', 'Water'],
+                      ['muted', 'Muted']
+                    ]}
+                    onChange={(v) =>
+                      patch({ appearance: { ...settings.appearance, muted: v === 'muted' } })
+                    }
                   />
                 </div>
                 <div className="row">

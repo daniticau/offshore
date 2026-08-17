@@ -2,10 +2,10 @@ import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { OffshoreInternalApi } from '@shared/bridge'
 import type { Settings } from '@shared/types'
-import { DEFAULT_SETTINGS, accentColors } from '@shared/types'
+import { DEFAULT_SETTINGS, resolveAccentColors } from '@shared/types'
 import { prettyHost } from '@shared/url'
 import { DitheredWaves } from '../theme/DitheredWaves'
-import { useIsDark } from '../theme/useTheme'
+import { accentVars, applyMuted, useIsDark } from '../theme/useTheme'
 import '../theme/theme.css'
 import './error.css'
 
@@ -45,17 +45,21 @@ function App(): React.JSX.Element {
   const isDark = useIsDark()
 
   useEffect(() => {
-    void internal?.settings.get().then((s) => s && setSettings(s))
+    const take = (s: Settings): void => {
+      setSettings(s)
+      applyMuted(s.appearance?.muted === true)
+    }
+    void internal?.settings.get().then((s) => s && take(s))
+    internal?.settings.onChanged(take)
   }, [])
 
-  const acc = accentColors(settings.appearance?.accent ?? 'sea', isDark)
+  const appearance = settings.appearance ?? DEFAULT_SETTINGS.appearance
+  const acc = resolveAccentColors(appearance, isDark)
   const v = variant()
 
   return (
-    <div
-      className="errorpage"
-      style={{ background: `linear-gradient(180deg, ${acc.tintTop}, ${acc.tintBottom})` }}
-    >
+    // the accent rides inline vars and the shell wears --depth, chrome-style
+    <div className="errorpage" style={accentVars(acc) as React.CSSProperties}>
       <div className="error-card">
         <h1>{v.title}</h1>
         <p className="error-sub">{v.sub}</p>
@@ -66,7 +70,11 @@ function App(): React.JSX.Element {
           </button>
         )}
       </div>
-      <DitheredWaves colors={[acc.waveA, acc.waveB, acc.waveC]} height={170} />
+      <DitheredWaves
+        colors={[acc.waveA, acc.waveB, acc.waveC]}
+        height={170}
+        still={appearance.muted === true}
+      />
     </div>
   )
 }

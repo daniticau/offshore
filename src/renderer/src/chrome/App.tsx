@@ -11,8 +11,9 @@ import type {
   TabsState
 } from '@shared/types'
 import { DEFAULT_SETTINGS, accentColors, resolveAccentColors } from '@shared/types'
+import { muteAccentColors, muteColor } from '@shared/mute'
 import { HomeCanvas } from '../start/HomeCanvas'
-import { accentVars, useIsDark } from '../theme/useTheme'
+import { accentVars, applyMuted, useIsDark } from '../theme/useTheme'
 import { offshore, prettyHost } from './api'
 import { PasswordDialog } from './PasswordDialog'
 import { playSound, setSoundsEnabled } from './sounds'
@@ -681,14 +682,26 @@ export function App(): React.JSX.Element {
     ? settings.adblock.allowlist.includes(prettyHost(activeTab.url))
     : false
 
-  // ---- accent (space accent wins over the global one) ----
+  // ---- accent (space accent wins over the global one; Muted grays either) ----
+  const muted = settings.appearance?.muted === true
+  /*
+   * The muted class and the accent vars must land in the same frame — both
+   * derive from the same `settings` state, and the class goes on before paint
+   * (layout effect) so a flip never shows a half-muted chrome.
+   */
+  useLayoutEffect(() => applyMuted(muted), [muted])
   const activeSpace = tabsState.spaces.find((s) => s.id === tabsState.activeSpaceId)
-  const acc = activeSpace?.accent
+  const rawAcc = activeSpace?.accent
     ? accentColors(activeSpace.accent, isDark)
     : resolveAccentColors(settings.appearance ?? DEFAULT_SETTINGS.appearance, isDark)
+  // the space path bypasses the resolver, so it mutes here; the global path
+  // already came back muted from resolveAccentColors
+  const acc = muted && activeSpace?.accent ? muteAccentColors(rawAcc) : rawAcc
   const accentFor = useCallback(
-    (space: SpaceInfo): string =>
-      accentColors(space.accent ?? stateRef.current.settings.appearance.accent, isDark).accent,
+    (space: SpaceInfo): string => {
+      const c = accentColors(space.accent ?? stateRef.current.settings.appearance.accent, isDark).accent
+      return stateRef.current.settings.appearance.muted ? muteColor(c) : c
+    },
     [isDark]
   )
 

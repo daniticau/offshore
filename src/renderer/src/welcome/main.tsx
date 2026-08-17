@@ -1,12 +1,12 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { OffshoreInternalApi } from '@shared/bridge'
 import type { NewTabWidgets, SearchEngineId, Settings, TabOrientation, ThemePref } from '@shared/types'
-import { DEFAULT_SETTINGS, SEARCH_ENGINES, accentColors } from '@shared/types'
+import { DEFAULT_SETTINGS, SEARCH_ENGINES, resolveAccentColors } from '@shared/types'
 import { playArrival, playTone } from '../chrome/sounds'
 import { DitheredWaves } from '../theme/DitheredWaves'
 import logoUrl from '../theme/offshore-logo.png'
-import { useIsDark } from '../theme/useTheme'
+import { applyMuted, useIsDark } from '../theme/useTheme'
 import '../theme/theme.css'
 import './welcome.css'
 
@@ -18,7 +18,8 @@ const STEPS = 5
 function Logo(): React.JSX.Element {
   return (
     <div className="logo">
-      <img src={logoUrl} alt="" width={96} height={96} />
+      {/* ambient: the bob loops while nothing happens, so Muted stills it */}
+      <img className="ambient" src={logoUrl} alt="" width={96} height={96} />
     </div>
   )
 }
@@ -29,7 +30,19 @@ function App(): React.JSX.Element {
   const [engine, setEngine] = useState<SearchEngineId>(DEFAULT_SETTINGS.searchEngine)
   const [theme, setTheme] = useState<ThemePref>('system')
   const [widgets, setWidgets] = useState<NewTabWidgets>(DEFAULT_SETTINGS.newTabWidgets)
+  const [appearance, setAppearance] = useState(DEFAULT_SETTINGS.appearance)
   const isDark = useIsDark()
+
+  // "Show welcome again" arrives mid-life with a real appearance — honor it
+  // (muted stays muted, the accent stays the accent), and stay live for flips.
+  useEffect(() => {
+    const take = (s: Settings): void => {
+      setAppearance(s.appearance)
+      applyMuted(s.appearance?.muted === true)
+    }
+    void internal?.settings.get().then((s) => s && take(s))
+    internal?.settings.onChanged(take)
+  }, [])
 
   const advance = (): void => {
     playTone(step + 1)
@@ -39,7 +52,7 @@ function App(): React.JSX.Element {
   const pickTheme = (t: ThemePref): void => {
     setTheme(t)
     // apply immediately — the whole window retints live
-    void internal?.settings.set({ appearance: { ...DEFAULT_SETTINGS.appearance, theme: t } })
+    void internal?.settings.set({ appearance: { ...appearance, theme: t } })
   }
 
   const finish = (skip = false): void => {
@@ -49,14 +62,14 @@ function App(): React.JSX.Element {
       : {
           tabOrientation: orientation,
           searchEngine: engine,
-          appearance: { ...DEFAULT_SETTINGS.appearance, theme },
+          appearance: { ...appearance, theme },
           newTabWidgets: widgets,
           onboarded: true
         }
     void internal?.settings.set(patch).then(() => internal?.open('offshore://start'))
   }
 
-  const acc = accentColors('sea', isDark)
+  const acc = resolveAccentColors(appearance, isDark)
 
   const slideClass = (i: number): string =>
     `slide ${step === i ? 'active' : step > i ? 'passed' : ''}`
@@ -196,7 +209,11 @@ function App(): React.JSX.Element {
         ))}
       </div>
 
-      <DitheredWaves colors={[acc.waveA, acc.waveB, acc.waveC]} height={220} />
+      <DitheredWaves
+        colors={[acc.waveA, acc.waveB, acc.waveC]}
+        height={220}
+        still={appearance.muted === true}
+      />
     </div>
   )
 }

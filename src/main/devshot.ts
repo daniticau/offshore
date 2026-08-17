@@ -2,7 +2,7 @@ import { BrowserWindow, app, ipcMain, screen, session } from 'electron'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import * as nodeHttp from 'http'
-import { ADBLOCK_LISTS, HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_HEAVY_MIN, type SiteReport, type SlopReport } from '@shared/types'
+import { ADBLOCK_LISTS, HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_HEAVY_MIN, type AppearanceSettings, type SiteReport, type SlopReport } from '@shared/types'
 import { TAB_PARTITION } from './sessions'
 import { windows, type OffshoreWindow } from './windows'
 
@@ -232,10 +232,18 @@ export function setupDevshot(): void {
       w.win.webContents.focus()
       w.sendToChrome('omnibox:focus')
       await delay(600)
+      /*
+       * Quiet windows never get OS focus, and an unfocused renderer will not
+       * hand focus to an input — so drive the component through the events
+       * React actually listens to (focusin → onFocus, input → onChange), the
+       * same dance the chrome flow's dropdown checks do.
+       */
       await w.win.webContents
         .executeJavaScript(
           `(() => { const el = document.querySelector('.omni-input')
              if (!el) return false
+             el.focus()
+             el.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
              Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(typed)})
              el.dispatchEvent(new Event('input', { bubbles: true }))
              return true })()`
@@ -327,7 +335,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor|shield|morning
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor|shield|morning|appearance
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -370,7 +378,8 @@ function setupTestFlows(): void {
 
   const KNOWN_FLOWS = [
     'chrome', 'passwords', 'popups', 'spaces', 'headers', 'privacy',
-    'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus', 'harbor', 'shield', 'morning'
+    'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus', 'harbor', 'shield', 'morning',
+    'appearance'
   ]
 
   async function runFlow(): Promise<void> {
@@ -2176,6 +2185,239 @@ function setupTestFlows(): void {
      * as a panel you can put away, ⌘S as a real hide, and a page in full screen
      * getting the whole window to itself.
      */
+    if (flow === 'appearance') {
+      /*
+       * Water vs Muted: the accent desaturates through the one derivation, the
+       * token overrides ride the root class, a visible internal page hears the
+       * settings push live, and the waves stand on one deterministic frame.
+       */
+      const inChrome = <T,>(src: string): Promise<T> =>
+        w.win.webContents.executeJavaScript(src) as Promise<T>
+      const { settingsStore } = await import('./stores')
+      const baseAppearance: AppearanceSettings = {
+        theme: 'light',
+        waves: true,
+        waveStyle: 'dithered',
+        accent: 'sea',
+        accentCustom: null,
+        muted: false
+      }
+      const setApp = (patch: Partial<AppearanceSettings>): void => {
+        const s = settingsStore.get()
+        settingsStore.set({ appearance: { ...s.appearance, ...patch } })
+      }
+
+      const parseRgb = (c: string | undefined | null): [number, number, number] | null => {
+        if (!c) return null
+        const hex = /^#([0-9a-f]{6})$/i.exec(c.trim())
+        if (hex) {
+          const v = parseInt(hex[1], 16)
+          return [(v >> 16) & 255, (v >> 8) & 255, v & 255]
+        }
+        const m = /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/.exec(c)
+        return m ? [+m[1], +m[2], +m[3]] : null
+      }
+      /** max−min of the channels: 0 = pure gray, big = saturated */
+      const spread = (c: string | undefined | null): number => {
+        const rgb = parseRgb(c)
+        return rgb ? Math.max(...rgb) - Math.min(...rgb) : -1
+      }
+      const lightness = (c: string | undefined | null): number => {
+        const rgb = parseRgb(c)
+        return rgb ? (Math.max(...rgb) + Math.min(...rgb)) / 2 / 255 : -1
+      }
+      const chromeAccent = (): Promise<string> =>
+        inChrome(`document.querySelector('.chrome').style.getPropertyValue('--accent').trim()`)
+      const chromeVar = (name: string): Promise<string> =>
+        inChrome(
+          `getComputedStyle(document.documentElement).getPropertyValue(${JSON.stringify(name)}).trim()`
+        )
+
+      // 1. reset the keys this flow owns (flows share the dev profile)
+      settingsStore.set({ onboarded: true, appearance: { ...baseAppearance } })
+      surface(w)
+      await delay(600)
+
+      // a home tab to watch the water on
+      const tab = w.tabs.createTab()
+      const wavesUp = await settle(
+        () =>
+          tab.wc.executeJavaScript(`!!document.querySelector('.waves-canvas')`) as Promise<boolean>,
+        8000
+      )
+      check('the home page shows the water', wavesUp === true)
+
+      // 2. water baseline: saturated accent, and --depth resolves (R4)
+      const a0 = await chromeAccent()
+      say(`[flowtest] water accent: ${a0} (spread ${spread(a0)})`)
+      check('water: accent is saturated', spread(a0) > 40, a0)
+      const depth = await inChrome<string>(
+        `getComputedStyle(document.querySelector('.chrome')).backgroundImage`
+      )
+      check(
+        'water: --depth resolves to the gradient',
+        depth.includes('linear-gradient'),
+        depth.slice(0, 90)
+      )
+
+      // 3. baseline motion: two frames half a second apart differ
+      const sample = (): Promise<string> =>
+        tab.wc.executeJavaScript(
+          `document.querySelector('.waves-canvas').toDataURL()`
+        ) as Promise<string>
+      const m1 = await sample()
+      await delay(500)
+      const m2 = await sample()
+      check('water: the waves move', m1 !== m2)
+
+      // 4–5. muted on: the chrome grays, in one beat
+      setApp({ muted: true })
+      const mutedClass = await settle(
+        () =>
+          inChrome<boolean>(`document.documentElement.classList.contains('muted')`).then(
+            (v) => v || undefined
+          ),
+        2000
+      )
+      check('muted: the chrome wears the class', mutedClass === true)
+      const a1 = await settle(async () => {
+        const a = await chromeAccent()
+        return spread(a) < 16 ? a : undefined
+      }, 2000)
+      say(`[flowtest] muted accent: ${a1} (spread ${spread(a1)})`)
+      check('muted: chrome accent desaturates', a1 !== undefined, String(a1))
+      const ink = await chromeVar('--ink')
+      check('muted: ink token flips gray', ink !== '' && spread(ink) < 12, ink)
+
+      // 6. the push reaches a visible internal page live (§3.4 regression)
+      const pageMuted = await settle(
+        () =>
+          (tab.wc.executeJavaScript(
+            `document.documentElement.classList.contains('muted')`
+          ) as Promise<boolean>).then((v) => v || undefined),
+        2000
+      )
+      check('muted: a visible internal page hears it live', pageMuted === true)
+
+      // 7. the water stands still: three samples over 800ms, one frame
+      const s1 = await sample()
+      await delay(400)
+      const s2 = await sample()
+      await delay(400)
+      const s3 = await sample()
+      check('muted: canvas frame hash is stable', s1 === s2 && s2 === s3)
+
+      // 8. classic stills too
+      setApp({ waveStyle: 'classic' })
+      const dGet = (): Promise<string | null> =>
+        tab.wc.executeJavaScript(
+          `document.querySelector('.cw-svg path')?.getAttribute('d') ?? null`
+        ) as Promise<string | null>
+      const d1 = await settle(async () => (await dGet()) || undefined, 6000)
+      await delay(400)
+      const d2 = await dGet()
+      check('muted: classic paths freeze', !!d1 && d1 === d2)
+
+      // 9. deterministic still frame: a resize redraws the same water
+      setApp({ waveStyle: 'dithered' })
+      await settle(
+        () =>
+          (tab.wc.executeJavaScript(
+            `!!document.querySelector('.waves-canvas')`
+          ) as Promise<boolean>).then((v) => v || undefined),
+        6000
+      )
+      const [bw, bh] = w.win.getSize()
+      w.win.setSize(bw + 10, bh)
+      await delay(800)
+      const r1 = await sample()
+      await delay(400)
+      const r2 = await sample()
+      check('muted: resize redraws the same still water', r1 === r2)
+      w.win.setSize(bw, bh)
+
+      // 10. dark muted: the ink is a pale gray, not a pale blue
+      setApp({ theme: 'dark' })
+      const dInk = await settle(async () => {
+        const v = await chromeVar('--ink')
+        return v && spread(v) < 12 && lightness(v) > 0.85 ? v : undefined
+      }, 3000)
+      check('muted: dark ink is a pale gray', dInk !== undefined, String(dInk))
+
+      // 11. flip back: color returns and the water moves again
+      setApp({ theme: 'light', muted: false })
+      const aBack = await settle(async () => {
+        const a = await chromeAccent()
+        return spread(a) > 40 ? a : undefined
+      }, 3000)
+      check('water returns: color is back', aBack !== undefined, String(aBack))
+      const w1 = await sample()
+      await delay(500)
+      const w2 = await sample()
+      check('water returns: the waves move again', w1 !== w2)
+
+      // 12. semantics survive muting: danger stays red
+      setApp({ muted: true })
+      await delay(400)
+      const danger = await chromeVar('--danger')
+      check('muted: danger red is not gray', spread(danger) > 40, danger)
+
+      // 12b. a space's own accent composes with muted (R8), and with custom hex
+      const seaMuted = await chromeAccent()
+      const space = w.tabs.spaces[0]
+      w.tabs.setSpaceAccent(space.id, 'sand')
+      const spaceMuted = await settle(async () => {
+        const a = await chromeAccent()
+        return a !== seaMuted && spread(a) < 16 ? a : undefined
+      }, 3000)
+      check('muted: a space accent goes gray too', spaceMuted !== undefined, String(spaceMuted))
+      w.tabs.setSpaceAccent(space.id, null)
+      setApp({ accentCustom: '#7a4de0' })
+      // a third gray, distinct from both sea's and the space's — proof the
+      // custom-hex path went through the same derivation, not a stale read
+      const customMuted = await settle(async () => {
+        const a = await chromeAccent()
+        return a !== seaMuted && a !== spaceMuted && spread(a) < 16 ? a : undefined
+      }, 3000)
+      check('muted: a custom accent goes gray too', customMuted !== undefined, String(customMuted))
+      setApp({ accentCustom: null })
+
+      // 13. the identity matrix, photographed (only when OFFSHORE_SHOT is set)
+      const shotDir = process.env['OFFSHORE_SHOT']
+      if (shotDir) {
+        mkdirSync(shotDir, { recursive: true })
+        const combos: [string, string, boolean][] = [
+          ['light', 'water', false],
+          ['light', 'muted', true],
+          ['dark', 'water', false],
+          ['dark', 'muted', true]
+        ]
+        for (const [theme, mood, muted] of combos) {
+          settingsStore.set({
+            appearance: { ...baseAppearance, theme: theme as 'light' | 'dark', muted }
+          })
+          await delay(900)
+          const chromeImg = await w.win.webContents.capturePage()
+          writeFileSync(
+            join(shotDir, `appearance-${theme}-${mood}-chrome.png`),
+            chromeImg.toPNG()
+          )
+          const homeImg = await tab.wc.capturePage()
+          writeFileSync(join(shotDir, `appearance-${theme}-${mood}-home.png`), homeImg.toPNG())
+          say(`[flowtest] wrote appearance-${theme}-${mood}-{chrome,home}.png`)
+        }
+      }
+
+      // 14. cleanup: hand the profile back the way it was found
+      settingsStore.set({
+        appearance: { theme: 'system', waves: true, waveStyle: 'dithered', accent: 'sea', accentCustom: null, muted: false }
+      })
+      settingsStore.flush()
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
     if (flow === 'chrome') {
       const inChrome = <T,>(src: string): Promise<T> =>
         w.win.webContents.executeJavaScript(src) as Promise<T>
