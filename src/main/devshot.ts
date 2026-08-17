@@ -94,6 +94,20 @@ export function setupDevshot(): void {
     surface(w)
     w.tabs.setActiveVisible(true)
     await delay(quiet ? 900 : 600)
+    /** OFFSHORE_SHOT_PROBE=<js>: evaluate in the chrome and print — for
+     * reading exact geometry next to the screenshot it belongs to. */
+    const probeJs = process.env['OFFSHORE_SHOT_PROBE']
+    if (probeJs) {
+      const out = await w.win.webContents.executeJavaScript(probeJs).catch((e) => `err: ${e}`)
+      console.log('[devshot] probe', typeof out === 'string' ? out : JSON.stringify(out))
+    }
+    /** OFFSHORE_SHOT_PROBE_PAGE=<js>: the same, evaluated in the active tab —
+     * for geometry that lives in a page (the home screen's search pill). */
+    const probePageJs = process.env['OFFSHORE_SHOT_PROBE_PAGE']
+    if (probePageJs && w.tabs.activeTab) {
+      const out = await w.tabs.activeTab.wc.executeJavaScript(probePageJs).catch((e) => `err: ${e}`)
+      console.log('[devshot] probe(page)', typeof out === 'string' ? out : JSON.stringify(out))
+    }
     const tab = w.tabs.activeTab
     if (tab) {
       const pageImg = await tab.wc.capturePage()
@@ -254,6 +268,12 @@ export function setupDevshot(): void {
         .executeJavaScript(`document.querySelectorAll('.omni-suggestion').length`)
         .catch(() => -1)
       console.log('[devshot] omnibox rows:', rows)
+      /* The probe already ran once before the dropdown existed; anyone asking
+       * for geometry alongside omnibox.png means the dropdown's geometry. */
+      if (probeJs) {
+        const out = await w.win.webContents.executeJavaScript(probeJs).catch((e) => `err: ${e}`)
+        console.log('[devshot] probe(omnibox)', typeof out === 'string' ? out : JSON.stringify(out))
+      }
       const shot = await w.win.webContents.capturePage()
       writeFileSync(join(dir!, 'omnibox.png'), shot.toPNG())
     }
@@ -337,7 +357,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor|shield|morning|appearance
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor|shield|morning|appearance|favorites
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -381,7 +401,7 @@ function setupTestFlows(): void {
   const KNOWN_FLOWS = [
     'chrome', 'passwords', 'popups', 'spaces', 'headers', 'privacy',
     'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus', 'harbor', 'shield', 'morning',
-    'appearance'
+    'appearance', 'favorites'
   ]
 
   async function runFlow(): Promise<void> {
@@ -1550,40 +1570,68 @@ function setupTestFlows(): void {
       const inPage = (js: string): Promise<unknown> => tab()!.wc.executeJavaScript(js)
       const inChrome = (js: string): Promise<unknown> => w.win.webContents.executeJavaScript(js)
 
-      // 1. the chip is on the bar, idle, and the pristine geometry is on record
+      /*
+       * 1. Focus's face in the chrome is its row in the site panel now — the
+       * omnibox chip is retired. The row is there whenever the master switch
+       * is on, idle or lit, and its button does what the chip did. ⇧⌘F and the
+       * menu items still land on the same main-side toggle (steps 9–12 drive
+       * it directly). First: the panel opens with the row idle, and the
+       * pristine geometry is on record.
+       */
+      surface(w)
       w.tabs.navigate(null, `http://127.0.0.1:${port}/`)
-      const chipIdle = await settle(async () => {
-        const raw = (await inChrome(
-          `JSON.stringify({chip: !!document.querySelector('.focus-chip'),
-                           active: !!document.querySelector('.focus-chip.active')})`
-        )) as string
-        const p = JSON.parse(raw) as { chip: boolean; active: boolean }
-        return p.chip ? p : undefined
-      }, 10_000)
-      check('chip on the address bar, idle', chipIdle?.chip === true && chipIdle?.active === false, JSON.stringify(chipIdle))
-      check('tab reports Focus off', tab()!.info().focusOn === false)
       const before = await settle(async () => {
         const raw = (await inPage(`(() => {
           const c = document.getElementById('content'), s = document.getElementById('shell')
           if (!c || !s) return ''
           return JSON.stringify({ contentW: c.getBoundingClientRect().width,
                                   cols: getComputedStyle(s).gridTemplateColumns })
-        })()`)) as string
+        })()`).catch(() => '')) as string
         return raw ? (JSON.parse(raw) as { contentW: number; cols: string }) : undefined
       }, 10_000)
       say(`[flowtest] pristine: ${JSON.stringify(before)}`)
       check('pristine geometry read', !!before && before.cols.split(' ').length === 3, JSON.stringify(before))
-
-      // 2. the chip flips Focus on, for the site
-      await inChrome(`document.querySelector('.focus-chip')?.click()`)
-      const storeOn = await settle(async () => (focusStore.isOn('127.0.0.1') ? true : undefined), 4000)
-      check('chip toggles Focus on for the site', storeOn === true)
-      check('tab reports Focus on', tab()!.info().focusOn === true)
-      const chipLit = await settle(
-        () => inChrome(`!!document.querySelector('.focus-chip.active')`) as Promise<boolean>,
-        4000
+      check('the chip is gone from the bar', (await inChrome(`!document.querySelector('.focus-chip')`)) === true)
+      const focusRow = async (): Promise<{ text: string; action: string } | null> => {
+        const raw = (await inChrome(`(() => {
+          const icon = document.querySelector('.site-info .si-focus')
+          if (!icon) return 'null'
+          const row = icon.closest('.si-row')
+          return JSON.stringify({ text: row?.querySelector('.si-text')?.textContent ?? '',
+                                  action: row?.querySelector('.si-action')?.textContent ?? '' })
+        })()`)) as string
+        return JSON.parse(raw) as { text: string; action: string } | null
+      }
+      const openPanel = (): Promise<unknown> => inChrome(`document.querySelector('.omni-tune')?.click()`)
+      const closePanel = async (): Promise<void> => {
+        await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
+        await settle(
+          async () => ((await inChrome(`!document.querySelector('.site-info')`)) === true ? true : undefined),
+          4000
+        )
+      }
+      await openPanel()
+      const rowIdle = await settle(async () => (await focusRow()) ?? undefined, 8000)
+      check(
+        'the site panel offers the Focus row, idle',
+        rowIdle?.text === 'Focus is off for this site' && rowIdle?.action === 'Turn on',
+        JSON.stringify(rowIdle)
       )
-      check('chip lights up', chipLit === true)
+      check('tab reports Focus off', tab()!.info().focusOn === false)
+
+      // 2. the row's button flips Focus on, for the site
+      await inChrome(
+        `document.querySelector('.site-info .si-focus')?.closest('.si-row')?.querySelector('.si-action')?.click()`
+      )
+      const storeOn = await settle(async () => (focusStore.isOn('127.0.0.1') ? true : undefined), 4000)
+      check('the row toggles Focus on for the site', storeOn === true)
+      check('tab reports Focus on', tab()!.info().focusOn === true)
+      const rowLit = await settle(async () => {
+        const r = await focusRow()
+        return r?.text === 'Focus is on for this site' && r?.action === 'Turn off' ? true : undefined
+      }, 4000)
+      check('the row lights up in place', rowLit === true)
+      await closePanel()
 
       // 3. strip: every tier lands, the reading stands
       const stripped = await settle(async () => {
@@ -1755,10 +1803,17 @@ function setupTestFlows(): void {
       settingsStore.set({ focus: { enabled: false } })
       const masterOff = await settle(async () => {
         const railBack = (await inPage(`getComputedStyle(document.getElementById('rail')).display`)) === 'block'
-        const chipGone = (await inChrome(`!document.querySelector('.focus-chip')`)) === true
-        return railBack && chipGone ? true : undefined
+        return railBack ? true : undefined
       }, 8000)
-      check('the master switch restores pages and hides the chip', masterOff === true)
+      check('the master switch restores open pages', masterOff === true)
+      // and Focus's one surface goes with it: a freshly opened panel has no row
+      await openPanel()
+      const rowGone = await settle(async () => {
+        if ((await inChrome(`!!document.querySelector('.site-info')`)) !== true) return undefined
+        return (await inChrome(`!document.querySelector('.site-info .si-focus')`)) === true ? true : undefined
+      }, 8000)
+      check('master off: the panel drops its Focus row', rowGone === true)
+      await closePanel()
       // every surface must agree with the page: TabInfo drops focusOn while
       // the master is off, though the per-site memory itself survives
       check(
@@ -2248,6 +2303,20 @@ function setupTestFlows(): void {
         )) as string
         return JSON.parse(raw) as { si: boolean; freeze: boolean; tide: boolean }
       }
+      /*
+       * The panel gates its entrance on chrome:freeze-settled, so there must
+       * never be a sample where it is in the tree while the still is not —
+       * that was the beat where it showed over the sidebar but under the page.
+       * Sample the capture window on the way to the settled state.
+       */
+      let panelRaced = false
+      for (let i = 0; i < 16; i++) {
+        const p = await probePanel()
+        if (p.si && !p.freeze) panelRaced = true
+        if (p.si && p.freeze) break
+        await delay(25)
+      }
+      check('the panel never shows before the still is up', panelRaced === false)
       const panel = await settle(async () => {
         const p = await probePanel()
         return p.si && p.freeze ? p : undefined
@@ -2580,18 +2649,325 @@ function setupTestFlows(): void {
       return
     }
 
+    if (flow === 'favorites') {
+      /*
+       * The sidebar's favorites zone end to end, offline: drag-to-pin makes the
+       * strip + divider and pushes the New Tab row down (geometry asserted),
+       * empty state renders nothing at all, click focuses an open tab for the
+       * site or opens one, reordering commits and persists, dragging an icon
+       * out unpins (into the tab list: unpins AND opens a tab there), and the
+       * store survives on disk. Every gesture is dispatched as the real DOM
+       * drag events the handlers listen to — one DataTransfer per gesture, the
+       * way Chromium would hand it over.
+       */
+      if (!process.env['OFFSHORE_CLEAN_PROFILE']) {
+        // writes favorites.json and flips settings — never against a real profile
+        say('[flowtest] favorites flow requires OFFSHORE_CLEAN_PROFILE')
+        app.exit(1)
+        return
+      }
+      const { settingsStore, favoritesStore } = await import('./stores')
+      const inChrome = <T,>(src: string): Promise<T> =>
+        w.win.webContents.executeJavaScript(src) as Promise<T>
+      settingsStore.set({ onboarded: true, tabOrientation: 'vertical' })
+      surface(w)
+      w.tabs.setActiveVisible(true)
+      await delay(600)
+
+      // three fixture sites — three ports, so "site" (host) is unambiguous —
+      // each with a favicon, so the strip's tiles wear what a site would. The
+      // icons are data: URLs because the chrome document's CSP allows img-src
+      // 'self' data: https: only — an http://127.0.0.1 icon would render as
+      // the broken-image box in a fixture run (real favicons are https).
+      const mkSite = async (
+        label: string,
+        color: string
+      ): Promise<{ url: string; icon: string; server: nodeHttp.Server }> => {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" rx="4" fill="${color}"/></svg>`
+        const icon = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`
+        const server = nodeHttp.createServer((_req, res) => {
+          res.setHeader('content-type', 'text/html')
+          res.end(
+            `<html><head><title>${label}</title><link rel="icon" href="${icon}"></head><body>${label}</body></html>`
+          )
+        })
+        await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+        const port = (server.address() as { port: number }).port
+        return { url: `http://127.0.0.1:${port}/`, icon, server }
+      }
+      const A = await mkSite('Site A', '#1d84ad')
+      const B = await mkSite('Site B', '#1d9c85')
+      const C = await mkSite('Site C', '#c98a4b')
+
+      const shotDir = process.env['OFFSHORE_SHOT']
+      const shoot = async (name: string): Promise<void> => {
+        if (!shotDir) return
+        mkdirSync(shotDir, { recursive: true })
+        await delay(400)
+        const img = await w.win.webContents.capturePage()
+        writeFileSync(join(shotDir, name), img.toPNG())
+        say(`[flowtest] wrote ${join(shotDir, name)}`)
+      }
+
+      // ---- 1. empty state: no zone, no divider, sidebar untouched ----
+      const empty0 = JSON.parse(
+        (await inChrome<string>(
+          `JSON.stringify({zone: !!document.querySelector('.fav-zone'),
+                           hint: !!document.querySelector('.fav-drop-hint'),
+                           divider: !!document.querySelector('.fav-divider')})`
+        ))
+      ) as { zone: boolean; hint: boolean; divider: boolean }
+      check('empty: no zone, no hint, no divider', !empty0.zone && !empty0.hint && !empty0.divider, JSON.stringify(empty0))
+      const ntTop0 = await inChrome<number>(
+        `Math.round(document.querySelector('.new-tab-btn').getBoundingClientRect().top)`
+      )
+      say(`[flowtest] new-tab row baseline top: ${ntTop0}`)
+      await shoot('fav-empty-before.png')
+
+      // ---- 2. a pinnable tab mid-drag materializes the drop slot ----
+      w.tabs.navigate(null, A.url)
+      const tabA = w.tabs.activeTab!
+      await settle(async () => (tabA.wc.getURL() === A.url ? true : undefined), 8000)
+      await settle(
+        async () =>
+          ((await inChrome<boolean>(
+            `!!document.querySelector('.tab-item[data-tab-id="${tabA.id}"]')`
+          )) === true
+            ? true
+            : undefined),
+        6000
+      )
+      // dragstart first; the slot materializes on the next render, the way it
+      // would under a real pointer (drag events pause for no one's re-render)
+      const dragStarted = await inChrome<boolean>(`(() => {
+        const row = document.querySelector('.tab-item[data-tab-id="${tabA.id}"]')
+        if (!row) return false
+        const dt = new DataTransfer()
+        window.__favTestDt = dt
+        row.dispatchEvent(new DragEvent('dragstart', { dataTransfer: dt, bubbles: true, cancelable: true }))
+        return true
+      })()`)
+      check('the tab row takes the drag', dragStarted === true)
+      const midDrag = await settle(async () => {
+        const raw = await inChrome<string>(`(() => {
+          const hint = document.querySelector('.fav-drop-hint')
+          if (!hint) return ''
+          hint.dispatchEvent(new DragEvent('dragover', { dataTransfer: window.__favTestDt, bubbles: true, cancelable: true }))
+          return JSON.stringify({
+            hot: hint.classList.contains('hot'),
+            h: Math.round(hint.getBoundingClientRect().height)
+          })
+        })()`)
+        return raw ? (JSON.parse(raw) as { hot: boolean; h: number }) : undefined
+      }, 5000)
+      say(`[flowtest] mid-drag hint: ${JSON.stringify(midDrag)}`)
+      check('a tab drag materializes the drop slot', midDrag !== undefined && midDrag.h > 12, JSON.stringify(midDrag))
+      const hintHot = await settle(async () =>
+        ((await inChrome<boolean>(`!!document.querySelector('.fav-drop-hint.hot')`)) ? true : undefined), 4000)
+      check('the slot answers the pointer', hintHot === true)
+      await shoot('fav-drophint.png')
+
+      // ---- 3. dropping on the slot pins the site ----
+      await inChrome(`(() => {
+        const row = document.querySelector('.tab-item[data-tab-id="${tabA.id}"]')
+        const hint = document.querySelector('.fav-drop-hint')
+        const o = { dataTransfer: window.__favTestDt, bubbles: true, cancelable: true }
+        hint.dispatchEvent(new DragEvent('drop', o))
+        row.dispatchEvent(new DragEvent('dragend', o))
+        return true
+      })()`)
+      const pinned = await settle(
+        async () => (favoritesStore.list().length === 1 ? favoritesStore.list()[0] : undefined),
+        6000
+      )
+      check('drop pins the site', pinned?.url === A.url, JSON.stringify(pinned))
+      check('the tab itself stays open', !!w.tabs.byId(tabA.id))
+      const afterPin = await settle(async () => {
+        const raw = await inChrome<string>(`(() => {
+          const strip = document.querySelector('.fav-strip')
+          const div = document.querySelector('.fav-divider')
+          const nt = document.querySelector('.new-tab-btn')
+          if (!strip || !div || !nt) return ''
+          return JSON.stringify({
+            icons: strip.querySelectorAll('.fav-icon').length,
+            stripBottom: Math.round(strip.getBoundingClientRect().bottom),
+            divTop: Math.round(div.getBoundingClientRect().top),
+            ntTop: Math.round(nt.getBoundingClientRect().top)
+          })
+        })()`)
+        return raw ? (JSON.parse(raw) as { icons: number; stripBottom: number; divTop: number; ntTop: number }) : undefined
+      }, 6000)
+      say(`[flowtest] after pin: ${JSON.stringify(afterPin)} (baseline nt ${ntTop0})`)
+      check('the strip and its divider are up', afterPin !== undefined && afterPin.icons === 1)
+      check(
+        'the divider sits between the icons and the New Tab row',
+        !!afterPin && afterPin.stripBottom <= afterPin.divTop && afterPin.divTop <= afterPin.ntTop,
+        JSON.stringify(afterPin)
+      )
+      check(
+        'the New Tab row is pushed down to make the space',
+        !!afterPin && afterPin.ntTop >= ntTop0 + 20,
+        `${afterPin?.ntTop} vs ${ntTop0}`
+      )
+
+      // ---- 4. two more favorites; a second tab stays open on B ----
+      const tabB = w.tabs.createTab(B.url)
+      await settle(async () => (tabB.wc.getURL() === B.url ? true : undefined), 8000)
+      favoritesStore.add(B.url, 'Site B', B.icon)
+      favoritesStore.add(C.url, 'Site C', C.icon)
+      const three = await settle(
+        async () =>
+          ((await inChrome<number>(`document.querySelectorAll('.fav-icon').length`)) === 3
+            ? true
+            : undefined),
+        6000
+      )
+      check('three favorites wear three icons', three === true)
+      await shoot('fav-strip.png')
+
+      // ---- 5. click: an open tab for the site gets focused, not duplicated ----
+      check('setup: the B tab is the active one', w.tabs.activeTabId === tabB.id)
+      const tabCount0 = w.tabs.tabs.length
+      await inChrome(`document.querySelectorAll('.fav-icon')[0].click()`)
+      const focusedA = await settle(
+        async () => (w.tabs.activeTabId === tabA.id ? true : undefined),
+        6000
+      )
+      check('clicking a favorite focuses the open tab for its site', focusedA === true)
+      check('…and opens nothing new', w.tabs.tabs.length === tabCount0, `tabs=${w.tabs.tabs.length}`)
+
+      // ---- 6. click with no tab open for the site: it opens one ----
+      await inChrome(`document.querySelectorAll('.fav-icon')[2].click()`)
+      const openedC = await settle(async () => {
+        const t = w.tabs.activeTab
+        return t && t.wc.getURL() === C.url ? true : undefined
+      }, 8000)
+      check('clicking a favorite with no open tab opens the site', openedC === true)
+      check('…as a new tab', w.tabs.tabs.length === tabCount0 + 1, `tabs=${w.tabs.tabs.length}`)
+
+      // ---- 7. reorder by dragging within the row, and it persists ----
+      await inChrome(`(() => {
+        const icons = [...document.querySelectorAll('.fav-icon')]
+        const dt = new DataTransfer()
+        const o = { dataTransfer: dt, bubbles: true, cancelable: true }
+        icons[0].dispatchEvent(new DragEvent('dragstart', o))
+        icons[2].dispatchEvent(new DragEvent('dragover', o))
+        icons[2].dispatchEvent(new DragEvent('drop', o))
+        icons[0].dispatchEvent(new DragEvent('dragend', o))
+        return true
+      })()`)
+      const reordered = await settle(async () => {
+        const urls = favoritesStore.list().map((f) => f.url)
+        return urls[0] === B.url && urls[2] === A.url ? urls : undefined
+      }, 6000)
+      check('dragging an icon across the row reorders it', reordered !== undefined, JSON.stringify(favoritesStore.list().map((f) => f.url)))
+
+      // ---- 8. the store survives: flushed to disk, order and all ----
+      favoritesStore.flush()
+      let onDisk: { items?: { url: string }[] } = {}
+      try {
+        onDisk = JSON.parse(readFileSync(join(app.getPath('userData'), 'favorites.json'), 'utf-8'))
+      } catch {
+        /* missing = fail below */
+      }
+      check(
+        'favorites.json holds all three in their dragged order',
+        onDisk.items?.length === 3 && onDisk.items[0].url === B.url && onDisk.items[2].url === A.url,
+        JSON.stringify(onDisk.items?.map((i) => i.url))
+      )
+
+      // ---- 9. dragged into the tab list: unpinned, and open right there ----
+      const tabCount1 = w.tabs.tabs.length
+      await inChrome(`(() => {
+        const icon = document.querySelectorAll('.fav-icon')[0]
+        const list = document.querySelector('.tab-list')
+        const dt = new DataTransfer()
+        const o = { dataTransfer: dt, bubbles: true, cancelable: true }
+        icon.dispatchEvent(new DragEvent('dragstart', o))
+        list.dispatchEvent(new DragEvent('dragover', o))
+        list.dispatchEvent(new DragEvent('drop', o))
+        icon.dispatchEvent(new DragEvent('dragend', o))
+        return true
+      })()`)
+      const unpinnedToTab = await settle(
+        async () => (favoritesStore.list().length === 2 ? true : undefined),
+        6000
+      )
+      check('dropping an icon in the tab list unpins it', unpinnedToTab === true)
+      const openedFromDrop = await settle(
+        async () => (w.tabs.tabs.length === tabCount1 + 1 ? true : undefined),
+        6000
+      )
+      check('…and opens the site as a tab there', openedFromDrop === true, `tabs=${w.tabs.tabs.length}`)
+
+      // ---- 10. dragged out to nowhere (the page, the void): just unpinned ----
+      await inChrome(`(() => {
+        const icon = document.querySelectorAll('.fav-icon')[0]
+        const dt = new DataTransfer()
+        const o = { dataTransfer: dt, bubbles: true, cancelable: true }
+        icon.dispatchEvent(new DragEvent('dragstart', o))
+        // the pointer crosses the sidebar on its way out — that dragover is
+        // the last the chrome hears before the page view swallows the drag
+        document.querySelector('.sidebar-toolbar').dispatchEvent(new DragEvent('dragover', o))
+        icon.dispatchEvent(new DragEvent('dragend', o))
+        return true
+      })()`)
+      const tabsBeforeVoid = w.tabs.tabs.length
+      const unpinnedToVoid = await settle(
+        async () => (favoritesStore.list().length === 1 ? true : undefined),
+        6000
+      )
+      check('dragging an icon out of the zone unpins it', unpinnedToVoid === true, `favs=${favoritesStore.list().length}`)
+      check('…without opening anything', w.tabs.tabs.length === tabsBeforeVoid)
+
+      // ---- 11. the last one gone, the sidebar is exactly what it was ----
+      favoritesStore.remove(favoritesStore.list()[0].id)
+      const emptyAgain = await settle(async () => {
+        const raw = await inChrome<string>(
+          `JSON.stringify({zone: !!document.querySelector('.fav-zone'),
+                           divider: !!document.querySelector('.fav-divider'),
+                           ntTop: Math.round(document.querySelector('.new-tab-btn').getBoundingClientRect().top)})`
+        )
+        const p = JSON.parse(raw) as { zone: boolean; divider: boolean; ntTop: number }
+        return !p.zone && !p.divider ? p : undefined
+      }, 6000)
+      check('no favorites, no zone, no divider', emptyAgain !== undefined)
+      check(
+        'the New Tab row returns to its old place',
+        !!emptyAgain && Math.abs(emptyAgain.ntTop - ntTop0) <= 2,
+        `${emptyAgain?.ntTop} vs ${ntTop0}`
+      )
+      await shoot('fav-empty-after.png')
+
+      // ---- cleanup: nothing leaks into the next flow ----
+      favoritesStore.flush()
+      settingsStore.flush()
+      A.server.close()
+      B.server.close()
+      C.server.close()
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
     if (flow === 'chrome') {
       const inChrome = <T,>(src: string): Promise<T> =>
         w.win.webContents.executeJavaScript(src) as Promise<T>
       const { settingsStore } = await import('./stores')
 
-      // 1. the address bar finishes what you type
+      // 1. the address bar finishes what you type — in two halves now: the
+      // local list answers from the stores without touching the wire, and the
+      // engine's type-ahead arrives separately to append under it.
       const sugs = await inChrome<{ kind: string; text: string }[]>(
         `window.offshore.omnibox.suggest('canv')`
       )
-      say(`[flowtest] suggestions: ${JSON.stringify(sugs.map((s) => `${s.kind}:${s.text}`))}`)
-      check('the dropdown has something to show', sugs.length > 0)
-      const guesses = sugs.filter((s) => s.kind === 'search' && s.text.toLowerCase() !== 'canv')
+      say(`[flowtest] local suggestions: ${JSON.stringify(sugs.map((s) => `${s.kind}:${s.text}`))}`)
+      check('the local half has something to show without the network', sugs.length > 0)
+      const tail = await inChrome<{ kind: string; text: string }[]>(
+        `window.offshore.omnibox.suggestEngine('canv')`
+      )
+      say(`[flowtest] engine tail: ${JSON.stringify(tail.map((s) => `${s.kind}:${s.text}`))}`)
+      const guesses = tail.filter((s) => s.kind === 'search' && s.text.toLowerCase() !== 'canv')
       check('engine type-ahead reaches the dropdown (needs network)', guesses.length > 0)
 
       // 1b. …and the list really stands on the page in the sidebar layout, where
@@ -2657,6 +3033,24 @@ function setupTestFlows(): void {
       check('the dropdown is on screen while typing', !!drop && drop.rows > 0)
       check('it hangs past the sidebar instead of being squeezed into it', (drop?.width ?? 0) > 320)
       check('the page steps aside behind it', drop?.frozen === true)
+      /*
+       * The engine tail APPENDS under the local rows — it must never yank the
+       * row your cursor is on. Wait for the list to grow past the local half,
+       * then ask whether the top row still reads as what was typed.
+       */
+      const grown = await settle(async () => {
+        const g = await inChrome<{ rows: number; first: string } | null>(`(() => {
+          const d = document.querySelector('.omni-dropdown')
+          if (!d) return null
+          const rows = d.querySelectorAll('.omni-suggestion').length
+          const first = d.querySelector('.omni-suggestion .s-text')?.textContent ?? ''
+          return rows > ${sugs.length} ? { rows, first } : null
+        })()`)
+        return g ?? undefined
+      }, 5000)
+      say(`[flowtest] engine merge: ${JSON.stringify(grown)}`)
+      check('the engine tail appends under the local rows (needs network)', !!grown && grown.rows > sugs.length)
+      check('the merge never yanks the top row', grown?.first === 'canv', JSON.stringify(grown))
       // The list reads as an extension of the pill: a suggestion's first letter
       // sits exactly under the one you typed, in the same size type.
       const align = await inChrome<{ input: number; text: number; fi: string; fs: string } | null>(
@@ -2942,7 +3336,8 @@ function setupTestFlows(): void {
         (await inChrome<boolean>(`!!document.querySelector('.new-tab-btn.active')`)) === true
       )
 
-      // the new tab's search finishes your sentence, the way the omnibox does
+      // the new tab's search finishes your sentence, the way the omnibox does:
+      // local rows on their own first, the engine's tail appended after
       const home = w.tabs.activeTab
       await home?.wc.executeJavaScript(`(() => {
         const el = document.querySelector('.start-search input')
@@ -2952,12 +3347,81 @@ function setupTestFlows(): void {
         el.dispatchEvent(new Event('input', { bubbles: true }))
         return true
       })()`)
-      await delay(1800)
-      const homeSugs = await home?.wc.executeJavaScript(
-        `document.querySelectorAll('.start-sug').length`
+      const homeLocal = await settle(
+        () => home?.wc.executeJavaScript(`document.querySelectorAll('.start-sug').length`) as Promise<number>,
+        3000
       )
-      say(`[flowtest] home search rows: ${homeSugs}`)
-      check('the new tab search offers suggestions too (needs network)', Number(homeSugs) > 0, String(homeSugs))
+      say(`[flowtest] home search rows (local): ${homeLocal}`)
+      check('the new tab search offers rows without the network', Number(homeLocal) > 0, String(homeLocal))
+      const homeAll = await settle(async () => {
+        const n = (await home?.wc.executeJavaScript(
+          `document.querySelectorAll('.start-sug').length`
+        )) as number
+        return n > 1 ? n : undefined
+      }, 5000)
+      say(`[flowtest] home search rows (with engine tail): ${homeAll}`)
+      check('the engine tail reaches the new tab search too (needs network)', Number(homeAll) > 1, String(homeAll))
+
+      /*
+       * The pill's own geometry, the two things the eye checks first:
+       * a row's words start exactly under the input's first character (the
+       * glyph lives in the gutter left of that line, like the magnifier), and
+       * the summoned search stands in the upper third — launcher height —
+       * rather than floating at mid-screen.
+       */
+      const pillGeom = await home?.wc.executeJavaScript(`(() => {
+        const input = document.querySelector('.start-search input')
+        const st = document.querySelector('.start-sug .start-sug-text')
+        const pill = document.querySelector('.start-search')
+        if (!input || !st || !pill) return null
+        const pr = pill.getBoundingClientRect()
+        return {
+          inputX: Math.round(input.getBoundingClientRect().left * 2) / 2,
+          rowTextX: Math.round(st.getBoundingClientRect().left * 2) / 2,
+          centerFrac: Math.round(((pr.top + pr.height / 2) / innerHeight) * 1000) / 1000
+        }
+      })()`) as { inputX: number; rowTextX: number; centerFrac: number } | null
+      say(`[flowtest] home pill geometry: ${JSON.stringify(pillGeom)}`)
+      check(
+        'a row\'s words start under the input\'s first character',
+        !!pillGeom && Math.abs(pillGeom.inputX - pillGeom.rowTextX) <= 1.5,
+        JSON.stringify(pillGeom)
+      )
+      check(
+        'the summoned search stands at launcher height, not mid-screen',
+        !!pillGeom && pillGeom.centerFrac > 0.18 && pillGeom.centerFrac < 0.4,
+        JSON.stringify(pillGeom)
+      )
+
+      /*
+       * The ⋮ menu over a new-tab page: the home stand-in that takes the
+       * page's place must render settled — the clock does not roll its
+       * entrance again just because a menu opened in front of the sea.
+       */
+      await inChrome(`(() => {
+        const el = document.querySelector('.app-menu-anchor .chrome-btn')
+        el?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+        el?.click()
+        return true
+      })()`)
+      const standIn = await settle(async () => {
+        const raw = await inChrome<string>(`(() => {
+          const menu = !!document.querySelector('.cr-menu')
+          const ch = document.querySelector('.page-freeze-home .clock-ch')
+          if (!menu || !ch) return ''
+          return JSON.stringify({ menu, anim: getComputedStyle(ch).animationName })
+        })()`)
+        return raw ? (JSON.parse(raw) as { menu: boolean; anim: string }) : undefined
+      }, 5000)
+      say(`[flowtest] menu over home: ${JSON.stringify(standIn)}`)
+      check('the menu stands on the live home stand-in', standIn?.menu === true, JSON.stringify(standIn))
+      check('the stand-in clock does not replay its entrance', standIn?.anim === 'none', standIn?.anim)
+      await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
+      const thawed = await settle(
+        () => inChrome<boolean>(`!document.querySelector('.page-freeze')`),
+        4000
+      )
+      check('closing the menu hands the page back', thawed === true)
 
       /*
        * Downloads keeps to the sidebar column, so it never asks the page to

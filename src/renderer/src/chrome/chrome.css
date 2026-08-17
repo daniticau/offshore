@@ -92,6 +92,20 @@ body,
   --bm-max-h: 200px;
 }
 
+/*
+ * Vertical only: the lights sit square in the corner and share the nav row's
+ * axis. The row's top edge is the page card's top edge (--gutter), so the
+ * whole strip reads as one line with the card; the lights are a step larger
+ * than Apple's 12px, and their inset from the left equals their inset from
+ * the top — centred on the row, that inset is gutter + (row − light) / 2.
+ * (After the density blocks above so these win at equal specificity.)
+ */
+.chrome.mode-vertical {
+  --tl-size: 14px;
+  --tl-top: var(--gutter);
+  --tl-inset: calc(var(--gutter) + (var(--btn-h) - var(--tl-size)) / 2);
+}
+
 .drag {
   -webkit-app-region: drag;
 }
@@ -443,13 +457,12 @@ body,
 .sidebar-toolbar {
   display: flex;
   /*
-   * The nav buttons sit flush against the top of the window — their top border
-   * is the window's top edge plus the standard inset, not floating above it —
-   * and the lights center on that row rather than on a taller strip of their
-   * own. One row, one centre line, both halves on it.
+   * One row, one centre line: the lights and the nav buttons share it, and the
+   * row's top edge (--tl-top, the gutter in this layout) is the page card's
+   * top edge — the strip and the card start on the same line.
    */
   align-items: center;
-  gap: 3px;
+  gap: 1px;
   height: var(--btn-h);
   margin-top: var(--tl-top);
   flex-shrink: 0;
@@ -459,6 +472,10 @@ body,
   display: flex;
   align-items: center;
   gap: 3px;
+}
+/* the sidebar's nav cluster rides pressed together, like the lights do */
+.sidebar-toolbar .nav-buttons {
+  gap: 1px;
 }
 
 .omnibox {
@@ -718,6 +735,101 @@ body,
   color: var(--ink);
 }
 
+/* ---------- favorites (pinned sites, vertical sidebar) ---------- */
+
+/*
+ * The zone exists only when it holds something (or a drag is about to give it
+ * something): empty, none of this renders and the sidebar is untouched. The
+ * sidebar is a flex column, so whatever height the zone takes simply pushes
+ * the New Tab row and the tab list down — no other rule needed.
+ */
+.fav-zone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--section-gap);
+  /* pull the divider toward the New Tab row the way the row pulls toward the
+     tab list — the hairline reads as the row's ceiling, not a stray line */
+  margin-bottom: calc(var(--tab-list-gap) - var(--section-gap));
+  border-radius: var(--radius-row);
+  transition: background var(--dur) var(--ease-out);
+}
+/* a tab in flight: the zone says quietly that it will catch it */
+.fav-zone.drop-armed {
+  background: var(--accent-wash);
+}
+.fav-zone.drop-armed.drop-hot {
+  background: linear-gradient(180deg, var(--accent-wash), transparent 85%), var(--hover);
+}
+
+.fav-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 1px;
+}
+
+/* Arc's favorites, a size tighter: square glass tiles wearing site icons. */
+.fav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--glass);
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 var(--glass-inset-hi);
+  cursor: default;
+  transition:
+    background var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
+}
+.fav-icon:hover {
+  background: var(--active-row);
+  box-shadow:
+    inset 0 1px 0 var(--glass-inset-hi),
+    var(--shadow-row);
+}
+.fav-icon img {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+  border-radius: 3px;
+}
+.fav-icon.dragging {
+  opacity: 0.5;
+}
+
+/* the subtle line the icons stand above; the rows below duck under it */
+.fav-divider {
+  height: 1px;
+  background: var(--hairline);
+  flex-shrink: 0;
+}
+
+/*
+ * No favorites yet: the slot that materializes only while a pinnable tab is
+ * mid-drag — the gesture's discoverability, in the water idiom. A low tide
+ * mark, not a banner: a wash and a hairline where the divider will be.
+ */
+.fav-drop-hint {
+  height: calc(var(--row-h) - 4px);
+  border-radius: var(--radius-row);
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  margin-bottom: calc(var(--tab-list-gap) - var(--section-gap));
+  transition:
+    background var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
+}
+.fav-drop-hint.hot {
+  background: linear-gradient(180deg, var(--accent-wash), transparent 85%), var(--hover);
+  box-shadow:
+    inset 0 0 0 1.5px var(--focus-ring),
+    inset 0 1px 0 var(--glass-inset-hi);
+}
+
 .tab-list {
   flex: 1;
   display: flex;
@@ -875,6 +987,11 @@ body,
   align-items: center;
   gap: 4px;
   padding-top: 2px;
+}
+/* These sit beside the page card's bottom-left corner, so their hover shape
+   wears the card's own radius — the button nests inside the corner it faces. */
+.sidebar-footer .chrome-btn {
+  border-radius: var(--radius-md);
 }
 
 browser-action-list {
@@ -2034,18 +2151,26 @@ browser-action-list {
   overflow: hidden;
   flex-shrink: 0;
   cursor: default;
+  /* idle it takes back the flex gap too, so the host really is flush left —
+     a zero-width child still costs its gap, which read as a phantom indent */
+  margin-right: -8px;
   transition:
     width var(--dur) var(--ease-out),
+    margin var(--dur) var(--ease-out),
     opacity var(--dur) var(--ease-out),
     background var(--dur) var(--ease-out),
     color var(--dur) var(--ease-out);
 }
+/* Revealed, it hangs to the LEFT of where the host sits — pulled toward the
+   pill's edge — so the host only steps aside by part of the button's width
+   rather than the whole of it plus a gap. */
 .omnibox:hover .omni-copy-lead,
 .omni-copy-lead.done {
-  width: 24px;
-  min-width: 24px;
+  width: 22px;
+  min-width: 22px;
   opacity: 1;
-  margin-right: 2px;
+  margin-left: -8px;
+  margin-right: -2px;
 }
 .omni-copy-lead:hover {
   background: var(--press);
@@ -2066,6 +2191,18 @@ browser-action-list {
 }
 .omni-tune.boxed:hover {
   background: var(--hover);
+}
+/*
+ * Sidebar: the tune button is the ⋮ button's size exactly, and stacked in its
+ * column — the pill's trailing padding goes to zero so the button's centre
+ * lands under the ⋮ in the row above. One size, one axis, top to bottom.
+ */
+.mode-vertical .omnibox.has-actions {
+  padding-right: 0;
+}
+.mode-vertical .omni-tune.boxed {
+  width: var(--btn-h);
+  height: min(var(--btn-h), calc(var(--omnibox-h) - 3px));
 }
 
 .site-info {
@@ -2343,12 +2480,8 @@ browser-action-list {
   color: var(--slop-amber);
 }
 
-/* ---------- Focus chip ---------- */
+/* ---------- Focus (its row in the site panel — the chip is retired) ---------- */
 
-.focus-chip.active {
-  color: var(--accent-strong);
-  background: var(--glass-strong);
-}
 .si-focus {
   color: var(--accent-strong);
 }

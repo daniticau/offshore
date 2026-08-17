@@ -3,6 +3,7 @@ import type {
   BookmarkNode,
   DownloadEntry,
   DownloadItemInfo,
+  FavoriteEntry,
   Rect,
   SpaceInfo,
   Settings,
@@ -15,7 +16,6 @@ import type { FindState } from './App'
 import { BookmarkEditPopover, BookmarksBar, BookmarksSection } from './Bookmarks'
 import { Omnibox } from './Omnibox'
 import { SiteInfo } from './SiteInfo'
-import { FocusChip } from './Focus'
 import { PopupChip } from './PasswordDialog'
 import { SlopChip } from './Slop'
 import { SpaceSwitcher } from './SpaceSwitcher'
@@ -61,6 +61,8 @@ interface ChromeProps {
   find: FindState
   downloads: DownloadItemInfo[]
   bookmarks: BookmarkNode[]
+  /** Pinned sites — the vertical sidebar's icon row (horizontal shows none). */
+  favorites: FavoriteEntry[]
   renameSpaceId: string | null
   renameBookmarkId: string | null
   bookmarkEdit: BookmarkNode | null
@@ -77,6 +79,10 @@ interface ChromeProps {
   onNavigate: (input: string) => void
   onNewTab: () => void
   siteInfoOpen: boolean
+  /** The page's still is really up (chrome:freeze-settled) — panels that
+   * overhang the page hold their entrance until it is, or they spend the
+   * capture window over the sidebar but under the live view. */
+  overlaySettled: boolean
   onToggleSiteInfo: (open: boolean) => void
   onFindQuery: (text: string, findNext: boolean, forward?: boolean) => void
   onCloseFind: () => void
@@ -308,7 +314,8 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
       {activeTab && (
         <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
       )}
-      {activeTab && <FocusChip tab={activeTab} settings={props.settings} />}
+      {/* Focus has no chip here any more: it lives as its row in the site
+          panel behind the tune button (and keeps ⇧⌘F and its menu items). */}
       {/* The star belongs to the address, so it rides the address bar in both
           layouts: the far right of it, which is where every browser on this
           machine keeps one and where your hand already goes to save a page. */}
@@ -327,7 +334,8 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
         onSiteInfo={() => props.onToggleSiteInfo(!props.siteInfoOpen)}
         actions={actions}
       />
-      {props.siteInfoOpen && activeTab && (
+      {/* not a beat before the still is up — see overlaySettled */}
+      {props.siteInfoOpen && props.overlaySettled && activeTab && (
         <SiteInfo
           tab={activeTab}
           settings={props.settings}
@@ -689,6 +697,7 @@ function TabItemVertical({
       className={`tab-item ${active ? 'active' : ''} ${drag.dragId === tab.id ? 'dragging' : ''} ${
         motion.closing(tab.id) ? 'closing' : ''
       } ${motion.entering(tab.id) ? 'entering' : ''}`}
+      data-tab-id={tab.id}
       draggable
       onDragStart={(e) => drag.onDragStart(e, tab.id)}
       onDragOver={(e) => drag.onDragOver(e, tab.id)}
@@ -801,6 +810,183 @@ function orderedTabs(tabs: TabInfo[], order: number[] | null): TabInfo[] {
   return out
 }
 
+// ---------------- favorites (pinned sites — vertical only) ----------------
+
+/** A pinned site's icon; a failed favicon falls back to the wave, never the box. */
+function FavGlyph({ fav }: { fav: FavoriteEntry }): React.JSX.Element {
+  const [broken, setBroken] = useState(false)
+  useEffect(() => setBroken(false), [fav.favicon])
+  if (!fav.favicon || broken) return <IconWave size={14} />
+  return <img src={fav.favicon} alt="" onError={() => setBroken(true)} />
+}
+
+/**
+ * The favorites zone: a compact row of site icons above a hairline, sitting
+ * right on top of the New Tab row. Drag a tab up here to pin its site; the row
+ * and the tab list below simply move down to make the space. Empty, it renders
+ * nothing at all — the sidebar looks exactly as it did — except while a
+ * pinnable tab is mid-drag, when a quiet drop slot materializes so the gesture
+ * has somewhere to land.
+ *
+ * A favorite is an address, not a tab: click it to focus the site if it is
+ * open here, or open it if not. Drag an icon anywhere out of the zone to unpin
+ * it — the tab list included, where it becomes an open tab again.
+ */
+function FavoritesStrip({
+  favorites,
+  draggingTab,
+  onPin
+}: {
+  favorites: FavoriteEntry[]
+  /** A pinnable tab-row drag in flight — the zone arms (or materializes) for it. */
+  draggingTab: TabInfo | null
+  onPin: (tab: TabInfo) => void
+}): React.JSX.Element | null {
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [order, setOrder] = useState<string[] | null>(null)
+  const [pinHot, setPinHot] = useState(false)
+  const zoneRef = useRef<HTMLDivElement>(null)
+  /** Where the drag last was: out of the zone on release means unpin. */
+  const outsideRef = useRef(false)
+  /*
+   * Refs are the source of truth for the drag in flight; the state twins only
+   * drive the paint. Drag events arrive faster than renders — dragstart,
+   * dragover and drop can all land inside one task — and a handler reading
+   * state would be reading the render it was born in, not the drag it is in.
+   */
+  const dragIdRef = useRef<string | null>(null)
+  const orderRef = useRef<string[] | null>(null)
+
+  /*
+   * The page area is another WebContentsView — a drag over it sends this
+   * document nothing. So the zone does not wait for a drop that may never
+   * come: while an icon is in flight, every dragover in the chrome says
+   * whether the pointer is still over the zone, and the last word stands when
+   * the drag ends. Leaving toward the page crosses the sidebar on the way out,
+   * so the flag is set before the events go quiet. Mounted once and gated on
+   * the ref, so the very first dragover already counts.
+   */
+  useEffect(() => {
+    const onOver = (e: DragEvent): void => {
+      if (dragIdRef.current == null) return
+      const el = zoneRef.current
+      outsideRef.current = !(el && e.target instanceof Node && el.contains(e.target))
+    }
+    window.addEventListener('dragover', onOver, true)
+    return () => window.removeEventListener('dragover', onOver, true)
+  }, [])
+
+  if (!favorites.length && !draggingTab) return null
+
+  const isTabDrag = (e: React.DragEvent): boolean =>
+    e.dataTransfer.types.includes('offshore/tab-id')
+
+  /** One exit for both drop-inside and dragend, whichever lands first. */
+  const endFavDrag = (): void => {
+    const id = dragIdRef.current
+    if (id != null) {
+      if (outsideRef.current) void offshore.favorites.remove(id)
+      else if (orderRef.current) void offshore.favorites.reorder(orderRef.current)
+    }
+    dragIdRef.current = null
+    orderRef.current = null
+    outsideRef.current = false
+    setDragId(null)
+    setOrder(null)
+  }
+
+  // Empty but mid-drag: the slot the gesture is discovering, and nothing else.
+  if (!favorites.length) {
+    return (
+      <div
+        className={`fav-drop-hint no-drag ${pinHot ? 'hot' : ''}`}
+        onDragOver={(e) => {
+          if (!isTabDrag(e)) return
+          e.preventDefault()
+          setPinHot(true)
+        }}
+        onDragLeave={() => setPinHot(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setPinHot(false)
+          if (draggingTab) onPin(draggingTab)
+        }}
+      />
+    )
+  }
+
+  const byId = new Map(favorites.map((f) => [f.id, f]))
+  const shown = (order ?? favorites.map((f) => f.id))
+    .map((id) => byId.get(id))
+    .filter((f): f is FavoriteEntry => !!f)
+  if (order) for (const f of favorites) if (!order.includes(f.id)) shown.push(f)
+
+  return (
+    <div
+      ref={zoneRef}
+      className={`fav-zone no-drag ${draggingTab ? 'drop-armed' : ''} ${pinHot ? 'drop-hot' : ''}`}
+      onDragOver={(e) => {
+        if (!isTabDrag(e)) return
+        e.preventDefault()
+        setPinHot(true)
+      }}
+      onDragLeave={() => setPinHot(false)}
+      onDrop={(e) => {
+        setPinHot(false)
+        if (e.dataTransfer.getData('offshore/tab-id')) {
+          e.preventDefault()
+          e.stopPropagation()
+          if (draggingTab) onPin(draggingTab)
+          return
+        }
+        // one of our own icons let go over the zone: commit the reorder
+        e.preventDefault()
+        endFavDrag()
+      }}
+    >
+      <div className="fav-strip">
+        {shown.map((fav) => (
+          <button
+            key={fav.id}
+            className={`fav-icon ${dragId === fav.id ? 'dragging' : ''}`}
+            draggable
+            title={fav.title || fav.url}
+            onDragStart={(e) => {
+              dragIdRef.current = fav.id
+              orderRef.current = favorites.map((f) => f.id)
+              outsideRef.current = false
+              setDragId(fav.id)
+              setOrder(orderRef.current)
+              e.dataTransfer.setData('offshore/fav-id', fav.id)
+              e.dataTransfer.effectAllowed = 'move'
+            }}
+            onDragOver={(e) => {
+              e.preventDefault()
+              const id = dragIdRef.current
+              if (id == null || id === fav.id) return
+              const cur = orderRef.current ?? favorites.map((f) => f.id)
+              const from = cur.indexOf(id)
+              const to = cur.indexOf(fav.id)
+              if (from === -1 || to === -1 || from === to) return
+              const next = [...cur]
+              next.splice(from, 1)
+              next.splice(to, 0, id)
+              orderRef.current = next
+              setOrder(next)
+            }}
+            onDragEnd={endFavDrag}
+            onClick={() => void offshore.favorites.open(fav.id)}
+          >
+            <FavGlyph fav={fav} />
+          </button>
+        ))}
+      </div>
+      <div className="fav-divider" aria-hidden="true" />
+    </div>
+  )
+}
+
 // ---------------- vertical sidebar ----------------
 
 export function Sidebar(props: ChromeProps): React.JSX.Element {
@@ -819,6 +1005,10 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
   const { dir } = useSpacePane(tabsState)
   const shown = orderedTabs(spaceTabs, drag.order)
   const motion = useTabMotion(tabsState, blankId)
+  // A tab row in flight arms the favorites zone — internal pages excluded,
+  // since a pinned site is an address and offshore:// is not one.
+  const draggingTab = drag.dragId != null ? (spaceTabs.find((t) => t.id === drag.dragId) ?? null) : null
+  const pinnableTab = draggingTab && /^https?:/.test(draggingTab.url) ? draggingTab : null
 
   return (
     <div className="sidebar drag" onMouseLeave={props.onPeekLeave}>
@@ -848,6 +1038,14 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
           onRenameDone={props.onRenameBookmarkDone}
         />
       )}
+      {/* Pinned sites live right above the New Tab row; dropping a tab past
+          that row's top edge is what creates them. Empty and undragged, this
+          renders nothing and the sidebar is exactly what it was. */}
+      <FavoritesStrip
+        favorites={props.favorites}
+        draggingTab={pinnableTab}
+        onPin={(tab) => void offshore.favorites.add(tab.url, tab.title, tab.favicon)}
+      />
       {/*
         The blank tab you are looking at wears this row. It only counts as "the
         tab you are on" while its search is up, though: dismiss the search and
@@ -888,6 +1086,18 @@ export function Sidebar(props: ChromeProps): React.JSX.Element {
         className="tab-list no-drag space-pane"
         key={tabsState.activeSpaceId}
         style={{ '--dir': dir } as React.CSSProperties}
+        onDragOver={(e) => {
+          // a favorite icon dragged down here may land as an open tab
+          if (e.dataTransfer.types.includes('offshore/fav-id')) e.preventDefault()
+        }}
+        onDrop={(e) => {
+          const favId = e.dataTransfer.getData('offshore/fav-id')
+          if (!favId) return
+          e.preventDefault()
+          const row = (e.target as HTMLElement).closest('[data-tab-id]') as HTMLElement | null
+          const beforeId = row ? Number(row.dataset.tabId) : NaN
+          void offshore.favorites.toTab(favId, Number.isFinite(beforeId) ? beforeId : null)
+        }}
       >
         {shown.map((tab) => (
           <TabItemVertical

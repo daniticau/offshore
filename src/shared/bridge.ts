@@ -7,6 +7,7 @@ import type {
   DownloadEntry,
   ExpiredSite,
   ExtensionInfo,
+  FavoriteEntry,
   GeocodeResult,
   Insets,
   MorningAnswer,
@@ -36,12 +37,14 @@ export const CHROME_EVENTS = [
   'tabs:state',
   'settings:changed',
   'bookmarks:changed',
+  'favorites:changed',
   'omnibox:focus',
   'find:open',
   'find:result',
   'downloads:event',
   'devshot:composite',
   'chrome:page-freeze',
+  'chrome:freeze-settled',
   'spaces:begin-rename',
   'bookmarks:begin-rename',
   'bookmarks:edit-current',
@@ -88,7 +91,10 @@ export interface OffshoreApi {
     spaceContext(spaceId: string): Promise<void>
     bookmarkContext(nodeId: string): Promise<void>
   }
-  omnibox: { suggest(input: string): Promise<Suggestion[]> }
+  omnibox: {
+    suggest(input: string): Promise<Suggestion[]>
+    suggestEngine(input: string): Promise<Suggestion[]>
+  }
   home: { setSearch(open: boolean, tabId?: number): Promise<void> }
   actions: { run(id: ActionId): Promise<void> }
   chrome: {
@@ -119,6 +125,17 @@ export interface OffshoreApi {
     move(id: string, parentId: string | null, index: number): Promise<void>
     remove(id: string): Promise<void>
     setLastFolder(id: string | null): Promise<void>
+  }
+  favorites: {
+    list(): Promise<FavoriteEntry[]>
+    /** Pin a site (dedup by exact url; returns the entry either way). */
+    add(url: string, title: string, favicon?: string): Promise<FavoriteEntry | null>
+    remove(id: string): Promise<void>
+    reorder(ids: string[]): Promise<void>
+    /** Click: focus an open tab for the site in this window, else open one. */
+    open(id: string): Promise<void>
+    /** Dropped into the tab list: unpin and open a tab there. */
+    toTab(id: string, beforeTabId: number | null): Promise<void>
   }
   passwords: {
     resolveOffer(offerId: string, action: 'save' | 'never' | 'dismiss'): Promise<void>
@@ -225,5 +242,7 @@ export interface OffshoreInternalApi {
     painted(): void
     /** What the omnibox would offer for the same half-typed word. */
     suggest(input: string): Promise<Suggestion[]>
+    /** …and what the engine adds once the wire answers. */
+    suggestEngine(input: string): Promise<Suggestion[]>
   }
 }

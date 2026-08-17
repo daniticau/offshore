@@ -77,7 +77,9 @@ export function SiteInfo({ tab, settings, shieldOff, onToggleShield, onClose }: 
   const [rowsAtOpen] = useState(() => ({
     consent: settings.privacy.consentAuto && (tab.privacy?.consent ?? 'none') !== 'none',
     stripped: (tab.privacy?.cookiesStripped ?? 0) + (tab.privacy?.cookiesScrubbed ?? 0) > 0,
-    focus: tab.focusOn
+    // Focus's only surface in the chrome now (the omnibox chip is retired), so
+    // the row is here whenever the master switch is — on or off for the site.
+    focus: settings.focus.enabled
   }))
 
   useEffect(() => {

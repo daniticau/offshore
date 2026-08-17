@@ -124,13 +124,18 @@ const COLS = 12
 const ROWS = 10
 
 /**
- * The two middle rows belong to the search pill. They are held on both home
+ * Two rows of the board belong to the search pill. They are held on both home
  * screens, whether or not a pill is actually drawn there, so a layout built on
  * a new tab reads identically on the zero-tab window — and nothing can ever be
  * dropped underneath the search field.
+ *
+ * Rows 2–4, not the middle: the pill stands in the upper third, where
+ * Spotlight and every launcher puts a summoned search — anchored toward the
+ * omnibox end of the screen, with the room below it going to the type-ahead.
+ * Dead centre read as floating too low the moment the list opened under it.
  */
-const BAND_TOP = 4
-const BAND_END = 6
+const BAND_TOP = 2
+const BAND_END = 4
 
 /** Breathing room between a widget's card and its cell, in px. */
 const GUTTER = 7
@@ -296,6 +301,56 @@ export interface HomeSuggestion {
   title?: string
 }
 
+/**
+ * A row's mark, drawn in the pill's own stroke style. It sits in the gutter
+ * LEFT of the text line — the row's words start exactly under the input's
+ * first character, and the glyph takes the spot the pill's magnifier holds.
+ */
+function SugGlyph({ kind }: { kind: HomeSuggestion['kind'] }): React.JSX.Element {
+  const path: Record<HomeSuggestion['kind'], React.JSX.Element> = {
+    search: (
+      <>
+        <circle cx="11" cy="11" r="7" />
+        <path d="M21 21l-4.35-4.35" />
+      </>
+    ),
+    url: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18M12 3a13.5 13.5 0 0 1 0 18M12 3a13.5 13.5 0 0 0 0 18" />
+      </>
+    ),
+    internal: <path d="M2 12c2.5-3.5 5-3.5 7.5 0s5 3.5 7.5 0 3.5-2.5 5-1" />,
+    history: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3.5 2" />
+      </>
+    ),
+    bookmark: (
+      <path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 5.9-5.3-3-5.3 3 1.2-5.9L3.4 9.3l6-.7z" />
+    ),
+    tab: <path d="M7 17L17 7M9 7h8v8" />,
+    action: <path d="M13 2L4.5 13.5H11l-1 8.5L18.5 10.5H12z" />
+  }
+  return (
+    <svg
+      className="start-sug-glyph"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {path[kind] ?? path.search}
+    </svg>
+  )
+}
+
 interface HomeCanvasProps {
   settings: Settings
   /** Persist a settings change — the caller owns the copy it renders from. */
@@ -303,11 +358,13 @@ interface HomeCanvasProps {
   /** A query or URL was committed in the search pill. */
   onSubmit(input: string): void
   /**
-   * What the engine and your own tabs, bookmarks and history make of a
-   * half-typed word. Left out on the zero-tab screen, which has no search to
-   * put a list under.
+   * What your own tabs, bookmarks and history make of a half-typed word —
+   * answered from memory, painted per keystroke. Left out on the zero-tab
+   * screen, which has no search to put a list under.
    */
   fetchSuggestions?(input: string): Promise<HomeSuggestion[]>
+  /** The engine's type-ahead for the same word — the slow, networked tail. */
+  fetchEngineSuggestions?(input: string): Promise<HomeSuggestion[]>
   fetchWeather(): Promise<BriefWeather | null>
   /**
    * Does this screen have a search at all? On for a new tab, which is a page you
@@ -359,6 +416,7 @@ export function HomeCanvas({
   onPatch: patch,
   onSubmit,
   fetchSuggestions,
+  fetchEngineSuggestions,
   fetchWeather,
   searchPill = true,
   searchOpen = true,
@@ -422,14 +480,19 @@ export function HomeCanvas({
 
   /*
    * The rows under the pill, and which one the arrows are on (-1 = none, so
-   * Enter still means "what I typed"). Asked for a beat after you stop typing:
-   * the type-ahead half of this list goes out over the network, and a request
-   * per keystroke would be both slower and louder than one per word.
+   * Enter still means "what I typed"). Asked in two halves per keystroke, the
+   * omnibox's own arrangement: the local rows (history, bookmarks, open tabs,
+   * the URL guess) paint the moment the stores answer, and the engine's
+   * type-ahead appends underneath when the wire catches up — appends, never
+   * reorders, so a row you are arrowing toward holds still. A response from a
+   * superseded keystroke is dropped whole.
    */
   const [sugs, setSugs] = useState<HomeSuggestion[]>([])
   const [pick, setPick] = useState(-1)
   const suggestRef = useRef(fetchSuggestions)
   suggestRef.current = fetchSuggestions
+  const engineRef = useRef(fetchEngineSuggestions)
+  engineRef.current = fetchEngineSuggestions
 
   useEffect(() => {
     const q = text.trim()
@@ -439,17 +502,26 @@ export function HomeCanvas({
       return undefined
     }
     let live = true
-    const t = setTimeout(() => {
-      void suggestRef.current?.(q).then((rows) => {
-        if (!live) return
-        setSugs(rows ?? [])
-        // a fresh list is nobody's selection yet
-        setPick(-1)
+    const localAsk = suggestRef.current(q)
+    const engineAsk = engineRef.current?.(q)
+    void localAsk.then((rows) => {
+      if (!live) return
+      setSugs(rows ?? [])
+      // a fresh list is nobody's selection yet
+      setPick(-1)
+    })
+    if (engineAsk) {
+      // strictly after the local rows: the tail lands under them or not at all
+      void Promise.all([localAsk, engineAsk]).then(([local, tail]) => {
+        if (!live || !tail?.length) return
+        const kept = local ?? []
+        const taken = new Set(kept.map((s) => s.text.trim().toLowerCase()))
+        const add = tail.filter((s) => !taken.has(s.text.trim().toLowerCase()))
+        if (add.length) setSugs([...kept, ...add])
       })
-    }, 90)
+    }
     return () => {
       live = false
-      clearTimeout(t)
     }
   }, [text, showSearch])
 
@@ -952,7 +1024,7 @@ export function HomeCanvas({
             pulls in from the top and bottom to clear the Done button and the
             tray, and every widget springs along with it. */}
         <div
-          className="start-grid"
+          className={`start-grid ${showSearch && sugs.length > 0 ? 'list-up' : ''}`}
           style={{
             ['--cw' as string]: `${cellW}px`,
             ['--ch' as string]: `${cellH}px`,
@@ -1157,6 +1229,7 @@ export function HomeCanvas({
                       }}
                       onMouseEnter={() => setPick(i)}
                     >
+                      <SugGlyph kind={s.kind} />
                       <span className="start-sug-text">{s.text}</span>
                       {s.title && <span className="start-sug-kind">{s.title}</span>}
                     </button>

@@ -214,12 +214,19 @@ body,
     inset 0 1px 0 var(--glass-inset-hi),
     var(--shadow-pop);
 }
+/*
+ * A row lines up with the pill above it: the glyph sits in the gutter where the
+ * pill keeps its magnifier, and the words start exactly under the input's first
+ * character. The numbers are the pill's own — 22px of padding, an 18px icon, a
+ * 12px gap, measured from a left edge 6.5px further out (the list's border and
+ * padding) — so 17 + 16 + 13 lands the text on the same half-pixel.
+ */
 .start-sug {
   display: flex;
   align-items: baseline;
   gap: 10px;
   width: 100%;
-  padding: 9px 14px;
+  padding: 9px 14px 9px 17px;
   border: none;
   border-radius: 12px;
   background: transparent;
@@ -231,6 +238,15 @@ body,
 }
 .start-sug.on {
   background: var(--hover);
+}
+.start-sug-glyph {
+  align-self: center;
+  flex-shrink: 0;
+  margin-right: 3px;
+  color: var(--ink-faint);
+}
+.start-sug.on .start-sug-glyph {
+  color: var(--accent-strong);
 }
 .start-sug-text {
   flex: 1;
@@ -334,6 +350,12 @@ body,
 .clock-ch {
   display: inline-block;
   animation: clock-roll 320ms var(--ease-spring);
+}
+/* The stand-in is the home screen already there, not one arriving: it mounts
+   whenever a panel borrows the page's room, and the clock must not roll its
+   entrance again every time — it renders settled, mid-tick. */
+.start.stand-in .clock-ch {
+  animation: none;
 }
 @keyframes clock-roll {
   from {
@@ -822,6 +844,17 @@ body,
   }
 }
 .morning-card.leaving {
+  opacity: 0;
+  transition: opacity 150ms var(--ease-out);
+  pointer-events: none;
+}
+/*
+ * The type-ahead list opens directly onto the card's spot, and the card read
+ * straight through the list's frosted glass — two layers of words in one
+ * place. While the list is up the brief steps fully back; it returns the
+ * moment the list goes.
+ */
+.start-grid.list-up .morning-card {
   opacity: 0;
   transition: opacity 150ms var(--ease-out);
   pointer-events: none;

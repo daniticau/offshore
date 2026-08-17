@@ -358,6 +358,13 @@ export class OffshoreWindow implements TabHost {
         if (gen !== this.overlayGen || this.win.isDestroyed()) return
       }
       this.tabs.setActiveVisible(false)
+      /*
+       * Only now is the still what's on screen. Panels that overhang the page
+       * wait for this word before showing themselves: the chrome draws under
+       * the live view, so a panel rendered any earlier spends the capture
+       * window half-visible — over the sidebar, under the page.
+       */
+      this.sendToChrome('chrome:freeze-settled')
     })()
   }
 

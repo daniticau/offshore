@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import type {
   BookmarkNode,
   DownloadItemInfo,
+  FavoriteEntry,
   FindResult,
   PageFreezeFrame,
   PasswordOffer,
@@ -217,6 +218,7 @@ export function App(): React.JSX.Element {
   })
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [bookmarks, setBookmarks] = useState<BookmarkNode[]>([])
+  const [favorites, setFavorites] = useState<FavoriteEntry[]>([])
   const [omniboxNonce, setOmniboxNonce] = useState(0)
   const [homeEditSignal, setHomeEditSignal] = useState(0)
   const [omniboxOverlay, setOmniboxOverlay] = useState(false)
@@ -234,6 +236,13 @@ export function App(): React.JSX.Element {
   const [appMenuOpen, setAppMenuOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [freeze, setFreeze] = useState<PageFreezeFrame[]>([])
+  /**
+   * True once main says the live view has actually stood aside behind the
+   * still (chrome:freeze-settled). Panels that overhang the page wait for it:
+   * the chrome draws under the views, so a panel shown any sooner sits over
+   * the sidebar but under the page for the length of the capture.
+   */
+  const [freezeSettled, setFreezeSettled] = useState(false)
   /** The page card in window coordinates — what the chrome draws over it needs it. */
   const [contentRect, setContentRect] = useState<Rect | null>(null)
   const [passwordOffer, setPasswordOffer] = useState<PasswordOffer | null>(null)
@@ -436,6 +445,9 @@ export function App(): React.JSX.Element {
         setBookmarkEdit((prev) => (prev ? (nodes.find((n) => n.id === prev.id) ?? null) : null))
       })
     )
+    un.push(
+      offshore.on('favorites:changed', (items: FavoriteEntry[]) => setFavorites(items))
+    )
     un.push(offshore.on('omnibox:focus', () => setOmniboxNonce((n) => n + 1)))
     un.push(offshore.on('find:open', () => setFind((f) => ({ ...f, open: true }))))
     un.push(
@@ -472,6 +484,7 @@ export function App(): React.JSX.Element {
         setFreeze(frames ?? [])
       })
     )
+    un.push(offshore.on('chrome:freeze-settled', () => setFreezeSettled(true)))
     const onSpaceRename = (e: Event): void => {
       setRenameSpaceId((e as CustomEvent<string>).detail)
     }
@@ -489,6 +502,7 @@ export function App(): React.JSX.Element {
       }
     })
     void offshore.bookmarks.list().then((b) => b && setBookmarks(b))
+    void offshore.favorites.list().then((f) => f && setFavorites(f))
     void offshore.extensions.has().then(setHasExtensions).catch(() => setHasExtensions(false))
     return () => {
       un.forEach((fn) => fn())
@@ -581,6 +595,8 @@ export function App(): React.JSX.Element {
     (mode === 'horizontal' && (bookmarkEdit !== null || popupPanelOpen || slopPanelOpen || downloadsPanelOpen))
   useEffect(() => {
     void offshore.chrome.setOverlay(overlayOpen)
+    // closing hands the room back; the next overlay earns its own settle
+    if (!overlayOpen) setFreezeSettled(false)
   }, [overlayOpen])
 
   // escape closes panels
@@ -748,6 +764,7 @@ export function App(): React.JSX.Element {
     find,
     downloads,
     bookmarks,
+    favorites,
     renameSpaceId,
     renameBookmarkId,
     bookmarkEdit,
@@ -774,6 +791,7 @@ export function App(): React.JSX.Element {
     slopPanelOpen,
     onToggleSlopPanel: setSlopPanelOpen,
     siteInfoOpen,
+    overlaySettled: freezeSettled,
     onToggleSiteInfo: setSiteInfoOpen,
     appMenuOpen,
     onToggleAppMenu: setAppMenuOpen,

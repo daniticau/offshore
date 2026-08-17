@@ -625,6 +625,25 @@ export interface Settings {
   onboarded: boolean
 }
 
+// ---------------- Favorites (pinned sites — the sidebar's icon row) ----------------
+
+/**
+ * A favorite is a persistent pinned SITE, not a live tab: url + title + icon,
+ * made by dragging a tab above the new-tab row in the vertical sidebar.
+ * Closing the tab does not touch it; dragging its icon out of the row does.
+ * One flat global list — spaces partition live tabs and cookie jars, but a
+ * pinned site is an address, and an address is the same in every space (and
+ * space ids do not survive a launch with session restore off, so a per-space
+ * keying would orphan them).
+ */
+export interface FavoriteEntry {
+  id: string
+  url: string
+  title: string
+  favicon?: string
+  createdAt: number
+}
+
 // ---------------- Bookmarks (v2: tree) ----------------
 
 export interface BookmarkNode {
