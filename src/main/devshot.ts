@@ -1,4 +1,4 @@
-import { BrowserWindow, app, ipcMain, session } from 'electron'
+import { BrowserWindow, app, ipcMain, screen, session } from 'electron'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import * as nodeHttp from 'http'
@@ -279,8 +279,18 @@ function delay(ms: number): Promise<void> {
 /**
  * Get the window painting with a live surface for captures and checks — without
  * ever taking the keyboard or covering what the human is doing. Quiet (the
- * default) parks it off the side of the display, shown but inactive: it keeps
- * rendering out there, and capturePage still has a real surface to read.
+ * default) parks it off the side of the display, shown but inactive.
+ *
+ * "Shown" needs care on macOS. showInactive never marks the page views'
+ * renderers visible — Electron only flips a WebContentsView's contents to
+ * "shown" on the window's activating show — so a quiet run's pages would sit in
+ * `hidden` visibility for the whole flow, and capturePage would hand back empty
+ * stills: the freeze-frame dance loses its picture, and every "the page steps
+ * aside" check with it. A show() with focusability switched off walks the same
+ * marking path without ever touching the human's keyboard, and the visibility
+ * sticks once granted. The park also keeps a 2px sliver of the window's edge on
+ * the leftmost display rather than trusting AppKit, which quietly drags a
+ * wholly off-screen window back to a 40px sliver of its own choosing.
  * OFFSHORE_TEST_FOREGROUND=1 brings back the old grab-everything behavior for
  * the rare check that needs genuine OS focus.
  */
@@ -294,8 +304,16 @@ function surface(w: OffshoreWindow): void {
     return
   }
   const [, wy] = w.win.getPosition()
-  w.win.setPosition(-9000, wy)
-  w.win.showInactive()
+  const { width } = w.win.getBounds()
+  const left = screen
+    .getAllDisplays()
+    .reduce((min, d) => (d.bounds.x < min.bounds.x ? d : min))
+  // keep the sliver inside that display's vertical range, or it occludes anyway
+  const y = Math.min(Math.max(wy, left.bounds.y), left.bounds.y + left.bounds.height - 100)
+  w.win.setPosition(left.bounds.x - width + 2, y)
+  w.win.setFocusable(false)
+  w.win.show()
+  w.win.setFocusable(true)
 }
 
 /**
@@ -1345,7 +1363,17 @@ function setupTestFlows(): void {
         )) === true
       )
       const [cw, ch] = w.win.getContentSize()
-      const fs = w.tabs.activeTab!.view.getBounds()
+      /*
+       * Entering full screen is also what ends the peek above, and closing that
+       * overlay brings the live view back the way every swap goes: parked
+       * off-screen for a beat while it proves it can paint, then landed. Poll
+       * for the landed state rather than reading the bounds mid-swap.
+       */
+      const fs =
+        (await settle(async () => {
+          const b = w.tabs.activeTab!.view.getBounds()
+          return b.x === 0 && b.y === 0 && b.width === cw && b.height === ch ? b : undefined
+        }, 4000)) ?? w.tabs.activeTab!.view.getBounds()
       check(
         'the page has every pixel',
         fs.x === 0 && fs.y === 0 && fs.width === cw && fs.height === ch,
