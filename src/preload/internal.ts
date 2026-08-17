@@ -67,6 +67,11 @@ const api: OffshoreInternalApi = {
     weather: () => invoke('brief:weather'),
     geocode: (q: string) => invoke('brief:geocode', q)
   },
+  morning: {
+    get: () => invoke('morning:get'),
+    dismiss: () => invoke('morning:dismiss'),
+    status: () => invoke('morning:status')
+  },
   history: {
     clear: () => invoke('history:clear')
   },

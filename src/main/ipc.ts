@@ -28,6 +28,7 @@ import {
 } from '@shared/types'
 import { adblock } from './adblock'
 import { fetchWeather, geocode } from './brief'
+import { morningBrief } from './morningbrief'
 import { listExtensions, uninstallExtension } from './extensions'
 import { focusStore } from './focus'
 import { harbor, registrableDomain } from './harbor'
@@ -962,6 +963,15 @@ export function setupIpc(): void {
   ipcMain.handle('brief:weather', (e) => (isTrustedSender(e) ? fetchWeather() : null))
   ipcMain.handle('brief:geocode', (e, q: string) => (isTrustedSender(e) ? geocode(q) : []))
 
+  // ---- morning brief ----
+  ipcMain.handle('morning:get', (e) =>
+    isTrustedSender(e) ? morningBrief.get(e.sender.id) : { kind: 'none' }
+  )
+  ipcMain.handle('morning:dismiss', (e) => {
+    if (isTrustedSender(e)) morningBrief.dismiss(e.sender.id)
+  })
+  ipcMain.handle('morning:status', (e) => (isTrustedSender(e) ? morningBrief.status() : null))
+
   // ---- extensions ----
   ipcMain.handle('extensions:list', (e) => (isTrustedSender(e) ? listExtensions() : []))
   ipcMain.handle('extensions:uninstall', async (e, id: string) => {
@@ -1004,7 +1014,11 @@ export function setupIpc(): void {
   // ---- misc ----
   ipcMain.handle('app:info', (e) => (isTrustedSender(e) ? { version: app.getVersion() } : null))
   ipcMain.handle('history:clear', (e) => {
-    if (isTrustedSender(e)) historyStore.clear()
+    if (isTrustedSender(e)) {
+      historyStore.clear()
+      // the brief is distilled history — it goes with the history
+      morningBrief.wipe()
+    }
   })
   // Site-info popover: wipe one origin's cookies/storage in the active tab's jar
   ipcMain.handle('privacy:clear-site', async (e) => {

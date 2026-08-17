@@ -202,6 +202,73 @@ export interface BriefSettings {
   unit: 'auto' | 'c' | 'f'
 }
 
+// ---------------- Morning brief ----------------
+// (`brief` above is the WEATHER widget; everything here is named `morning`.)
+
+export interface MorningSettings {
+  /** The once-a-day brief on the first new tab. Needs keepHistory to do anything. */
+  enabled: boolean
+}
+
+/** A site worth going back to — always the host's front door, never a deep URL. */
+export interface MorningSite {
+  /** bare host, www. stripped */
+  host: string
+  /** always `https://${host}/` */
+  url: string
+  /** best title on file for the host, '' allowed */
+  title: string
+  /** whole days since last visit */
+  daysAway: number
+  /** one model-composed line, replaces the daysAway sub-line */
+  note?: string
+}
+
+export interface MorningTopic {
+  /** display form, <= 40 chars, original casing */
+  label: string
+  /** what a click searches for (goes through the omnibox resolver) */
+  query: string
+  /** up to 2 hosts it was seen on — the receipts line */
+  hosts: string[]
+  /** model's one-line why, <= 90 chars */
+  note?: string
+  fromModel: boolean
+}
+
+export interface MorningVideo {
+  title: string
+  /** https://www.youtube.com/watch?v=<id> — always the real origin */
+  url: string
+  channel: string
+  /** ms epoch */
+  publishedAt: number
+}
+
+export interface MorningBrief {
+  /** 'YYYY-MM-DD', local calendar date */
+  day: string
+  /** one plain sentence */
+  greeting: string
+  sites: MorningSite[] // 0..5
+  topics: MorningTopic[] // 0..4
+  videos: MorningVideo[] // 0..3
+  source: 'heuristics' | 'ollama'
+  composedAt: number
+}
+
+/** What the start page hears when it asks whether today's brief is its to show. */
+export type MorningAnswer =
+  | { kind: 'brief'; brief: MorningBrief }
+  | { kind: 'enable-history' }
+  | { kind: 'none' }
+
+export interface MorningStatus {
+  ollama: { reachable: boolean; host: string; model: string | null }
+  historyEntries: number
+  todayState: 'unseen' | 'seen' | 'dismissed'
+}
+
 export type AccentId = 'sea' | 'kelp' | 'dusk' | 'sand'
 export type WaveStyle = 'classic' | 'dithered'
 export type ThemePref = 'system' | 'light' | 'dark'
@@ -504,6 +571,8 @@ export interface Settings {
   privacy: PrivacySettings
   passwords: PasswordSettings
   brief: BriefSettings
+  /** The once-a-day morning brief on the first new tab (not the weather widget). */
+  morning: MorningSettings
   restoreSession: boolean
   /** Remember visited pages so they can come back as omnibox suggestions. Off by default. */
   keepHistory: boolean
@@ -953,6 +1022,9 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   passwords: { enabled: true },
   brief: { enabled: true, locationName: '', lat: null, lon: null, unit: 'auto' },
+  // on by default; it self-suppresses while keepHistory is off (the enable card
+  // is the only surface)
+  morning: { enabled: true },
   restoreSession: true,
   keepHistory: false,
   searchSuggestions: true,

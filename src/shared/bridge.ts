@@ -9,6 +9,8 @@ import type {
   ExtensionInfo,
   GeocodeResult,
   Insets,
+  MorningAnswer,
+  MorningStatus,
   PasswordMeta,
   PasswordsStatus,
   Settings,
@@ -183,6 +185,14 @@ export interface OffshoreInternalApi {
   brief: {
     weather(): Promise<BriefWeather | null>
     geocode(q: string): Promise<GeocodeResult[]>
+  }
+  morning: {
+    /** Is today's brief this page's to show? Claim-on-ask, once per day. */
+    get(): Promise<MorningAnswer>
+    /** Put today's brief away — it will not come back until tomorrow. */
+    dismiss(): Promise<void>
+    /** For the settings page's status line. */
+    status(): Promise<MorningStatus>
   }
   history: { clear(): Promise<void> }
   /** The built-in Shield's lifetime ledger; per-tab counts ride TabInfo. */

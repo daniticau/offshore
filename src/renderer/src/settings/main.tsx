@@ -9,6 +9,7 @@ import type {
   NewTabWidgets,
   ExtensionInfo,
   GeocodeResult,
+  MorningStatus,
   PasswordMeta,
   PasswordsStatus,
   Settings,
@@ -530,6 +531,36 @@ function BookmarksSection(): React.JSX.Element {
 
 // ---------------- New Tab (widgets) section ----------------
 
+/** One status sentence for the Morning brief card, from morning:status. */
+function MorningStatusRow({ settings, patch }: { settings: Settings; patch: (p: Partial<Settings>) => void }): React.JSX.Element {
+  const [status, setStatus] = useState<MorningStatus | null>(null)
+
+  useEffect(() => {
+    void internal?.morning.status().then((s) => s && setStatus(s))
+  }, [])
+
+  if (!settings.keepHistory) {
+    return (
+      <div className="row">
+        <div className="row-sub">Needs local history.</div>
+        <button className="ghost" onClick={() => patch({ keepHistory: true })}>
+          Turn on
+        </button>
+      </div>
+    )
+  }
+  if (!status) return <div className="row"><div className="row-sub">Checking for a local model…</div></div>
+  return (
+    <div className="row">
+      <div className="row-sub">
+        {status.ollama.reachable && status.ollama.model
+          ? `Composed by ${status.ollama.model} — Ollama on this machine.`
+          : `Ollama not found at ${status.ollama.host} — using Offshore's built-in heuristics. Everything stays local either way.`}
+      </div>
+    </div>
+  )
+}
+
 function NewTabSection({ settings, patch }: { settings: Settings; patch: (p: Partial<Settings>) => void }): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<GeocodeResult[]>([])
@@ -659,6 +690,24 @@ function NewTabSection({ settings, patch }: { settings: Settings; patch: (p: Par
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="card">
+          <div className="row">
+            <div className="row-title">
+              Morning brief
+              <div className="row-sub">
+                The first new tab of the day can greet you with sites to revisit, topics to
+                learn, and new videos from channels you watch. Built from your local history,
+                entirely on this Mac.
+              </div>
+            </div>
+            <Toggle
+              on={settings.morning.enabled}
+              onChange={(v) => patch({ morning: { enabled: v } })}
+            />
+          </div>
+          {settings.morning.enabled && <MorningStatusRow settings={settings} patch={patch} />}
         </div>
       </section>
     )

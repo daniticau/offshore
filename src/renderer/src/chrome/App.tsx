@@ -171,6 +171,13 @@ function ContentFrame({
  * address bar on a new tab. There is no need for one: the chrome can draw that
  * page itself, live, waves and all. So it does, and the water keeps moving while
  * you type. It is a stand-in, though, not a page — it takes no clicks.
+ *
+ * Neither home passes `morning` to HomeCanvas: the once-a-day brief belongs to
+ * the offshore://start tab alone (start/main.tsx), which claims it over the
+ * internal bridge. Known seam, accepted for v1: while the omnibox overlay is up
+ * over a brief-bearing start tab, the stand-in shows the home without the
+ * brief, dimmed and briefly. If that ever grates, the fix is a read-only
+ * `morning:peek` for the chrome — not a second claim.
  */
 function ChromeHome({
   settings,

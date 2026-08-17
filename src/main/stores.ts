@@ -85,6 +85,7 @@ function mergeSettings(base: Settings, patch: Partial<Settings>): Settings {
     })(),
     passwords: { ...base.passwords, ...(patch.passwords ?? {}) },
     brief: { ...base.brief, ...(patch.brief ?? {}) },
+    morning: { ...base.morning, ...(patch.morning ?? {}) },
     slop: { ...base.slop, ...(patch.slop ?? {}) },
     focus: { ...base.focus, ...(patch.focus ?? {}) }
   }
@@ -382,7 +383,7 @@ class BookmarksStore extends EventEmitter {
 
 // ---------------- History ----------------
 
-interface HistoryEntry {
+export interface HistoryEntry {
   url: string
   title: string
   visitCount: number
@@ -423,6 +424,24 @@ class HistoryStore {
       e.title = title
       this.file.save()
     }
+  }
+
+  /** Read-only view for the morning brief's distiller. */
+  entries(): ReadonlyArray<HistoryEntry> {
+    return this.file.data.entries
+  }
+
+  /**
+   * Test harness only: seed entries with explicit timestamps. Exists because
+   * `record()` stamps `lastVisit = Date.now()` and the morning flow needs
+   * entries that are days old.
+   */
+  inject(list: HistoryEntry[]): void {
+    for (const e of list) {
+      this.byUrl.set(e.url, e)
+      this.file.data.entries.push(e)
+    }
+    this.file.save()
   }
 
   /** Frecency-ish search over history for omnibox suggestions. */

@@ -327,7 +327,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor|shield
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor|shield|morning
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -370,7 +370,7 @@ function setupTestFlows(): void {
 
   const KNOWN_FLOWS = [
     'chrome', 'passwords', 'popups', 'spaces', 'headers', 'privacy',
-    'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus', 'harbor', 'shield'
+    'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus', 'harbor', 'shield', 'morning'
   ]
 
   async function runFlow(): Promise<void> {
@@ -535,6 +535,367 @@ function setupTestFlows(): void {
       w.tabs.navigate(null, 'example.com')
       await delay(1200)
       check('typing creates the first tab', w.tabs.tabs.length === 1)
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
+    if (flow === 'morning') {
+      /**
+       * The morning brief end to end, offline: the keepHistory-off enable card
+       * and its one-click round-trip, an Ollama-composed brief against a
+       * fixture server (digest hygiene asserted on the wire: hosts + titles,
+       * never a URL, never a cookie), YouTube RSS picks with the watched video
+       * excluded, the day gate (second tab plain, reload keeps the claim,
+       * per-day cache never recomposes), dismiss, the heuristic tier when
+       * Ollama is genuinely unreachable, and the thin-history gate.
+       */
+      if (!process.env['OFFSHORE_CLEAN_PROFILE']) {
+        // seeds and clears history, flips keepHistory — never against a
+        // lived-in profile
+        say('[flowtest] morning flow requires OFFSHORE_CLEAN_PROFILE')
+        app.exit(1)
+        return
+      }
+      const { settingsStore, historyStore } = await import('./stores')
+      const { morningBrief } = await import('./morningbrief')
+      const D = 86_400_000
+
+      // ---- fixture server: YouTube handle page + RSS, and a fake Ollama ----
+      interface Logged {
+        method: string
+        url: string
+        cookie: string | null
+        body: string
+      }
+      const reqLog: Logged[] = []
+      const iso = (msAgo: number): string => new Date(Date.now() - msAgo).toISOString()
+      const feedXml = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns="http://www.w3.org/2005/Atom">
+ <title>Fixture Channel</title>
+ <author><name>Fixture Channel</name></author>
+ <entry>
+  <yt:videoId>fixvid00001</yt:videoId>
+  <title>Fixture video one</title>
+  <published>${iso(1 * D)}</published>
+ </entry>
+ <entry>
+  <yt:videoId>fixvid00002</yt:videoId>
+  <title>Fixture video two</title>
+  <published>${iso(2 * D)}</published>
+ </entry>
+</feed>`
+      const chatReply = JSON.stringify({
+        message: {
+          content: JSON.stringify({
+            greeting: 'Fixture morning.',
+            topics: [
+              { label: 'sourdough starter', query: 'sourdough starter', why: 'three guides this week' }
+            ],
+            siteNotes: [{ host: 'news.ycombinator.com', why: 'your quiet regular' }]
+          })
+        },
+        done: true
+      })
+      const server = nodeHttp.createServer((req, res) => {
+        let body = ''
+        req.on('data', (c) => (body += c))
+        req.on('end', () => {
+          reqLog.push({
+            method: req.method ?? '',
+            url: req.url ?? '',
+            cookie: req.headers.cookie ?? null,
+            body
+          })
+          const path = (req.url ?? '/').split('?')[0]
+          if (path === '/@fixturechannel') {
+            res.setHeader('content-type', 'text/html')
+            res.end('<html><head><script>var d={"channelId":"UCabcdefghijklmnopqrstuv"}</script></head><body>fixture channel</body></html>')
+          } else if (path === '/feeds/videos.xml') {
+            res.setHeader('content-type', 'application/atom+xml')
+            res.end(feedXml)
+          } else if (path === '/api/tags') {
+            res.setHeader('content-type', 'application/json')
+            res.end('{"models":[{"name":"llama3.2:3b","details":{"parameter_size":"3.2B"}}]}')
+          } else if (path === '/api/chat') {
+            res.setHeader('content-type', 'application/json')
+            res.end(chatReply)
+          } else {
+            res.statusCode = 404
+            res.end('')
+          }
+        })
+      })
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+      const port = (server.address() as { port: number }).port
+      // a port that answers nothing — bound once, closed, then used as the
+      // "Ollama is gone" address (connection refused, instantly)
+      const deadServer = nodeHttp.createServer()
+      await new Promise<void>((r) => deadServer.listen(0, '127.0.0.1', r))
+      const deadPort = (deadServer.address() as { port: number }).port
+      await new Promise<void>((r) => deadServer.close(() => r()))
+
+      const shotDir = process.env['OFFSHORE_SHOT']
+      const shoot = async (tab: NonNullable<typeof w.tabs.activeTab>, name: string): Promise<void> => {
+        if (!shotDir) return
+        mkdirSync(shotDir, { recursive: true })
+        surface(w)
+        w.tabs.setActiveVisible(true)
+        await delay(900)
+        const img = await tab.wc.capturePage()
+        writeFileSync(join(shotDir, name), img.toPNG())
+        say(`[flowtest] wrote ${join(shotDir, name)}`)
+      }
+
+      // a clean profile opens on the welcome page; the brief belongs to real
+      // new tabs, so step past onboarding first
+      settingsStore.set({ onboarded: true })
+
+      // The window must be up and painting before any start tab is probed —
+      // a never-shown window starves the page of frames and the card checks
+      // with it (the chrome flow surfaces early for the same reason).
+      surface(w)
+      w.tabs.setActiveVisible(true)
+
+      // Warm the renderer: the first start-page request of a dev run compiles
+      // the page, which can take longer than any sane settle. Absorb it on a
+      // throwaway tab (its enable-card claim is wiped right after).
+      const tWarm = w.tabs.createTab()
+      await settle(
+        async () =>
+          ((await tWarm.wc.executeJavaScript(`!!document.querySelector('.start-grid')`)) === true
+            ? true
+            : undefined),
+        60_000
+      )
+      w.tabs.closeTab(tWarm.id)
+      await delay(400)
+
+      // ---- 1. keepHistory off: the enable card, once, on the first tab ----
+      morningBrief.wipe()
+      const t1 = w.tabs.createTab()
+      const card1 = await settle(
+        async () =>
+          ((await t1.wc.executeJavaScript(`!!document.querySelector('.morning-card.enable')`)) === true
+            ? true
+            : undefined),
+        15_000
+      )
+      check('enable card shows when history is off', card1 === true)
+      await shoot(t1, 'enable-card.png')
+
+      // ---- 2. its one button flips the setting, and no brief materializes ----
+      await t1.wc.executeJavaScript(`(document.querySelector('.morning-enable-btn')?.click(), true)`)
+      const flipped = await settle(
+        async () => (settingsStore.get().keepHistory === true ? true : undefined),
+        6000
+      )
+      check("the card's button flips keepHistory on", flipped === true)
+      const confirm1 = JSON.parse(
+        (await t1.wc.executeJavaScript(
+          `JSON.stringify({done: (document.querySelector('.morning-enable-done')?.textContent ?? ''),
+                           sites: document.querySelectorAll('.morning-site').length})`
+        )) as string
+      ) as { done: string; sites: number }
+      check(
+        'confirmation line shows, no brief from an empty history',
+        confirm1.done.includes('History is on') && confirm1.sites === 0,
+        JSON.stringify(confirm1)
+      )
+
+      // ---- 3. fixture history + fake Ollama: the composed brief ----
+      historyStore.clear()
+      const now = Date.now()
+      historyStore.inject([
+        // revisit bait: frecent but 5 days adrift
+        { url: 'https://news.ycombinator.com/item?id=1', title: 'An engine that runs on tides', visitCount: 3, lastVisit: now - 5 * D },
+        { url: 'https://news.ycombinator.com/item?id=2', title: 'The forgotten harbor light', visitCount: 3, lastVisit: now - 5 * D },
+        { url: 'https://news.ycombinator.com/item?id=3', title: 'On small boats', visitCount: 3, lastVisit: now - 5 * D },
+        { url: 'https://news.ycombinator.com/', title: 'Hacker News', visitCount: 3, lastVisit: now - 5 * D },
+        // same-day control: heavily visited today must NOT read as "revisit"
+        { url: 'https://example.org/', title: 'Example Domain', visitCount: 9, lastVisit: now },
+        // topic cluster: 3 entries, 2 hosts
+        { url: 'https://bread.example/guide', title: 'Sourdough starter guide', visitCount: 2, lastVisit: now - 2 * D },
+        { url: 'https://loaves.example/feeding', title: 'Feeding a sourdough starter', visitCount: 2, lastVisit: now - 2 * D },
+        { url: 'https://bread.example/hydration', title: 'Sourdough starter hydration', visitCount: 2, lastVisit: now - 2 * D },
+        // channel page (handle) + watched control
+        { url: 'https://www.youtube.com/@fixturechannel', title: 'Fixture Channel - YouTube', visitCount: 4, lastVisit: now - 2 * D },
+        { url: 'https://www.youtube.com/watch?v=fixvid00002', title: 'Fixture video two - YouTube', visitCount: 1, lastVisit: now - 2 * D },
+        // padding to clear the 4-host / 8-entry thin gate
+        { url: 'https://tides.example/', title: 'Tide almanac', visitCount: 1, lastVisit: now - 3 * D },
+        { url: 'https://charts.example/', title: 'Coastal charts', visitCount: 1, lastVisit: now - 3 * D }
+      ])
+      morningBrief.wipe()
+      process.env['OLLAMA_HOST'] = `http://127.0.0.1:${port}`
+      process.env['OFFSHORE_TEST_YT_ORIGIN'] = `http://127.0.0.1:${port}`
+      const composed = await morningBrief.composeForTest()
+      say(`[flowtest] composed: ${JSON.stringify(composed && { source: composed.source, sites: composed.sites.length, topics: composed.topics.length, videos: composed.videos.length })}`)
+      const countAfterCompose = morningBrief.composeCountForTest()
+
+      const t2 = w.tabs.createTab()
+      say(`[flowtest] tabs: t1=${t1.id} t2=${t2.id} all=${JSON.stringify(w.tabs.tabs.map((t) => t.id))}`)
+      const probeBrief = async (tab: typeof t2): Promise<{
+        card: boolean
+        greeting: string
+        sites: string[]
+        topics: string[]
+        videos: string[]
+      } | undefined> => {
+        const raw = (await tab.wc.executeJavaScript(
+          `JSON.stringify({
+             card: !!document.querySelector('.morning-card'),
+             greeting: document.querySelector('.morning-greeting')?.textContent ?? '',
+             sites: [...document.querySelectorAll('.morning-site')].map((r) => r.textContent),
+             topics: [...document.querySelectorAll('.morning-topic')].map((r) => r.textContent),
+             videos: [...document.querySelectorAll('.morning-video .morning-main')].map((r) => r.textContent)
+           })`
+        )) as string
+        const p = JSON.parse(raw) as { card: boolean; greeting: string; sites: string[]; topics: string[]; videos: string[] }
+        return p.card ? p : undefined
+      }
+      const brief = await settle(async () => probeBrief(t2), 12_000)
+      say(`[flowtest] brief DOM: ${JSON.stringify(brief)}`)
+      check('the brief renders on the first start tab', !!brief)
+      check('Ollama composed the greeting', brief?.greeting === 'Fixture morning.', brief?.greeting)
+      const hnRow = (brief?.sites ?? []).find((s) => s.includes('news.ycombinator.com'))
+      check('revisit row surfaces the drifted site', !!hnRow)
+      check('siteNote merged onto the heuristic row', (hnRow ?? '').includes('your quiet regular'), hnRow)
+      const allRows = [...(brief?.sites ?? []), ...(brief?.topics ?? []), ...(brief?.videos ?? [])]
+      check('a same-day site is not "revisit" bait', !allRows.some((r) => r.includes('example.org')))
+      check(
+        'topic cluster surfaced',
+        (brief?.topics ?? []).some((t) => t.toLowerCase().includes('sourdough'))
+      )
+      check(
+        'one RSS pick, the watched video excluded',
+        brief?.videos.length === 1 && brief?.videos[0] === 'Fixture video one',
+        JSON.stringify(brief?.videos)
+      )
+      check(
+        'handle resolved over the fixture',
+        reqLog.some((l) => l.url.startsWith('/@fixturechannel'))
+      )
+      check(
+        'channel feed fetched over the fixture',
+        reqLog.some((l) => l.url.startsWith('/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv'))
+      )
+      check(
+        'no fetch carries a cookie',
+        reqLog.every((l) => l.cookie === null),
+        JSON.stringify(reqLog.filter((l) => l.cookie !== null).map((l) => l.url))
+      )
+      await shoot(t2, 'brief.png')
+
+      // ---- 4. digest hygiene: hosts and titles reach the model, URLs never ----
+      say(`[flowtest] fixture requests: ${JSON.stringify(reqLog.map((l) => `${l.method} ${l.url}`))}`)
+      const chat = reqLog.find((l) => l.method === 'POST' && l.url === '/api/chat')
+      check('the model was asked once', !!chat && reqLog.filter((l) => l.url === '/api/chat').length === 1)
+      check('digest names the top host', (chat?.body ?? '').includes('news.ycombinator.com'))
+      check(
+        'no URL reaches the model',
+        !!chat && !/https?:\/\//.test(chat.body) && !chat.body.includes('watch?v='),
+        (chat?.body ?? '').slice(0, 160)
+      )
+      let digestShape = ''
+      try {
+        const req = JSON.parse(chat?.body ?? '{}') as { messages?: { role: string; content: string }[] }
+        const digest = JSON.parse(req.messages?.find((m) => m.role === 'user')?.content ?? '{}') as Record<string, unknown>
+        const hostRows = (digest.topHosts as Record<string, unknown>[]) ?? []
+        digestShape = JSON.stringify({
+          keys: Object.keys(digest).sort(),
+          hostKeys: [...new Set(hostRows.flatMap((h) => Object.keys(h)))].sort(),
+          titles: Array.isArray(digest.recentTitles) && (digest.recentTitles as unknown[]).every((t) => typeof t === 'string')
+        })
+      } catch {
+        digestShape = 'unparseable'
+      }
+      check(
+        'digest shape is exactly hosts+titles+day+part',
+        digestShape ===
+          JSON.stringify({
+            keys: ['dayOfWeek', 'partOfDay', 'recentTitles', 'topHosts'],
+            hostKeys: ['daysSinceLast', 'host', 'visits'],
+            titles: true
+          }),
+        digestShape
+      )
+
+      // ---- 5. the day gate: a second tab is plain; a reload keeps the claim ----
+      const t3 = w.tabs.createTab()
+      await settle(
+        async () => ((await t3.wc.executeJavaScript(`!!document.querySelector('.start-grid')`)) === true ? true : undefined),
+        10_000
+      )
+      await delay(1200)
+      const t3card = await t3.wc.executeJavaScript(`!!document.querySelector('.morning-card')`)
+      check('second tab of the day is plain', t3card === false)
+      t2.wc.reload()
+      const briefBack = await settle(async () => probeBrief(t2), 12_000)
+      check("a reload keeps the claimant's brief", briefBack?.greeting === 'Fixture morning.')
+      check(
+        'the day is served from cache, never recomposed',
+        morningBrief.composeCountForTest() === countAfterCompose,
+        `composes=${morningBrief.composeCountForTest()} vs ${countAfterCompose}`
+      )
+
+      // ---- 6. dismiss consumes the day ----
+      await t2.wc.executeJavaScript(`(document.querySelector('.morning-dismiss')?.click(), true)`)
+      const dismissed = await settle(
+        async () => ((await morningBrief.status()).todayState === 'dismissed' ? true : undefined),
+        6000
+      )
+      check('dismiss lands in the stamp', dismissed === true)
+      const t4 = w.tabs.createTab()
+      await settle(
+        async () => ((await t4.wc.executeJavaScript(`!!document.querySelector('.start-grid')`)) === true ? true : undefined),
+        10_000
+      )
+      await delay(1200)
+      check(
+        'dismiss consumes the day',
+        (await t4.wc.executeJavaScript(`!!document.querySelector('.morning-card')`)) === false
+      )
+
+      // ---- 7. stamp rollover + Ollama genuinely gone: heuristics carry it ----
+      morningBrief.resetDayForTest()
+      process.env['OLLAMA_HOST'] = `http://127.0.0.1:${deadPort}`
+      const t5 = w.tabs.createTab()
+      const fallback = await settle(async () => probeBrief(t5), 15_000)
+      say(`[flowtest] fallback DOM: ${JSON.stringify(fallback)}`)
+      check('stamp rollover shows the brief again', !!fallback)
+      check(
+        'heuristic greeting, a plain sentence',
+        !!fallback && fallback.greeting !== 'Fixture morning.' && fallback.greeting.endsWith('.'),
+        fallback?.greeting
+      )
+      check(
+        'topics survive without the model',
+        (fallback?.topics ?? []).some((t) => t.toLowerCase().includes('sourdough'))
+      )
+      check('the cache says heuristics', morningBrief.cacheForTest()?.source === 'heuristics')
+
+      // ---- 8. thin history stays quiet and does not burn the day ----
+      morningBrief.resetDayForTest()
+      historyStore.clear()
+      const t6 = w.tabs.createTab()
+      await settle(
+        async () => ((await t6.wc.executeJavaScript(`!!document.querySelector('.start-grid')`)) === true ? true : undefined),
+        10_000
+      )
+      await delay(1500)
+      const t6card = await t6.wc.executeJavaScript(`!!document.querySelector('.morning-card')`)
+      const thinState = (await morningBrief.status()).todayState
+      check('a thin history shows nothing', t6card === false)
+      check('…and the day is not stamped', thinState === 'unseen', thinState)
+
+      // ---- 9. cleanup: nothing leaks into the next flow ----
+      settingsStore.set({ keepHistory: false }) // auto-clears history + wipes morning
+      morningBrief.wipe()
+      delete process.env['OLLAMA_HOST']
+      delete process.env['OFFSHORE_TEST_YT_ORIGIN']
+      server.close()
+      settingsStore.flush()
+      historyStore.flush()
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)
       return

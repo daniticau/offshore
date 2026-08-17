@@ -8,6 +8,7 @@ import { harbor } from './harbor'
 import { setupIpc } from './ipc'
 import { installMenu } from './menu'
 import { focusStore } from './focus'
+import { morningBrief } from './morningbrief'
 import { passwordVault } from './passwords'
 import { flushAllStores, historyStore, sessionStore, settingsStore } from './stores'
 import { initSessions, prepareTabSession, TAB_PARTITION } from './sessions'
@@ -153,8 +154,14 @@ void app.whenReady().then(async () => {
     if (next.appearance.theme !== prev.appearance.theme) {
       applyTheme(next.appearance.theme)
     }
-    // Turning history off should also forget what we already kept
-    if (prev.keepHistory && !next.keepHistory) historyStore.clear()
+    // Turning history off should also forget what we already kept — and the
+    // morning brief, which is distilled from it
+    if (prev.keepHistory && !next.keepHistory) {
+      historyStore.clear()
+      morningBrief.wipe()
+    }
+    // Turning the brief itself off forgets everything it kept
+    if (prev.morning.enabled && !next.morning.enabled) morningBrief.wipe()
     // First-run onboarding finished: open anything that arrived while it ran
     if (!prev.onboarded && next.onboarded) flushPendingUrls()
   })
@@ -176,6 +183,11 @@ void app.whenReady().then(async () => {
       createWindow(initial.length ? initial : undefined)
     }
   }
+
+  // Warm-compose the morning brief off the startup path: Ollama's cold model
+  // load is absorbed here so the first ⌘T answers from cache instantly. A
+  // no-op unless keepHistory is on and today is still unseen.
+  setTimeout(() => void morningBrief.warm(), 5000)
 
   app.on('activate', () => {
     if (windows.size === 0) createWindow()
