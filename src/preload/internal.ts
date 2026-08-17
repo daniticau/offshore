@@ -117,7 +117,9 @@ const api: OffshoreInternalApi = {
      */
     painted: () => ipcRenderer.send('home:painted'),
     /** What the omnibox would offer for the same half-typed word. */
-    suggest: (input: string) => invoke('home:suggest', input)
+    suggest: (input: string) => invoke('home:suggest', input),
+    /** …and what the engine adds once the wire answers. */
+    suggestEngine: (input: string) => invoke('home:suggest-engine', input)
   }
 }
 

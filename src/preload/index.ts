@@ -48,7 +48,9 @@ const api: OffshoreApi = {
     bookmarkContext: (nodeId: string) => invoke('menu:bookmark-context', nodeId)
   },
   omnibox: {
-    suggest: (input: string) => invoke('omnibox:suggest', input)
+    suggest: (input: string) => invoke('omnibox:suggest', input),
+    /** The engine's type-ahead tail — slow half of the list, asked separately. */
+    suggestEngine: (input: string) => invoke('omnibox:suggest-engine', input)
   },
   home: {
     /** Put the new tab's search panel up, or dismiss it and leave the home page. */

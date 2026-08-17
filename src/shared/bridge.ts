@@ -89,7 +89,10 @@ export interface OffshoreApi {
     spaceContext(spaceId: string): Promise<void>
     bookmarkContext(nodeId: string): Promise<void>
   }
-  omnibox: { suggest(input: string): Promise<Suggestion[]> }
+  omnibox: {
+    suggest(input: string): Promise<Suggestion[]>
+    suggestEngine(input: string): Promise<Suggestion[]>
+  }
   home: { setSearch(open: boolean, tabId?: number): Promise<void> }
   actions: { run(id: ActionId): Promise<void> }
   chrome: {
@@ -226,5 +229,7 @@ export interface OffshoreInternalApi {
     painted(): void
     /** What the omnibox would offer for the same half-typed word. */
     suggest(input: string): Promise<Suggestion[]>
+    /** …and what the engine adds once the wire answers. */
+    suggestEngine(input: string): Promise<Suggestion[]>
   }
 }

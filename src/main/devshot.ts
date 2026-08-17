@@ -101,6 +101,13 @@ export function setupDevshot(): void {
       const out = await w.win.webContents.executeJavaScript(probeJs).catch((e) => `err: ${e}`)
       console.log('[devshot] probe', typeof out === 'string' ? out : JSON.stringify(out))
     }
+    /** OFFSHORE_SHOT_PROBE_PAGE=<js>: the same, evaluated in the active tab —
+     * for geometry that lives in a page (the home screen's search pill). */
+    const probePageJs = process.env['OFFSHORE_SHOT_PROBE_PAGE']
+    if (probePageJs && w.tabs.activeTab) {
+      const out = await w.tabs.activeTab.wc.executeJavaScript(probePageJs).catch((e) => `err: ${e}`)
+      console.log('[devshot] probe(page)', typeof out === 'string' ? out : JSON.stringify(out))
+    }
     const tab = w.tabs.activeTab
     if (tab) {
       const pageImg = await tab.wc.capturePage()
@@ -261,6 +268,12 @@ export function setupDevshot(): void {
         .executeJavaScript(`document.querySelectorAll('.omni-suggestion').length`)
         .catch(() => -1)
       console.log('[devshot] omnibox rows:', rows)
+      /* The probe already ran once before the dropdown existed; anyone asking
+       * for geometry alongside omnibox.png means the dropdown's geometry. */
+      if (probeJs) {
+        const out = await w.win.webContents.executeJavaScript(probeJs).catch((e) => `err: ${e}`)
+        console.log('[devshot] probe(omnibox)', typeof out === 'string' ? out : JSON.stringify(out))
+      }
       const shot = await w.win.webContents.capturePage()
       writeFileSync(join(dir!, 'omnibox.png'), shot.toPNG())
     }
@@ -2641,13 +2654,19 @@ function setupTestFlows(): void {
         w.win.webContents.executeJavaScript(src) as Promise<T>
       const { settingsStore } = await import('./stores')
 
-      // 1. the address bar finishes what you type
+      // 1. the address bar finishes what you type — in two halves now: the
+      // local list answers from the stores without touching the wire, and the
+      // engine's type-ahead arrives separately to append under it.
       const sugs = await inChrome<{ kind: string; text: string }[]>(
         `window.offshore.omnibox.suggest('canv')`
       )
-      say(`[flowtest] suggestions: ${JSON.stringify(sugs.map((s) => `${s.kind}:${s.text}`))}`)
-      check('the dropdown has something to show', sugs.length > 0)
-      const guesses = sugs.filter((s) => s.kind === 'search' && s.text.toLowerCase() !== 'canv')
+      say(`[flowtest] local suggestions: ${JSON.stringify(sugs.map((s) => `${s.kind}:${s.text}`))}`)
+      check('the local half has something to show without the network', sugs.length > 0)
+      const tail = await inChrome<{ kind: string; text: string }[]>(
+        `window.offshore.omnibox.suggestEngine('canv')`
+      )
+      say(`[flowtest] engine tail: ${JSON.stringify(tail.map((s) => `${s.kind}:${s.text}`))}`)
+      const guesses = tail.filter((s) => s.kind === 'search' && s.text.toLowerCase() !== 'canv')
       check('engine type-ahead reaches the dropdown (needs network)', guesses.length > 0)
 
       // 1b. …and the list really stands on the page in the sidebar layout, where
@@ -2713,6 +2732,24 @@ function setupTestFlows(): void {
       check('the dropdown is on screen while typing', !!drop && drop.rows > 0)
       check('it hangs past the sidebar instead of being squeezed into it', (drop?.width ?? 0) > 320)
       check('the page steps aside behind it', drop?.frozen === true)
+      /*
+       * The engine tail APPENDS under the local rows — it must never yank the
+       * row your cursor is on. Wait for the list to grow past the local half,
+       * then ask whether the top row still reads as what was typed.
+       */
+      const grown = await settle(async () => {
+        const g = await inChrome<{ rows: number; first: string } | null>(`(() => {
+          const d = document.querySelector('.omni-dropdown')
+          if (!d) return null
+          const rows = d.querySelectorAll('.omni-suggestion').length
+          const first = d.querySelector('.omni-suggestion .s-text')?.textContent ?? ''
+          return rows > ${sugs.length} ? { rows, first } : null
+        })()`)
+        return g ?? undefined
+      }, 5000)
+      say(`[flowtest] engine merge: ${JSON.stringify(grown)}`)
+      check('the engine tail appends under the local rows (needs network)', !!grown && grown.rows > sugs.length)
+      check('the merge never yanks the top row', grown?.first === 'canv', JSON.stringify(grown))
       // The list reads as an extension of the pill: a suggestion's first letter
       // sits exactly under the one you typed, in the same size type.
       const align = await inChrome<{ input: number; text: number; fi: string; fs: string } | null>(
@@ -2998,7 +3035,8 @@ function setupTestFlows(): void {
         (await inChrome<boolean>(`!!document.querySelector('.new-tab-btn.active')`)) === true
       )
 
-      // the new tab's search finishes your sentence, the way the omnibox does
+      // the new tab's search finishes your sentence, the way the omnibox does:
+      // local rows on their own first, the engine's tail appended after
       const home = w.tabs.activeTab
       await home?.wc.executeJavaScript(`(() => {
         const el = document.querySelector('.start-search input')
@@ -3008,12 +3046,51 @@ function setupTestFlows(): void {
         el.dispatchEvent(new Event('input', { bubbles: true }))
         return true
       })()`)
-      await delay(1800)
-      const homeSugs = await home?.wc.executeJavaScript(
-        `document.querySelectorAll('.start-sug').length`
+      const homeLocal = await settle(
+        () => home?.wc.executeJavaScript(`document.querySelectorAll('.start-sug').length`) as Promise<number>,
+        3000
       )
-      say(`[flowtest] home search rows: ${homeSugs}`)
-      check('the new tab search offers suggestions too (needs network)', Number(homeSugs) > 0, String(homeSugs))
+      say(`[flowtest] home search rows (local): ${homeLocal}`)
+      check('the new tab search offers rows without the network', Number(homeLocal) > 0, String(homeLocal))
+      const homeAll = await settle(async () => {
+        const n = (await home?.wc.executeJavaScript(
+          `document.querySelectorAll('.start-sug').length`
+        )) as number
+        return n > 1 ? n : undefined
+      }, 5000)
+      say(`[flowtest] home search rows (with engine tail): ${homeAll}`)
+      check('the engine tail reaches the new tab search too (needs network)', Number(homeAll) > 1, String(homeAll))
+
+      /*
+       * The pill's own geometry, the two things the eye checks first:
+       * a row's words start exactly under the input's first character (the
+       * glyph lives in the gutter left of that line, like the magnifier), and
+       * the summoned search stands in the upper third — launcher height —
+       * rather than floating at mid-screen.
+       */
+      const pillGeom = await home?.wc.executeJavaScript(`(() => {
+        const input = document.querySelector('.start-search input')
+        const st = document.querySelector('.start-sug .start-sug-text')
+        const pill = document.querySelector('.start-search')
+        if (!input || !st || !pill) return null
+        const pr = pill.getBoundingClientRect()
+        return {
+          inputX: Math.round(input.getBoundingClientRect().left * 2) / 2,
+          rowTextX: Math.round(st.getBoundingClientRect().left * 2) / 2,
+          centerFrac: Math.round(((pr.top + pr.height / 2) / innerHeight) * 1000) / 1000
+        }
+      })()`) as { inputX: number; rowTextX: number; centerFrac: number } | null
+      say(`[flowtest] home pill geometry: ${JSON.stringify(pillGeom)}`)
+      check(
+        'a row\'s words start under the input\'s first character',
+        !!pillGeom && Math.abs(pillGeom.inputX - pillGeom.rowTextX) <= 1.5,
+        JSON.stringify(pillGeom)
+      )
+      check(
+        'the summoned search stands at launcher height, not mid-screen',
+        !!pillGeom && pillGeom.centerFrac > 0.18 && pillGeom.centerFrac < 0.4,
+        JSON.stringify(pillGeom)
+      )
 
       /*
        * The ⋮ menu over a new-tab page: the home stand-in that takes the

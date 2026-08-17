@@ -124,23 +124,27 @@ function defaultSuggestions(): Suggestion[] {
 const SUGGESTION_MAX = 8
 
 /**
- * The dropdown's contents, in Chromium's order of usefulness: a tab you already
- * have open, then where this input would actually go, then the pages you know,
- * then — filling whatever room is left — what the engine thinks you are typing.
+ * The dropdown's network half: the rows the engine's type-ahead would add AFTER
+ * the local list. It is asked for separately — local rows paint the instant a
+ * key goes down, and these append when the wire answers, so a slow engine can
+ * never hold a page you've already been to hostage. Deduped against the local
+ * list here (recomputed from the same stores, so the two halves agree) and
+ * capped so local + engine never exceeds SUGGESTION_MAX.
  */
-async function buildSuggestions(input: string, w?: OffshoreWindow): Promise<Suggestion[]> {
-  const local = localSuggestions(input, w)
+async function engineSuggestions(input: string, w?: OffshoreWindow): Promise<Suggestion[]> {
   const q = input.trim()
   const settings = settingsStore.get()
-  if (!settings.searchSuggestions || q.length < 2 || local.length >= SUGGESTION_MAX) return local
+  if (!settings.searchSuggestions || q.length < 2) return []
+  const local = localSuggestions(input, w)
+  if (local.length >= SUGGESTION_MAX) return []
 
   const words = await searchSuggestions(q, settings.searchEngine)
-  if (!words.length) return local
+  if (!words.length) return []
   const engine = SEARCH_ENGINES[settings.searchEngine] ?? SEARCH_ENGINES.duckduckgo
   const taken = new Set(local.map((s) => s.text.trim().toLowerCase()))
-  const out = [...local]
+  const out: Suggestion[] = []
   for (const word of words) {
-    if (out.length >= SUGGESTION_MAX) break
+    if (local.length + out.length >= SUGGESTION_MAX) break
     if (taken.has(word.toLowerCase())) continue
     taken.add(word.toLowerCase())
     out.push({
@@ -152,6 +156,11 @@ async function buildSuggestions(input: string, w?: OffshoreWindow): Promise<Sugg
   return out
 }
 
+/**
+ * The dropdown's local half, in Chromium's order of usefulness: a tab you
+ * already have open, then where this input would actually go, then the pages
+ * you know. Synchronous — every source is an in-memory store.
+ */
 function localSuggestions(input: string, w?: OffshoreWindow): Suggestion[] {
   const q = input.trim()
   if (!q) return defaultSuggestions()
@@ -626,18 +635,30 @@ export function setupIpc(): void {
   })
 
   // ---- omnibox ----
+  /*
+   * Two calls per keystroke, on purpose: `suggest` answers from the stores in
+   * the same tick — history, bookmarks, open tabs, the URL guess — and
+   * `suggest-engine` goes out over the wire. The dropdown paints the first and
+   * appends the second, so typing never waits on the network.
+   */
   ipcMain.handle('omnibox:suggest', (e, input: string) =>
-    isTrustedSender(e) ? buildSuggestions(input, chromeWindow(e)) : []
+    isTrustedSender(e) ? localSuggestions(String(input ?? ''), chromeWindow(e)) : []
+  )
+  ipcMain.handle('omnibox:suggest-engine', (e, input: string) =>
+    isTrustedSender(e) ? engineSuggestions(String(input ?? ''), chromeWindow(e)) : []
   )
 
   /**
-   * The same list for the home screen's search. It asks as a tab page rather
+   * The same pair for the home screen's search. It asks as a tab page rather
    * than as the chrome, so the window is the one that owns the sender — without
    * this the panel on every new tab was the one search in the app with no
    * type-ahead under it at all.
    */
   ipcMain.handle('home:suggest', (e, input: string) =>
-    isTrustedSender(e) ? buildSuggestions(String(input ?? ''), windowForTab(e.sender.id)) : []
+    isTrustedSender(e) ? localSuggestions(String(input ?? ''), windowForTab(e.sender.id)) : []
+  )
+  ipcMain.handle('home:suggest-engine', (e, input: string) =>
+    isTrustedSender(e) ? engineSuggestions(String(input ?? ''), windowForTab(e.sender.id)) : []
   )
 
   /**

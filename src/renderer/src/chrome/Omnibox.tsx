@@ -98,7 +98,8 @@ export function Omnibox({
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [selected, setSelected] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Bumped per keystroke; a response for any older keystroke is dropped. */
+  const querySeq = useRef(0)
   const lastLen = useRef(0)
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -143,7 +144,7 @@ export function Omnibox({
 
   const endEditing = useCallback(
     (refocusPage: boolean) => {
-      if (debounce.current) clearTimeout(debounce.current)
+      querySeq.current++
       setEditing(false)
       setTyped('')
       setSuggestions([])
@@ -154,26 +155,42 @@ export function Omnibox({
     []
   )
 
-  /** Empty input is a real query here: it asks for the top-sites list. */
+  /**
+   * Empty input is a real query here: it asks for the top-sites list.
+   *
+   * Two asks per keystroke, both fired now: the local list (history, bookmarks,
+   * open tabs, the URL guess) paints the moment it answers — in-memory stores,
+   * so effectively this frame — and the engine's type-ahead appends to it when
+   * the wire catches up. Appends, never reorders: the rows already under your
+   * cursor hold still, and a response from a superseded keystroke is dropped.
+   */
   const fetchSuggestions = (raw: string, grew: boolean): void => {
-    if (debounce.current) clearTimeout(debounce.current)
-    debounce.current = setTimeout(() => {
-      void offshore.omnibox.suggest(raw).then((sugs) => {
-        setSuggestions(sugs)
-        setSelected(0)
-        // type-ahead: complete the top match past the cursor, selected
-        if (grew && sugs.length) {
-          const comp = completionOf(sugs[0])
-          if (comp && comp.toLowerCase().startsWith(raw.toLowerCase()) && comp.length > raw.length) {
-            const el = inputRef.current
-            if (el && el.value === raw) {
-              setValue(comp)
-              requestAnimationFrame(() => el.setSelectionRange(raw.length, comp.length))
-            }
+    const seq = ++querySeq.current
+    const localAsk = offshore.omnibox.suggest(raw)
+    const engineAsk = offshore.omnibox.suggestEngine(raw)
+    void localAsk.then((sugs) => {
+      if (querySeq.current !== seq) return
+      setSuggestions(sugs)
+      setSelected(0)
+      // type-ahead: complete the top match past the cursor, selected
+      if (grew && sugs.length) {
+        const comp = completionOf(sugs[0])
+        if (comp && comp.toLowerCase().startsWith(raw.toLowerCase()) && comp.length > raw.length) {
+          const el = inputRef.current
+          if (el && el.value === raw) {
+            setValue(comp)
+            requestAnimationFrame(() => el.setSelectionRange(raw.length, comp.length))
           }
         }
-      })
-    }, 60)
+      }
+    })
+    // strictly after the local rows: the tail lands under them or not at all
+    void Promise.all([localAsk, engineAsk]).then(([local, tail]) => {
+      if (querySeq.current !== seq || !tail.length) return
+      const taken = new Set(local.map((s) => s.text.trim().toLowerCase()))
+      const add = tail.filter((s) => !taken.has(s.text.trim().toLowerCase()))
+      if (add.length) setSuggestions([...local, ...add])
+    })
   }
 
   const onChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
