@@ -82,12 +82,24 @@ export function SiteInfo({ tab, settings, shieldOff, onToggleShield, onClose }: 
             <IconSlop size={14} />
           </span>
           <span className="si-text">
-            {!tab.slop
-              ? 'Slop detector — not enough prose to judge'
-              : tab.slop.score >= SLOP_FLAG_MIN
-                ? `Reads like filler — slop score ${tab.slop.score}/100`
-                : `Reads fine — slop score ${tab.slop.score}/100`}
+            {settings.slop.quiet.includes(host)
+              ? tab.slop
+                ? `Detector quiet here — would score ${tab.slop.score}/100`
+                : 'Detector quiet on this site'
+              : !tab.slop
+                ? 'Slop detector — not enough prose to judge'
+                : tab.slop.score >= SLOP_FLAG_MIN
+                  ? `Reads like filler — slop score ${tab.slop.score}/100`
+                  : `Reads fine — slop score ${tab.slop.score}/100`}
           </span>
+          <button
+            className="si-action"
+            onClick={() =>
+              void offshore.slop.setQuiet(tab.id, !settings.slop.quiet.includes(host))
+            }
+          >
+            {settings.slop.quiet.includes(host) ? 'Wake' : 'Quiet'}
+          </button>
         </div>
       )}
 

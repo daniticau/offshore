@@ -2221,6 +2221,7 @@ browser-action-list {
   color: var(--ink);
 }
 .slop-meter {
+  position: relative;
   height: 4px;
   border-radius: 2px;
   background: var(--hover);
@@ -2235,6 +2236,16 @@ browser-action-list {
 }
 .slop-meter.heavy i {
   background: var(--danger);
+}
+/* the two thresholds (flag, heavy), read against the fill — no labels */
+.slop-meter i.slop-meter-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  border-radius: 0;
+  background: var(--ink-faint);
+  transition: none;
 }
 .slop-verdict {
   font-size: 12px;
@@ -2264,6 +2275,12 @@ browser-action-list {
   margin-left: 4px;
   color: var(--ink-faint);
 }
+.slop-sections {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  padding: 0 2px;
+}
 .slop-fine {
   font-size: 10.5px;
   line-height: 1.45;
@@ -2285,16 +2302,7 @@ browser-action-list {
 .slop-action:hover {
   background: var(--hover);
 }
-.slop-action.primary {
-  background: var(--accent);
-  color: #fff;
-  font-weight: 600;
-}
-.slop-action.primary:hover {
-  filter: brightness(1.08);
-  background: var(--accent);
-}
-.slop-allowed-row {
+.slop-quiet-row {
   display: flex;
   align-items: center;
   justify-content: space-between;

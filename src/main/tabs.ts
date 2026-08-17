@@ -517,11 +517,13 @@ export class TabManager {
     tab.wc.send('focus:apply', settingsStore.get().focus.enabled && focusStore.isOn(prettyHost(url)))
   }
 
-  /** Whether the slop scan should mark blocks at all, and tint what it marks. */
+  /** Whether the slop scan should mark blocks at all, and bar what it marks. */
   sendSlopStyle(tab: Tab): void {
     if (tab.wc.isDestroyed()) return
     const s = settingsStore.get()
-    tab.wc.send('slop:style', { mark: s.slop.detector, tint: s.slop.detector && s.slop.highlight })
+    const host = prettyHost(tab.wc.getURL())
+    const mark = s.slop.detector && !(host && s.slop.quiet.includes(host))
+    tab.wc.send('slop:style', { mark, bars: mark && s.slop.highlight })
   }
 
   /** A host's Focus flag changed — bring every tab on it in line, live. */

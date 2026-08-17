@@ -138,8 +138,8 @@ export interface PopupSettings {
 
 /** The chip appears in the address bar from this score up. */
 export const SLOP_FLAG_MIN = 25
-/** The veil (when enabled) covers the page from this score up. */
-export const SLOP_VEIL_MIN = 55
+/** From this score up the chip goes red and the verdict reads "heavy". */
+export const SLOP_HEAVY_MIN = 55
 
 /** One tell the detector counted — a stock phrase, a structural habit. */
 export interface SlopSignal {
@@ -152,28 +152,26 @@ export interface SlopSignal {
  * heuristics — the score is deterministic and the signals are the receipts.
  */
 export interface SlopReport {
-  /** 0–100; see SLOP_FLAG_MIN / SLOP_VEIL_MIN for what the chrome does with it */
+  /** 0–100; see SLOP_FLAG_MIN / SLOP_HEAVY_MIN for what the chrome does with it */
   score: number
   /** words of prose the scan judged from */
   words: number
   /** the tells found, heaviest first, at most a handful */
   signals: SlopSignal[]
-  /** 'up' = the veil covers the page now; 'lifted' = the reader clicked through */
-  veil?: 'up' | 'lifted'
+  /** the block census behind the edge bars */
+  blocks: { total: number; marked: number; heavy: number }
 }
 
 export interface SlopSettings {
   /** Scan pages for the tells of machine-generated filler */
   detector: boolean
-  /** Wash flagged prose yellow → orange → red, block by block, in the page */
+  /** Bar the flagged prose — a slim colored edge on each block that carries the tells */
   highlight: boolean
-  /** Cover heavy-scoring pages with a veil before you sink time into them */
-  veil: boolean
-  /** hostnames the veil never covers */
-  allowlist: string[]
+  /** hostnames where the detector stays quiet — no chip, no bars; SiteInfo still reports */
+  quiet: string[]
 }
 
-/** The block-tint thresholds: a paragraph wears the deepest tier it clears. */
+/** The edge-bar tiers: a prose block wears the deepest tier it clears. */
 export const SLOP_BLOCK_TIERS = [
   { tier: 'red', min: 65 },
   { tier: 'orange', min: 45 },
@@ -860,7 +858,7 @@ export const DEFAULT_SETTINGS: Settings = {
   newTabWidgets: { clock: true, date: false, greeting: false, weather: false, forecast: false, sun: false, moon: false },
   newTabWidgetOrder: ['clock', 'date', 'greeting', 'weather', 'forecast', 'sun', 'moon'],
   newTabWidgetLayout: {},
-  slop: { detector: true, highlight: true, veil: true, allowlist: [] },
+  slop: { detector: true, highlight: true, quiet: [] },
   focus: { enabled: true },
   autoPip: true,
   uiSounds: true,

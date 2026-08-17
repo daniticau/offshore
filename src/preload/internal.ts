@@ -306,8 +306,8 @@ ipcRenderer.on('passwords:fill', (_e, creds: { username?: string; password?: str
 // filler — stock phrases, formulaic transitions, uniform structure. It runs
 // locally on at most ~20k characters and reports a 0–100 score with its
 // receipts (which tells, how many) to main, which owns what happens next: a
-// chip in the address bar, and for heavy pages a veil main asks this preload
-// to raise. Nothing leaves the machine.
+// chip in the address bar, edge bars on the flagged blocks, and the site
+// panel's verdict line. Nothing leaves the machine.
 
 // Straight-apostrophe forms only — the text is normalized before matching.
 const SLOP_PHRASES = [
@@ -524,21 +524,49 @@ function scoreSlop(sample: ProseSample): { score: number; signals: { label: stri
 // ---- the wash: flagged prose wears its score, block by block ----
 //
 // The page-level verdict says "this page reads like filler"; the wash says
-// *which sentences*. Each prose block is scored alone and tinted yellow →
-// orange → red by how hard it leans on the tells. The tint is a low-alpha
-// background written through the CSSOM (page CSP never gets a say), and the
-// mark is a data attribute.
+// *which sentences*. Each prose block is scored alone and barred yellow →
+// orange → red by how hard it leans on the tells. The bar is a slim edge
+// stripe painted as a background layer through the CSSOM (page CSP never gets
+// a say), and the mark is a data attribute.
 
 const SLOP_MARK = 'data-offshore-slop'
-const TIER_WASH: Record<string, string> = {
-  yellow: 'rgba(250, 204, 21, 0.16)',
-  orange: 'rgba(249, 115, 22, 0.16)',
-  red: 'rgba(239, 68, 68, 0.17)'
+/**
+ * Mid-tone warms that read on white and near-black pages alike. Alphas sit
+ * below the spec'd start values: on zero-padding blocks the first glyph's
+ * side bearing kisses the stripe, and softer paint keeps that a gutter
+ * accent rather than a collision (the sanctioned dial — never width).
+ */
+const TIER_BAR: Record<string, string> = {
+  yellow: 'rgba(212, 158, 66, 0.55)',
+  orange: 'rgba(224, 122, 51, 0.68)',
+  red: 'rgba(219, 68, 55, 0.8)'
+}
+/** The bar: a 3px stripe with soft-fading caps, painted as a background layer. */
+function barImage(tier: string): string {
+  const c = TIER_BAR[tier] ?? TIER_BAR.yellow
+  return `linear-gradient(to bottom, transparent 0%, ${c} 12%, ${c} 88%, transparent 100%)`
 }
 
-/** What main says the settings want: mark at all (detector), tint the marks. */
-let slopStyle = { mark: true, tint: true }
-const washed = new Map<HTMLElement, { bg: string; priority: string }>()
+/** What main says the settings want: mark at all (detector), bar the marks. */
+let slopStyle = { mark: true, bars: true }
+
+const BAR_PROPS = ['background-image', 'background-size', 'background-repeat', 'background-position'] as const
+const barred = new Map<HTMLElement, Record<string, { value: string; priority: string }>>()
+
+/**
+ * Our paint, recognized by its own hand: the exact stripe geometry plus the
+ * important priority no page inline style would carry. An SPA re-render can
+ * clone a barred element — the clone arrives wearing the paint but unknown to
+ * `barred`, and without this check the never-clobber rule below would mistake
+ * our own bar for page art (or leave it stranded when the bars switch off).
+ */
+function wearsOurBar(el: HTMLElement): boolean {
+  return (
+    el.style.getPropertyValue('background-size') === '3px 100%' &&
+    el.style.getPropertyPriority('background-image') === 'important' &&
+    el.style.getPropertyValue('background-image').includes('linear-gradient')
+  )
+}
 
 /**
  * A block's score runs on a different scale from the page's: hits per hundred
@@ -564,49 +592,82 @@ function scoreBlock(block: ProseBlock): number {
   return Math.round(Math.min(100, hits * 25 * per100 + starters * 8 * per100 + notOnly * 20 * per100))
 }
 
-function tintOne(el: HTMLElement): void {
-  if (washed.has(el)) return
-  washed.set(el, {
-    bg: el.style.getPropertyValue('background-color'),
-    priority: el.style.getPropertyPriority('background-color')
-  })
+function barOne(el: HTMLElement): void {
   const tier = el.getAttribute(SLOP_MARK) ?? 'yellow'
-  el.style.setProperty('background-color', TIER_WASH[tier] ?? TIER_WASH.yellow, 'important')
+  if (barred.has(el)) {
+    // tier may have shifted on a rescan — repaint, priors already saved
+    el.style.setProperty('background-image', barImage(tier), 'important')
+    return
+  }
+  if (wearsOurBar(el)) {
+    // a clone of a block we painted — adopt it; the original's priors died
+    // with the original element, and we only ever paint over an empty layer
+    const saved: Record<string, { value: string; priority: string }> = {}
+    for (const p of BAR_PROPS) saved[p] = { value: '', priority: '' }
+    barred.set(el, saved)
+    el.style.setProperty('background-image', barImage(tier), 'important')
+    return
+  }
+  // a block that brings its own background image keeps it — the mark alone
+  // carries the verdict there (never clobber page art)
+  if (getComputedStyle(el).backgroundImage !== 'none') return
+  const saved: Record<string, { value: string; priority: string }> = {}
+  for (const p of BAR_PROPS) {
+    saved[p] = { value: el.style.getPropertyValue(p), priority: el.style.getPropertyPriority(p) }
+  }
+  barred.set(el, saved)
+  const rtl = getComputedStyle(el).direction === 'rtl'
+  el.style.setProperty('background-image', barImage(tier), 'important')
+  el.style.setProperty('background-size', '3px 100%', 'important')
+  el.style.setProperty('background-repeat', 'no-repeat', 'important')
+  el.style.setProperty('background-position', rtl ? 'right top' : 'left top', 'important')
 }
 
-function untintOne(el: HTMLElement): void {
-  const saved = washed.get(el)
-  if (!saved) return
-  washed.delete(el)
-  if (saved.bg) el.style.setProperty('background-color', saved.bg, saved.priority)
-  else el.style.removeProperty('background-color')
+function unbarOne(el: HTMLElement): void {
+  const saved = barred.get(el)
+  if (!saved) {
+    // a cloned bar we never painted ourselves — take it off wholesale
+    if (wearsOurBar(el)) for (const p of BAR_PROPS) el.style.removeProperty(p)
+    return
+  }
+  barred.delete(el)
+  for (const p of BAR_PROPS) {
+    if (saved[p].value) el.style.setProperty(p, saved[p].value, saved[p].priority)
+    else el.style.removeProperty(p)
+  }
 }
 
-/** Score each block, wear the marks, and tint them if the settings say so. */
-function washBlocks(blocks: ProseBlock[]): void {
+/** Score each block, wear the marks, and bar them if the settings say so. */
+function washBlocks(blocks: ProseBlock[]): { total: number; marked: number; heavy: number } {
   const flagged = new Set<HTMLElement>()
+  let heavy = 0
   if (slopStyle.mark) {
     for (const block of blocks) {
+      // nested prose (a flagged li's inner p, and vice versa) wears one bar, the
+      // outermost — blocks arrive in document order, so ancestors are seen first
+      if (block.el.parentElement?.closest(`[${SLOP_MARK}]`)) continue
       const s = scoreBlock(block)
       const tier = SLOP_BLOCK_TIERS.find((t) => s >= t.min)
       if (!tier) continue
       flagged.add(block.el)
+      if (tier.tier === 'red') heavy += 1
       block.el.setAttribute(SLOP_MARK, tier.tier)
-      if (slopStyle.tint) tintOne(block.el)
-      else untintOne(block.el)
+      if (slopStyle.bars) barOne(block.el)
+      else unbarOne(block.el)
     }
   }
   // marks from the last pass that didn't survive this one come off entirely
   for (const el of document.querySelectorAll<HTMLElement>(`[${SLOP_MARK}]`)) {
     if (flagged.has(el)) continue
-    untintOne(el)
+    unbarOne(el)
     el.removeAttribute(SLOP_MARK)
   }
+  return { total: blocks.length, marked: flagged.size, heavy }
 }
 
-ipcRenderer.on('slop:style', (_e, style: { mark?: boolean; tint?: boolean }) => {
-  const next = { mark: style?.mark !== false, tint: style?.tint !== false }
-  const changed = next.mark !== slopStyle.mark || next.tint !== slopStyle.tint
+ipcRenderer.on('slop:style', (_e, style: { mark?: boolean; bars?: boolean }) => {
+  const next = { mark: style?.mark !== false, bars: style?.bars !== false }
+  const changed = next.mark !== slopStyle.mark || next.bars !== slopStyle.bars
   slopStyle = next
   // flipping a switch takes effect on the page you're looking at, not the next one
   if (changed) {
@@ -629,8 +690,8 @@ function runSlopScan(retriesLeft = 2): void {
       return
     }
     const { score, signals } = scoreSlop(sample)
-    washBlocks(sample.blocks)
-    ipcRenderer.send('slop:report', { score, words: sample.words, signals })
+    const blocks = washBlocks(sample.blocks)
+    ipcRenderer.send('slop:report', { score, words: sample.words, signals, blocks })
   } catch {
     /* scoring must never break a page */
   }
@@ -649,162 +710,4 @@ let slopRescan: ReturnType<typeof setTimeout> | null = null
 ipcRenderer.on('slop:rescan', () => {
   if (slopRescan) clearTimeout(slopRescan)
   slopRescan = setTimeout(() => runSlopScan(), 1000)
-})
-
-// ---------------- 5. the veil (raised over heavy slop, on main's say-so) ----------------
-//
-// "So you don't read it before you know" — the page loads, the scan reports,
-// and if the score clears the veil line main sends 'slop:veil'. The page blurs
-// behind a small card: read anyway, or spare the site forever. The overlay is
-// a courtesy, not a boundary — any page script could remove it, which is fine,
-// because the reader it serves is the one in front of the window.
-
-let veilHost: HTMLElement | null = null
-
-function dropVeil(): void {
-  veilHost?.remove()
-  veilHost = null
-}
-
-function raiseVeil(score: number): void {
-  if (veilHost || !document.documentElement) return
-  const host = document.createElement('div')
-  host.id = 'offshore-slop-veil'
-  const shadow = host.attachShadow({ mode: 'open' })
-  shadow.innerHTML = `
-    <style>
-      .scrim {
-        position: fixed;
-        inset: 0;
-        z-index: 2147483647;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 24px;
-        background: rgba(240, 246, 248, 0.55);
-        backdrop-filter: blur(22px) saturate(0.8);
-        -webkit-backdrop-filter: blur(22px) saturate(0.8);
-        animation: veil-in 240ms ease-out;
-      }
-      .card {
-        box-sizing: border-box;
-        max-width: 440px;
-        padding: 30px 32px 24px;
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.88);
-        border: 0.5px solid rgba(9, 40, 54, 0.14);
-        box-shadow: 0 24px 70px rgba(9, 40, 54, 0.22);
-        color: #14323f;
-        font-family: -apple-system, system-ui, sans-serif;
-        text-align: center;
-      }
-      .glyph { color: #c98a3a; }
-      h1 {
-        margin: 10px 0 8px;
-        font-family: ui-serif, Georgia, serif;
-        font-weight: 500;
-        font-size: 23px;
-        letter-spacing: -0.01em;
-      }
-      p {
-        margin: 0 0 18px;
-        font-size: 13px;
-        line-height: 1.55;
-        color: rgba(20, 50, 63, 0.72);
-      }
-      .row { display: flex; flex-direction: column; gap: 4px; align-items: center; }
-      button {
-        appearance: none;
-        border: none;
-        font: inherit;
-        cursor: pointer;
-        border-radius: 999px;
-      }
-      .read {
-        padding: 9px 22px;
-        font-size: 13.5px;
-        font-weight: 600;
-        color: #f4fafc;
-        background: #14323f;
-      }
-      .read:hover { filter: brightness(1.18); }
-      .allow {
-        padding: 7px 14px;
-        font-size: 12px;
-        font-weight: 500;
-        color: rgba(20, 50, 63, 0.6);
-        background: transparent;
-      }
-      .allow:hover { color: rgba(20, 50, 63, 0.9); }
-      .fine {
-        margin: 14px 0 0;
-        font-size: 11px;
-        color: rgba(20, 50, 63, 0.45);
-      }
-      @media (prefers-color-scheme: dark) {
-        .scrim { background: rgba(10, 18, 22, 0.6); }
-        .card {
-          background: rgba(24, 34, 40, 0.92);
-          border-color: rgba(210, 235, 244, 0.14);
-          box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
-          color: #dcebf1;
-        }
-        p { color: rgba(220, 235, 241, 0.7); }
-        .read { color: #10262f; background: #dcebf1; }
-        .allow { color: rgba(220, 235, 241, 0.55); }
-        .allow:hover { color: rgba(220, 235, 241, 0.9); }
-        .fine { color: rgba(220, 235, 241, 0.4); }
-      }
-      @keyframes veil-in { from { opacity: 0; } }
-    </style>
-    <div class="scrim" role="dialog" aria-label="AI slop warning">
-      <div class="card">
-        <svg class="glyph" width="34" height="34" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M5 13c2-2.4 4-2.4 6 0s4 2.4 6 0" />
-          <path d="M4 4l16 16" />
-          <path d="M16 5.5l0.9 2.1 2.1 0.9-2.1 0.9-0.9 2.1-0.9-2.1-2.1-0.9 2.1-0.9z" />
-        </svg>
-        <h1>This page reads like AI slop</h1>
-        <p>
-          Slop score ${Math.round(score)}/100 — stock phrases and formula structure, counted
-          by plain heuristics on this Mac. No AI involved, nothing sent anywhere.
-        </p>
-        <div class="row">
-          <button class="read">Read anyway</button>
-          <button class="allow">Always show this site</button>
-        </div>
-        <p class="fine">The veil has an off switch in Settings → Shield.</p>
-      </div>
-    </div>`
-  const scrim = shadow.querySelector('.scrim') as HTMLElement
-  // the page beneath must not scroll along while it is veiled
-  scrim.addEventListener('wheel', (e) => e.preventDefault(), { passive: false })
-  scrim.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false })
-  scrim.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      dropVeil()
-      ipcRenderer.send('slop:veil-lifted')
-    }
-  })
-  shadow.querySelector('.read')?.addEventListener('click', () => {
-    dropVeil()
-    ipcRenderer.send('slop:veil-lifted')
-  })
-  shadow.querySelector('.allow')?.addEventListener('click', () => {
-    dropVeil()
-    ipcRenderer.send('slop:allow-site')
-  })
-  document.documentElement.appendChild(host)
-  veilHost = host
-  ;(shadow.querySelector('.read') as HTMLElement | null)?.focus()
-}
-
-ipcRenderer.on('slop:veil', (_e, on: boolean, score?: number) => {
-  try {
-    if (on) raiseVeil(Number(score) || 0)
-    else dropVeil()
-  } catch {
-    /* the veil must never break a page either */
-  }
 })

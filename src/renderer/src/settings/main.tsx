@@ -867,30 +867,16 @@ function App(): React.JSX.Element {
                 </div>
                 <div className="row">
                   <div className="row-title">
-                    Highlight flagged prose
+                    Bar the flagged prose
                     <div className="row-sub">
-                      Wash the blocks that carry the tells, right in the page — yellow for a
-                      lean, orange for a habit, red for the worst of it.
+                      A slim colored bar at the edge of each block that carries the tells —
+                      amber for a lean, red for the worst of it.
                     </div>
                   </div>
                   <Toggle
                     on={settings.slop.highlight}
                     disabled={!settings.slop.detector}
                     onChange={(v) => patch({ slop: { ...settings.slop, highlight: v } })}
-                  />
-                </div>
-                <div className="row">
-                  <div className="row-title">
-                    Veil heavy slop
-                    <div className="row-sub">
-                      A page scoring 55 or worse gets a veil before you sink time into it — one
-                      click reads it anyway, one click spares the site forever.
-                    </div>
-                  </div>
-                  <Toggle
-                    on={settings.slop.veil}
-                    disabled={!settings.slop.detector}
-                    onChange={(v) => patch({ slop: { ...settings.slop, veil: v } })}
                   />
                 </div>
               </div>
@@ -963,11 +949,11 @@ function App(): React.JSX.Element {
                     </div>
                   </div>
                 )}
-                {settings.slop.allowlist.length > 0 && (
+                {settings.slop.quiet.length > 0 && (
                   <div className="row column">
-                    <div className="row-title">Sites never veiled</div>
+                    <div className="row-title">Sites where the detector is quiet</div>
                     <div className="chips">
-                      {settings.slop.allowlist.map((host) => (
+                      {settings.slop.quiet.map((host) => (
                         <span className="chip" key={host}>
                           {host}
                           <button
@@ -975,7 +961,7 @@ function App(): React.JSX.Element {
                               patch({
                                 slop: {
                                   ...settings.slop,
-                                  allowlist: settings.slop.allowlist.filter((h) => h !== host)
+                                  quiet: settings.slop.quiet.filter((h) => h !== host)
                                 }
                               })
                             }
@@ -1012,8 +998,8 @@ function App(): React.JSX.Element {
                     <div className="row-title">
                       Slop Detector
                       <div className="row-sub">
-                        Scores every page for machine-generated filler and washes the guilty prose
-                        yellow → orange → red. Tuning lives in Settings → Shield.
+                        Scores every page for machine-generated filler and bars the guilty prose
+                        at its edge, amber to red. Tuning lives in Settings → Shield.
                       </div>
                     </div>
                   </div>

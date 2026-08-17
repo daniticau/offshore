@@ -2,7 +2,7 @@ import { BrowserWindow, app, ipcMain, screen, session } from 'electron'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import * as nodeHttp from 'http'
-import { HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_VEIL_MIN, type SlopReport } from '@shared/types'
+import { HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_HEAVY_MIN, type SlopReport } from '@shared/types'
 import { TAB_PARTITION } from './sessions'
 import { windows, type OffshoreWindow } from './windows'
 
@@ -16,6 +16,9 @@ export function setupDevshot(): void {
   setupTestFlows()
   const dir = process.env['OFFSHORE_SHOT']
   if (!dir) return
+  // with both armed the flow owns the run (and writes its own eyeball shots) —
+  // two exits racing over one app is nobody's screenshot
+  if (process.env['OFFSHORE_TEST_FLOW']) return
   const wait = Number(process.env['OFFSHORE_SHOT_WAIT'] || 3500)
   /** Quiet is the default: parked off-screen, the window needs a beat longer to settle. */
   const quiet = !process.env['OFFSHORE_TEST_FOREGROUND']
@@ -539,34 +542,61 @@ function setupTestFlows(): void {
 
     if (flow === 'slop') {
       const { settingsStore } = await import('./stores')
-      // the "Always show" click below lands in the shared profile's allowlist —
-      // strip it on the way in so the flow can run twice, and again on the way out
-      const stripAllow = (): void => {
+      // this flow flips the slop keys live — reset them on the way in so the
+      // flow can run twice, and again on the way out (a crashed run must not
+      // leave the shared profile with the detector off or the host quieted)
+      const resetSlop = (): void => {
         const s = settingsStore.get()
-        if (s.slop.allowlist.includes('127.0.0.1')) {
+        if (!s.slop.detector || !s.slop.highlight || s.slop.quiet.includes('127.0.0.1')) {
           settingsStore.set({
-            slop: { ...s.slop, allowlist: s.slop.allowlist.filter((h) => h !== '127.0.0.1') }
+            slop: { detector: true, highlight: true, quiet: s.slop.quiet.filter((h) => h !== '127.0.0.1') }
           })
         }
       }
-      stripAllow()
-      const sloppy = `<html><body><article>${Array.from({ length: 14 }, () => `
-        <p>In today's fast-paced digital landscape, it's important to note that businesses must
+      resetSlop()
+      const heavyPara = `In today's fast-paced digital landscape, it's important to note that businesses must
         delve into the ever-evolving landscape of technology. Moreover, this comprehensive guide
         will help you unlock the potential of your workflow. Furthermore, when it comes to
         navigating the complexities of modern tools, a holistic approach stands as a testament
         to innovation. Additionally, let's explore the rich tapestry of options — a treasure
         trove of possibilities. Ultimately, this game-changer will revolutionize the way you
         work, and not only saves time but also elevates your results. In conclusion, embark on
-        a journey to seamlessly integrate these solutions.</p>`).join('')}</article></body></html>`
-      const clean = `<html><body><article>${Array.from({ length: 14 }, (_, i) => `
-        <p>The tide came in around four. We hauled the skiff past the wrack line and Tom
+        a journey to seamlessly integrate these solutions.`
+      const honestPara = (i: number): string => `The tide came in around four. We hauled the skiff past the wrack line and Tom
         checked the traps while I sorted bait, cold to the wrist. Gulls worked the shallows
         where the creek cuts the flat. Paragraph ${i} of an ordinary account, written the way
-        a person writes when they are just saying what happened that afternoon.</p>`).join('')}</article></body></html>`
+        a person writes when they are just saying what happened that afternoon.`
+      const sloppy = `<html><body><article>${Array.from({ length: 14 }, () => `
+        <p>${heavyPara}</p>`).join('')}</article></body></html>`
+      const clean = `<html><body><article>${Array.from({ length: 14 }, (_, i) => `
+        <p>${honestPara(i)}</p>`).join('')}</article></body></html>`
+      // ~94 honest words carrying exactly two non-overlapping phrasebook hits
+      // (block score 2·25·(100/94) ≈ 53 → orange), and ~92 with exactly one
+      // (25·(100/92) ≈ 27 → yellow) — see scoreBlock in preload/internal.ts
+      const midPara = `The market opened at seven and the stalls went up in the usual order, fish first,
+        then bread. We found a plethora of small things worth carrying home: netting needles,
+        a brass cleat, two jars of beach plum jam. The old chandlery table was a treasure
+        trove for anyone patient enough to dig, and Tom dug until the vendor laughed at him.
+        We paid, argued about coffee, and walked back along the seawall while the fog burned
+        off the water. The gulls had opinions about all of it and said so from the rail.`
+      const lowPara = `Low tide left the flats bare past the second marker and we went out with rakes and
+        a bucket apiece. There were a myriad of small crabs working the weed line, and the
+        clams showed themselves the way they always do, two holes and a squirt. Tom kept
+        count out loud until he lost the number and started over. By noon we had enough for
+        chowder and a little extra for the neighbor who lends us her truck, so we called it
+        a day and hosed off the gear at the spigot.`
+      const mixed = `<html><body><article>
+        ${Array.from({ length: 4 }, (_, i) => `<p id="slop${i}">${heavyPara}</p>`).join('\n')}
+        <p id="mid0">${midPara}</p>
+        <p id="low0">${lowPara}</p>
+        ${Array.from({ length: 4 }, (_, i) => `<p id="honest${i}">${honestPara(i)}</p>`).join('\n')}
+        <ul><li id="nest0">${heavyPara}<p id="nest1">${heavyPara}</p></li></ul>
+        <p id="bg0" style="background-image:url(data:image/gif;base64,R0lGODlhAQABAAAAACw=)">${heavyPara}</p>
+        <p id="stub0">We delve into old maps.</p>
+      </article></body></html>`
       const server = nodeHttp.createServer((req, res) => {
         res.setHeader('content-type', 'text/html')
-        res.end(req.url === '/slop' ? sloppy : clean)
+        res.end(req.url === '/slop' ? sloppy : req.url?.startsWith('/mixed') ? mixed : clean)
       })
       await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
       const port = (server.address() as { port: number }).port
@@ -580,7 +610,7 @@ function setupTestFlows(): void {
         return settle(async () => tab()?.slop, 12_000)
       }
 
-      // -- a heavy page gets scored, veiled, and worn on the chrome --
+      // -- a heavy page gets scored and worn on the chrome --
       w.tabs.navigate(null, `http://127.0.0.1:${port}/slop`)
       const report = await freshReport()
       say(
@@ -590,13 +620,16 @@ function setupTestFlows(): void {
           .join(', ')}`
       )
       check('slop page flagged', (report?.score ?? 0) >= SLOP_FLAG_MIN, `score=${report?.score}`)
-      check('slop page scores veil-heavy', (report?.score ?? 0) >= SLOP_VEIL_MIN, `score=${report?.score}`)
+      check('slop page scores heavy', (report?.score ?? 0) >= SLOP_HEAVY_MIN, `score=${report?.score}`)
       check('report carries its receipts', (report?.signals.length ?? 0) > 0)
-      const veiled = await settle(
-        async () => ((await inPage(`!!document.getElementById('offshore-slop-veil')`)) ? true : undefined),
-        4000
+      const census = report?.blocks
+      check(
+        'report counts its blocks',
+        (census?.total ?? 0) >= 14 && (census?.marked ?? 0) >= 14 && (census?.heavy ?? 0) >= 14,
+        JSON.stringify(census)
       )
-      check('veil raised over the page', tab()?.slop?.veil === 'up' && veiled === true)
+      const noVeil = await inPage(`!document.getElementById('offshore-slop-veil')`)
+      check('no veil ever again', !('veil' in ((report ?? {}) as object)) && noVeil === true)
 
       const chip = await settle(async () => {
         const raw = (await inChrome(
@@ -625,45 +658,205 @@ function setupTestFlows(): void {
         const raw = (await inChrome(
           `JSON.stringify({panel: !!document.querySelector('.slop-panel'),
                            signals: document.querySelectorAll('.slop-signal').length,
-                           read: !!document.querySelector('.slop-action.primary')})`
+                           sections: document.querySelector('.slop-sections')?.textContent ?? '',
+                           primary: !!document.querySelector('.slop-action.primary'),
+                           ticks: document.querySelectorAll('.slop-meter-tick').length})`
         )) as string
-        const p = JSON.parse(raw) as { panel: boolean; signals: number; read: boolean }
+        const p = JSON.parse(raw) as {
+          panel: boolean
+          signals: number
+          sections: string
+          primary: boolean
+          ticks: number
+        }
         return p.panel ? p : undefined
       }, 4000)
       check('chip opens the slop report', !!panel)
       check('report lists the tells it counted', (panel?.signals ?? 0) > 0, `signals=${panel?.signals}`)
-      check('report offers Read anyway while veiled', panel?.read === true)
+      check(
+        'report tallies the barred sections',
+        /\d+ of \d+ prose sections/.test(panel?.sections ?? ''),
+        JSON.stringify(panel?.sections)
+      )
+      check('no Read anyway, no primary action', panel?.primary === false)
+      check('meter wears its two threshold ticks', panel?.ticks === 2, `ticks=${panel?.ticks}`)
       await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
-
-      // -- Read anyway lifts the veil for this visit --
-      await inPage(
-        `document.getElementById('offshore-slop-veil').shadowRoot.querySelector('.read').click()`
-      )
-      const lifted = await settle(async () => (tab()?.slop?.veil === 'lifted' ? true : undefined), 4000)
-      const overlayGone = await inPage(`!document.getElementById('offshore-slop-veil')`)
-      check('Read anyway lifts the veil', lifted === true && overlayGone === true)
-
-      // -- a fresh load is a fresh offer --
-      tab()!.wc.reload()
-      const reVeiled = await settle(async () => (tab()?.slop?.veil === 'up' ? true : undefined), 12_000)
-      check('a fresh load veils again', reVeiled === true)
-
-      // -- Always show this site spares it from then on --
-      await inPage(
-        `document.getElementById('offshore-slop-veil').shadowRoot.querySelector('.allow').click()`
-      )
-      const allowed = await settle(
-        async () => (settingsStore.get().slop.allowlist.includes('127.0.0.1') ? true : undefined),
+      const panelGone = await settle(
+        async () => ((await inChrome(`!document.querySelector('.slop-panel')`)) ? true : undefined),
         4000
       )
-      check('Always show adds the site to the never-veil list', allowed === true)
-      w.tabs.navigate(null, `http://127.0.0.1:${port}/slop`)
-      const spared = await freshReport()
+      check('Escape closes the report', panelGone === true)
+
+      // -- the engineered mix: tiers, geometry, dedup, page art, stubs --
+      w.tabs.navigate(null, `http://127.0.0.1:${port}/mixed`)
+      const mixedReport = await freshReport()
       check(
-        'allowed site keeps the chip, loses the veil',
-        (spared?.score ?? 0) >= SLOP_VEIL_MIN && spared?.veil === undefined,
-        `score=${spared?.score} veil=${spared?.veil}`
+        'mixed census: 8 of 13 marked, 6 heavy',
+        mixedReport?.blocks.total === 13 && mixedReport?.blocks.marked === 8 && mixedReport?.blocks.heavy === 6,
+        JSON.stringify(mixedReport?.blocks)
       )
+      const geoRaw = (await inPage(
+        `JSON.stringify({
+           redTier:   document.getElementById('slop0').getAttribute('data-offshore-slop'),
+           midTier:   document.getElementById('mid0').getAttribute('data-offshore-slop'),
+           lowTier:   document.getElementById('low0').getAttribute('data-offshore-slop'),
+           img:       document.getElementById('slop0').style.backgroundImage,
+           size:      document.getElementById('slop0').style.backgroundSize,
+           rep:       document.getElementById('slop0').style.backgroundRepeat,
+           pos:       document.getElementById('slop0').style.backgroundPosition,
+           midColor:  document.getElementById('mid0').style.backgroundImage,
+           honest:    document.getElementById('honest0').hasAttribute('data-offshore-slop'),
+           honestImg: document.getElementById('honest0').style.backgroundImage,
+           nestOuter: document.getElementById('nest0').hasAttribute('data-offshore-slop'),
+           nestInner: document.getElementById('nest1').hasAttribute('data-offshore-slop'),
+           bgKept:    document.getElementById('bg0').style.backgroundImage.includes('url('),
+           bgMarked:  document.getElementById('bg0').hasAttribute('data-offshore-slop'),
+           stub:      document.getElementById('stub0').hasAttribute('data-offshore-slop')
+         })`
+      )) as string
+      say(`[flowtest] mixed geometry: ${geoRaw}`)
+      const geo = JSON.parse(geoRaw) as {
+        redTier: string | null
+        midTier: string | null
+        lowTier: string | null
+        img: string
+        size: string
+        rep: string
+        pos: string
+        midColor: string
+        honest: boolean
+        honestImg: string
+        nestOuter: boolean
+        nestInner: boolean
+        bgKept: boolean
+        bgMarked: boolean
+        stub: boolean
+      }
+      check('tiers graded per block', geo.redTier === 'red' && geo.midTier === 'orange' && geo.lowTier === 'yellow')
+      check(
+        'bar painted as an edge stripe',
+        geo.img.includes('linear-gradient') && geo.size === '3px 100%' && geo.rep === 'no-repeat' && geo.pos === 'left top'
+      )
+      check(
+        'tier carries its color',
+        geo.img.includes('rgba(219, 68, 55') && geo.midColor.includes('rgba(224, 122, 51')
+      )
+      check('honest prose wears nothing', geo.honest === false && geo.honestImg === '')
+      check('nested prose wears one bar', geo.nestOuter === true && geo.nestInner === false)
+      check('page art never clobbered', geo.bgKept === true && geo.bgMarked === true)
+      check('stubs stay uncollected', geo.stub === false)
+
+      // eyeball artifact: the bars, photographed on the engineered mix
+      const shotDir = process.env['OFFSHORE_SHOT']
+      if (shotDir) {
+        mkdirSync(shotDir, { recursive: true })
+        surface(w)
+        w.tabs.setActiveVisible(true)
+        await delay(900)
+        const img = await tab()!.wc.capturePage()
+        writeFileSync(join(shotDir, 'mixed-bars.png'), img.toPNG())
+        say(`[flowtest] wrote ${join(shotDir, 'mixed-bars.png')}`)
+      }
+
+      // -- an SPA re-render sheds every scored element; the rescan re-owns it --
+      const preMarks = (await inPage(
+        `(() => {
+           const a = document.querySelector('article')
+           const before = document.querySelectorAll('[data-offshore-slop]').length
+           a.replaceChildren(...[...a.children].map((c) => c.cloneNode(true)))
+           const p = document.createElement('p')
+           p.id = 'spa0'
+           p.textContent = ${JSON.stringify(heavyPara)}
+           a.appendChild(p)
+           history.pushState({}, '', '/mixed2')
+           return before
+         })()`
+      )) as number
+      const spa = await settle(async () => {
+        const raw = (await inPage(
+          `JSON.stringify({
+             marks: document.querySelectorAll('[data-offshore-slop]').length,
+             spaTier: document.getElementById('spa0')?.getAttribute('data-offshore-slop') ?? '',
+             spaImg: document.getElementById('spa0')?.style.backgroundImage ?? ''})`
+        )) as string
+        const p = JSON.parse(raw) as { marks: number; spaTier: string; spaImg: string }
+        return p.spaTier === 'red' ? p : undefined
+      }, 12_000)
+      check(
+        'bars survive an SPA re-render',
+        spa?.marks === preMarks + 1 && spa?.spaTier === 'red' && (spa?.spaImg ?? '').includes('linear-gradient'),
+        `pre=${preMarks} ${JSON.stringify(spa)}`
+      )
+
+      // -- the switches act on the page you're looking at --
+      const s1 = settingsStore.get()
+      settingsStore.set({ slop: { ...s1.slop, highlight: false } })
+      const barsOff = await settle(async () => {
+        const raw = (await inPage(
+          `JSON.stringify({img: document.getElementById('slop0').style.backgroundImage,
+                           tier: document.getElementById('slop0').getAttribute('data-offshore-slop') ?? ''})`
+        )) as string
+        const p = JSON.parse(raw) as { img: string; tier: string }
+        return p.img === '' ? p : undefined
+      }, 8000)
+      check('bars off, marks stay', barsOff?.img === '' && barsOff?.tier === 'red', JSON.stringify(barsOff))
+      settingsStore.set({ slop: { ...settingsStore.get().slop, highlight: true } })
+      const barsBack = await settle(
+        async () =>
+          ((await inPage(
+            `document.getElementById('slop0').style.backgroundImage.includes('linear-gradient')`
+          )) === true
+            ? true
+            : undefined),
+        8000
+      )
+      check('bars return with the switch', barsBack === true)
+      settingsStore.set({ slop: { ...settingsStore.get().slop, detector: false } })
+      const stripped = await settle(async () => {
+        const marks = (await inPage(`document.querySelectorAll('[data-offshore-slop]').length`)) as number
+        const chipGone = (await inChrome(`!document.querySelector('.slop-chip')`)) as boolean
+        return marks === 0 && tab()?.slop === undefined && chipGone ? true : undefined
+      }, 8000)
+      check('detector off strips everything', stripped === true)
+      settingsStore.set({ slop: { ...settingsStore.get().slop, detector: true } })
+      const rescored = await settle(async () => tab()?.slop, 12_000)
+      check('detector back on re-scores', (rescored?.score ?? 0) >= SLOP_HEAVY_MIN, `score=${rescored?.score}`)
+
+      // -- a quieted host: no chip, no bars, the verdict stands for SiteInfo --
+      const sq = settingsStore.get().slop
+      settingsStore.set({
+        slop: { ...sq, quiet: [...sq.quiet.filter((h) => h !== '127.0.0.1'), '127.0.0.1'] }
+      })
+      const quieted = await settle(async () => {
+        const marks = (await inPage(`document.querySelectorAll('[data-offshore-slop]').length`)) as number
+        const chipGone = (await inChrome(`!document.querySelector('.slop-chip')`)) as boolean
+        return marks === 0 && chipGone && (tab()?.slop?.score ?? 0) >= SLOP_FLAG_MIN ? true : undefined
+      }, 8000)
+      check('quiet host: no chip, no bars, verdict kept', quieted === true, `score=${tab()?.slop?.score}`)
+      await inChrome(`document.querySelector('.omni-tune')?.click()`)
+      const si = await settle(async () => {
+        const raw = (await inChrome(
+          `JSON.stringify({panel: !!document.querySelector('.site-info'),
+                           text: [...document.querySelectorAll('.site-info .si-text')].map((t) => t.textContent).join('|'),
+                           wake: [...document.querySelectorAll('.site-info .si-action')].some((b) => b.textContent === 'Wake')})`
+        )) as string
+        const p = JSON.parse(raw) as { panel: boolean; text: string; wake: boolean }
+        return p.panel ? p : undefined
+      }, 4000)
+      check(
+        'SiteInfo keeps the score and offers Wake',
+        (si?.text ?? '').includes('Detector quiet here — would score') && si?.wake === true,
+        JSON.stringify(si)
+      )
+      await inChrome(
+        `[...document.querySelectorAll('.site-info .si-action')].find((b) => b.textContent === 'Wake')?.click()`
+      )
+      const woken = await settle(async () => {
+        const chipBack = (await inChrome(`!!document.querySelector('.slop-chip')`)) as boolean
+        return !settingsStore.get().slop.quiet.includes('127.0.0.1') && chipBack ? true : undefined
+      }, 8000)
+      check('Wake un-quiets and the chip returns', woken === true)
+      await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
 
       // -- honest prose stays untouched --
       w.tabs.navigate(null, `http://127.0.0.1:${port}/clean`)
@@ -672,8 +865,10 @@ function setupTestFlows(): void {
       check('honest prose not flagged', (cleanReport?.score ?? 0) < SLOP_FLAG_MIN, `score=${cleanReport?.score}`)
       const cleanChip = await inChrome(`!document.querySelector('.slop-chip')`)
       check('no chip on honest prose', cleanChip === true)
+      const cleanMarks = await inPage(`document.querySelectorAll('[data-offshore-slop]').length`)
+      check('no marks on honest pages', cleanMarks === 0, `marks=${cleanMarks}`)
 
-      stripAllow()
+      resetSlop()
       // flows leave over app.exit, which skips the debounced save — write now
       settingsStore.flush()
       server.close()

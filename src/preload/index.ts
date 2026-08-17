@@ -104,8 +104,7 @@ const api: OffshoreApi = {
     allowSite: (tabId: number) => invoke('popups:allow-site', tabId)
   },
   slop: {
-    readAnyway: (tabId: number) => invoke('slop:read-anyway', tabId),
-    setAllowed: (tabId: number, allowed: boolean) => invoke('slop:set-allowed', tabId, allowed)
+    setQuiet: (tabId: number, quiet: boolean) => invoke('slop:set-quiet', tabId, quiet)
   },
   downloads: {
     list: () => invoke('downloads:list'),

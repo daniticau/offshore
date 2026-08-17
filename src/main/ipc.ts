@@ -15,14 +15,12 @@ import {
   ACTION_DEFS,
   HOME_WIDGETS,
   SEARCH_ENGINES,
-  SLOP_VEIL_MIN,
   type AccentId,
   type ActionId,
   type DevToolsDock,
   type Insets,
   type PasswordOffer,
   type Settings,
-  type SlopReport,
   type SlopSignal,
   type SpaceProfile,
   type Suggestion
@@ -360,32 +358,20 @@ export function setupIpc(): void {
 
   // ---- slop detector ----
   //
-  // The heuristics run in the page preload; main holds the verdict and owns
-  // the policy: whether this page earns the veil, and which sites never do.
-  // The preload only ever hears "raise it" or "drop it".
+  // The heuristics run in the page preload; main holds the verdict. Presentation
+  // policy is two booleans per tab (mark at all, bar the marks), recomputed from
+  // the settings and the quiet list whenever either changes.
 
-  /** Drop any standing veils the current settings no longer justify. */
   const reapplySlopPolicy = (): void => {
     const s = settingsStore.get()
     for (const w of windows) {
       let changed = false
       for (const tab of w.tabs.tabs) {
         // the wash follows the switches live, verdict or no verdict yet
-        tab.wc.send('slop:style', { mark: s.slop.detector, tint: s.slop.detector && s.slop.highlight })
-        if (!tab.slop) continue
-        if (!s.slop.detector) {
+        w.tabs.sendSlopStyle(tab)
+        if (!s.slop.detector && tab.slop) {
           tab.slop = undefined
-          tab.wc.send('slop:veil', false)
           changed = true
-          continue
-        }
-        if (tab.slop.veil === 'up') {
-          const host = prettyHost(tab.wc.getURL())
-          if (!s.slop.veil || (host && s.slop.allowlist.includes(host))) {
-            tab.slop.veil = undefined
-            tab.wc.send('slop:veil', false)
-            changed = true
-          }
         }
       }
       if (changed) w.tabs.pushState()
@@ -404,7 +390,7 @@ export function setupIpc(): void {
 
   ipcMain.on(
     'slop:report',
-    (e, payload: { score: number; words: number; signals: SlopSignal[] }) => {
+    (e, payload: { score: number; words: number; signals: SlopSignal[]; blocks?: unknown }) => {
       const s = settingsStore.get()
       if (!s.slop.detector) return
       const v = validatedPageSender(e)
@@ -412,88 +398,41 @@ export function setupIpc(): void {
       const w = v.entry.ownerWindow
       const tab = w.tabs.byId(e.sender.id)
       if (!tab) return
-      const report: SlopReport = {
-        score: Math.max(0, Math.min(100, Math.round(Number(payload?.score) || 0))),
-        words: Math.max(0, Math.min(1_000_000, Math.round(Number(payload?.words) || 0))),
+      const clamp = (n: unknown, hi: number): number =>
+        Math.max(0, Math.min(hi, Math.round(Number(n) || 0)))
+      const b = (payload?.blocks ?? {}) as { total?: unknown; marked?: unknown; heavy?: unknown }
+      const total = clamp(b.total, 5000)
+      const marked = Math.min(total, clamp(b.marked, 5000))
+      tab.slop = {
+        score: clamp(payload?.score, 100),
+        words: clamp(payload?.words, 1_000_000),
         signals: (Array.isArray(payload?.signals) ? payload.signals : [])
           .slice(0, 8)
           .map((sig) => ({
             label: String(sig?.label ?? '').slice(0, 80),
             count: Math.max(1, Math.min(99, Math.round(Number(sig?.count) || 1)))
           }))
-          .filter((sig) => sig.label)
+          .filter((sig) => sig.label),
+        blocks: { total, marked, heavy: Math.min(marked, clamp(b.heavy, 5000)) }
       }
-      // A rescan of the same document never re-argues a veil the reader already
-      // answered — 'lifted' stands until a real navigation clears the slate.
-      const prior = tab.slop?.veil
-      if (prior) {
-        report.veil = prior
-      } else {
-        const host = v.origin.hostname.replace(/^www\./, '')
-        if (s.slop.veil && report.score >= SLOP_VEIL_MIN && !s.slop.allowlist.includes(host)) {
-          report.veil = 'up'
-          e.sender.send('slop:veil', true, report.score)
-        }
-      }
-      tab.slop = report
       w.tabs.pushState()
     }
   )
 
-  // the veil's own buttons (page side, sender-validated)
-  ipcMain.on('slop:veil-lifted', (e) => {
-    const v = validatedPageSender(e)
-    if (!v || v.entry.kind !== 'tab') return
-    const w = v.entry.ownerWindow
-    const tab = w.tabs.byId(e.sender.id)
-    if (tab?.slop?.veil === 'up') {
-      tab.slop.veil = 'lifted'
-      w.tabs.pushState()
-    }
-  })
-  ipcMain.on('slop:allow-site', (e) => {
-    const v = validatedPageSender(e)
-    if (!v || v.entry.kind !== 'tab') return
-    const w = v.entry.ownerWindow
-    const tab = w.tabs.byId(e.sender.id)
-    if (!tab) return
-    // lift first: the settings write below re-runs the policy pass, and a veil
-    // already answered by the reader is not that pass's to touch
-    if (tab.slop?.veil === 'up') tab.slop.veil = 'lifted'
-    const s = settingsStore.get()
-    const host = v.origin.hostname.replace(/^www\./, '')
-    if (host && !s.slop.allowlist.includes(host)) {
-      settingsStore.set({ slop: { ...s.slop, allowlist: [...s.slop.allowlist, host] } })
-    }
-    w.tabs.pushState()
-  })
-
-  // the chrome's report panel
-  ipcMain.handle('slop:read-anyway', (e, tabId: number) => {
-    const w = chromeWindow(e)
-    const tab = w?.tabs.byId(tabId)
-    if (!w || !tab?.slop) return
-    if (tab.slop.veil === 'up') {
-      tab.slop.veil = 'lifted'
-      tab.wc.send('slop:veil', false)
-    }
-    w.tabs.pushState()
-  })
-  ipcMain.handle('slop:set-allowed', (e, tabId: number, allowed: boolean) => {
+  // The quiet list keeps the report: a quieted host still scores so SiteInfo
+  // can say what the chip would have. Suppression is presentation-side — the
+  // preload gets mark:false, the chip checks the list itself.
+  ipcMain.handle('slop:set-quiet', (e, tabId: number, quiet: boolean) => {
     const w = chromeWindow(e)
     const tab = w?.tabs.byId(tabId)
     if (!w || !tab) return
     const host = prettyHost(tab.wc.getURL())
     if (!host) return
-    if (allowed && tab.slop?.veil === 'up') {
-      tab.slop.veil = 'lifted'
-      tab.wc.send('slop:veil', false)
-      w.tabs.pushState()
-    }
     const s = settingsStore.get()
-    const list = s.slop.allowlist.filter((h) => h !== host)
-    if (allowed) list.push(host)
-    settingsStore.set({ slop: { ...s.slop, allowlist: list } })
+    const list = s.slop.quiet.filter((h) => h !== host)
+    if (quiet) list.push(host)
+    settingsStore.set({ slop: { ...s.slop, quiet: list } })
+    // the settings listener re-styles every open tab on this host
   })
 
   // The three-dots menu: everything Helium keeps behind its kebab

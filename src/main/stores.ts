@@ -98,6 +98,17 @@ class SettingsStore extends EventEmitter {
       if (cleaner?.enabled === false && (parsed as { focus?: unknown })?.focus === undefined) {
         merged.focus = { ...merged.focus, enabled: false }
       }
+      // veil-era shape: carry the never-veil list over as the quiet list, drop
+      // the rest (rebuilding from known keys is the scrub — `veil` and
+      // `allowlist` cannot survive it)
+      const oldSlop = (parsed as { slop?: { quiet?: unknown; allowlist?: unknown } })?.slop
+      const hosts = (list: unknown): string[] =>
+        Array.isArray(list) ? list.filter((h): h is string => typeof h === 'string') : []
+      merged.slop = {
+        detector: merged.slop.detector,
+        highlight: merged.slop.highlight,
+        quiet: Array.isArray(oldSlop?.quiet) ? hosts(oldSlop.quiet) : hosts(oldSlop?.allowlist)
+      }
       return merged
     }
   })
