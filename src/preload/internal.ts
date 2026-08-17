@@ -85,7 +85,6 @@ const api: OffshoreInternalApi = {
   },
   focus: {
     sites: () => invoke('focus:sites'),
-    forget: (host: string) => invoke('focus:forget', host),
     forgetAll: () => invoke('focus:forget-all')
   },
   privacy: {

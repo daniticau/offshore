@@ -271,7 +271,9 @@ export class Tab {
       isBookmarked: bookmarksStore.isBookmarked(effectiveUrl),
       slop: this.slop,
       privacy: harbor.tabPrivacy(this.id),
-      focusOn: host ? focusStore.isOn(host) : false,
+      // the master switch gates every surface: a page the switch un-focused
+      // must not wear focusOn anywhere (site memory stays in focusStore)
+      focusOn: host ? settingsStore.get().focus.enabled && focusStore.isOn(host) : false,
       homeSearch: this.homeSearch && (errorTarget ?? toDisplayUrl(url)).startsWith('offshore://start')
     }
   }
@@ -1272,10 +1274,11 @@ export class TabManager {
       adblock.resetCount(tab.id)
       harbor.resetTab(tab.id)
       if (!isInternalUrl(url) && settingsStore.get().keepHistory) historyStore.record(url)
-      // deliberately unconditional (not gated on keepHistory): the engagement
-      // map holds registrable domain → UTC day only, and it is what lets the
-      // tide tell a site you live on from one you've abandoned
-      if (!isInternalUrl(url) && /^https?:/.test(url)) harbor.noteTopVisit(url)
+      // deliberately not gated on keepHistory (the map holds registrable
+      // domain → UTC day only, and it is what lets the tide tell a site you
+      // live on from one you've abandoned) — Harbor itself gates the write on
+      // the tide setting, and always tracks the tab's open top-level domain
+      if (!isInternalUrl(url) && /^https?:/.test(url)) harbor.noteTopVisit(url, tab.id)
       this.pushState()
       this.host.onTabsChanged()
     })
@@ -1283,7 +1286,7 @@ export class TabManager {
     wc.on('did-navigate-in-page', (_e, url, isMainFrame) => {
       if (isMainFrame) {
         if (!isInternalUrl(url) && settingsStore.get().keepHistory) historyStore.record(url)
-        if (!isInternalUrl(url) && /^https?:/.test(url)) harbor.noteTopVisit(url)
+        if (!isInternalUrl(url) && /^https?:/.test(url)) harbor.noteTopVisit(url, tab.id)
         // an SPA route change is a new page in the old document — ask the
         // detector to look again (the standing verdict holds until it answers)
         wc.send('slop:rescan')

@@ -29,9 +29,9 @@ Notes from the founder (2026-08-06) — gripes with other browsers and what Offs
 - [x] **Inline omnibox** — the palette became a real toolbar input: type-ahead completion,
   dropdown suggestions, focus lands there on every new tab.
 - [x] **AI slop detector** — deterministic prose heuristics in the page preload, 0–100 score
-  with counted signals, a scored chip + report panel in the chrome, the veil over 55+ pages
-  (read anyway / never veil this site), and a verdict line in the site panel. The core tenet,
-  still shipped without a model.
+  with counted signals, a scored chip + report panel in the chrome, graded margin bars on the
+  guilty blocks (yellow → orange → red), a per-site quiet list in Settings → Shield, and a
+  verdict line in the site panel. The core tenet, still shipped without a model.
 - [x] **Chrome-style downloads panel**, bookmarks-bar quick toggle, last-tab keeps the window,
   live cursor-reactive waves, widget context menu, sliding clock digits.
 - [x] **Helium toolbar** — site-info popover (connection, Shield, popups, per-site data clear),

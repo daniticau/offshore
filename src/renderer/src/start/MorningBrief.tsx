@@ -81,8 +81,9 @@ export function MorningBrief({
           <>
             <p className="morning-enable-body">
               Turn on local history and the first tab of each day can suggest sites to revisit,
-              topics to dig into, and new videos from channels you watch. It stays on this Mac —
-              nothing is sent anywhere.
+              topics to dig into, and new videos from channels you watch. Your history stays on
+              this Mac; the one thing that goes out is a cookie-less check with YouTube for new
+              videos on your channels.
             </p>
             <button
               className="morning-enable-btn"

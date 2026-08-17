@@ -1,4 +1,4 @@
-import { app, session, type Cookie, type CookiesSetDetails, type Session } from 'electron'
+import { app, safeStorage, session, type Cookie, type CookiesSetDetails, type Session } from 'electron'
 import { promises as fs, readFileSync } from 'fs'
 import { createRequire } from 'module'
 import { join } from 'path'
@@ -23,9 +23,10 @@ import { JsonFile, bookmarksStore, settingsStore } from './stores'
  *    existing onBeforeSendHeaders callback (sessions.ts — Electron allows one
  *    listener per event and Ghostery owns onBeforeRequest/onHeadersReceived),
  *    and the response side is a post-write scrub on ses.cookies 'changed'.
- * 3. The tide: an always-on engagement map (registrable domain → UTC day of
- *    last top-level visit, nothing else) drives auto-expiry of cookies from
- *    sites you've stopped visiting, with an undo stash.
+ * 3. The tide: an engagement map (registrable domain → UTC day of last
+ *    top-level visit, nothing else, recorded only while the tide is on)
+ *    drives auto-expiry of cookies from sites you've stopped visiting, with
+ *    an undo stash (values safeStorage-encrypted at rest).
  * 4. Per-site report data for the SiteInfo panel (assembled in ipc.ts).
  *
  * The never-breaks-logins posture: PRIVACY_NEVER_TOUCH beats every list,
@@ -35,6 +36,8 @@ import { JsonFile, bookmarksStore, settingsStore } from './stores'
 
 const DAY = 86_400_000
 const ENGAGEMENT_CAP = 2000
+/** The widest tideDays the settings allow — the cap's eviction floor. */
+const MAX_TIDE_DAYS = 90
 const STASH_CAP = 40
 const STASH_MAX_AGE = 14 * DAY
 
@@ -70,7 +73,30 @@ interface StashEntry {
   domain: string
   expiredAt: number
   partition: string
+  /** With `enc`, each cookie's `value` is a safeStorage ciphertext (base64). */
   cookies: Cookie[]
+  enc?: boolean
+}
+
+/** Stash-at-rest crypto, mirroring the password vault (passwords.ts). */
+function stashCryptoAvailable(): boolean {
+  try {
+    return safeStorage.isEncryptionAvailable()
+  } catch {
+    return false
+  }
+}
+
+function encValue(value: string): string {
+  return safeStorage.encryptString(value).toString('base64')
+}
+
+function decValue(value: string): string | null {
+  try {
+    return safeStorage.decryptString(Buffer.from(value, 'base64'))
+  } catch {
+    return null
+  }
 }
 
 function cookieHost(c: Cookie): string {
@@ -90,10 +116,24 @@ class Harbor {
     lastSweepAt: 0,
     hosts: {}
   })
-  private stash = new JsonFile<{ entries: StashEntry[] }>('expired-cookies.json', { entries: [] })
+  private stash = new JsonFile<{ entries: StashEntry[] }>('expired-cookies.json', { entries: [] }, {
+    // cookie values are live session tokens — owner-only, like the vault
+    mode: 0o600
+  })
   private sessions = new WeakSet<Session>()
   /** webContents id -> tracker cookies kept out of its requests */
   private strips = new Map<number, number>()
+  /** webContents id -> tracker cookies deleted from the jar by the scrub */
+  private scrubs = new Map<number, number>()
+  /** webContents id -> current top-level registrable domain (open-tab evidence). */
+  private tabTops = new Map<number, string>()
+  /** registrable domain -> last webContents id whose stripped request hit it,
+   *  so a response-side scrub can be pinned on the page that summoned it. */
+  private lastRequester = new Map<string, number>()
+  /** Domains mid-restore(): the scrub must not eat what the undo re-sets. */
+  private restoring = new Set<string>()
+  /** Flow-only classifier seeds — see the exported hooks section. */
+  private testTrackers = new Set<string>()
   private consent = new Map<number, { state: TabPrivacyInfo['consent']; cmp?: string }>()
   private rules: unknown | null = null
   onCountChanged: ((tabId: number) => void) | null = null
@@ -109,10 +149,18 @@ class Harbor {
       setTimeout(() => void this.sweepIfDue(), 60_000)
       setInterval(() => void this.sweepIfDue(), 6 * 60 * 60 * 1000)
     }
+    // The classifier serves cookieGuard and nothing else — no list fetch for a
+    // feature that's off. Flipping the toggle on calls ensureClassifier().
+    const wantClassifier = (): boolean => settingsStore.get().privacy.cookieGuard
     setInterval(() => {
-      if (!this.classifier) void this.buildClassifier()
+      if (!this.classifier && wantClassifier()) void this.buildClassifier()
     }, 6 * 60 * 60 * 1000)
-    await this.buildClassifier()
+    if (wantClassifier()) await this.buildClassifier()
+  }
+
+  /** cookieGuard just switched on mid-session: build without waiting 6 hours. */
+  ensureClassifier(): void {
+    if (!this.classifier) void this.buildClassifier()
   }
 
   flush(): void {
@@ -179,25 +227,69 @@ class Harbor {
 
   tabPrivacy(tabId: number): TabPrivacyInfo | undefined {
     const stripped = this.strips.get(tabId) ?? 0
+    const scrubbed = this.scrubs.get(tabId) ?? 0
     const consent = this.consent.get(tabId)
-    if (!stripped && (!consent || consent.state === 'none')) return undefined
-    return { cookiesStripped: stripped, consent: consent?.state ?? 'none', cmp: consent?.cmp }
+    if (!stripped && !scrubbed && (!consent || consent.state === 'none')) return undefined
+    return {
+      cookiesStripped: stripped,
+      cookiesScrubbed: scrubbed,
+      consent: consent?.state ?? 'none',
+      cmp: consent?.cmp
+    }
   }
 
-  countStripped(tabId: number | undefined): void {
+  countStripped(tabId: number | undefined, url?: string): void {
     if (typeof tabId !== 'number' || tabId <= 0) return
     this.strips.set(tabId, (this.strips.get(tabId) ?? 0) + 1)
+    if (url) {
+      try {
+        this.noteRequester(registrableDomain(new URL(url).hostname), tabId)
+      } catch {
+        /* unparseable url — the strip still counts */
+      }
+    }
+    this.onCountChanged?.(tabId)
+  }
+
+  private noteRequester(domain: string, tabId: number): void {
+    // re-insert so Map order stays LRU-ish; the cap keeps this map small
+    this.lastRequester.delete(domain)
+    this.lastRequester.set(domain, tabId)
+    if (this.lastRequester.size > 200) {
+      const oldest = this.lastRequester.keys().next().value
+      if (oldest !== undefined) this.lastRequester.delete(oldest)
+    }
+  }
+
+  /** A jar deletion has no tab context of its own — pin it on the tab open on
+   *  the domain (blockSites case) or the page whose request last summoned it. */
+  private countScrubbed(domain: string): void {
+    let tabId: number | undefined
+    for (const [id, d] of this.tabTops) {
+      if (d === domain) {
+        tabId = id
+        break
+      }
+    }
+    tabId ??= this.lastRequester.get(domain)
+    if (typeof tabId !== 'number') return
+    this.scrubs.set(tabId, (this.scrubs.get(tabId) ?? 0) + 1)
     this.onCountChanged?.(tabId)
   }
 
   resetTab(tabId: number): void {
     this.strips.delete(tabId)
+    this.scrubs.delete(tabId)
     this.consent.delete(tabId)
+    // noteTopVisit re-fills this the moment the new document is a real site
+    this.tabTops.delete(tabId)
   }
 
   dropTab(tabId: number): void {
     this.strips.delete(tabId)
+    this.scrubs.delete(tabId)
     this.consent.delete(tabId)
+    this.tabTops.delete(tabId)
   }
 
   // ---------------- classifier ----------------
@@ -246,6 +338,7 @@ class Harbor {
    *  Hostname-anchored filters (||domain^) match this synthetic fetch; path-
    *  specific EasyPrivacy rules deliberately do not — conservative by design. */
   isTrackerDomain(domain: string): boolean {
+    if (this.testTrackers.has(domain)) return true
     return this.classifyRequest(`https://${domain}/`, 'https://offshore-probe.invalid/', 'script')
   }
 
@@ -306,18 +399,31 @@ class Harbor {
       const host = cookieHost(cookie)
       if (hostMatches(host, PRIVACY_NEVER_TOUCH)) return
       const domain = registrableDomain(host)
+      // restore() is mid-flight for this domain — the writes are the undo itself
+      if (this.restoring.has(domain)) return
       const s = settingsStore.get().privacy
       if (s.keepSites.includes(domain) || s.disabledSites.includes(domain)) return
-      // domain-level classification only: a mixed-use domain that matches
-      // nothing but path rules never loses a session cookie here
-      if (!(s.blockSites.includes(domain) || this.isTrackerDomain(domain))) return
+      if (!s.blockSites.includes(domain)) {
+        // domain-level classification only: a mixed-use domain that matches
+        // nothing but path rules never loses a session cookie here
+        if (!this.isTrackerDomain(domain)) return
+        // First-party evidence beats classification (blockSites is the user's
+        // own verdict and skips this): the lists flag analytics vendors whose
+        // dashboards have real logins — a tab open on the domain, or a visit
+        // within the tide horizon, means the user is *on* this site, and the
+        // posture says first-party is never stripped.
+        if (this.isOpenTopDomain(domain)) return
+        const last = this.engagement.data.hosts[domain]
+        if (last !== undefined && Date.now() - last <= s.tideDays * DAY) return
+      }
       void ses.cookies.remove(cookieUrl(cookie), cookie.name).catch(() => {})
+      this.countScrubbed(domain)
     })
   }
 
   // ---------------- engagement map ----------------
 
-  noteTopVisit(url: string): void {
+  noteTopVisit(url: string, tabId?: number): void {
     let host: string
     try {
       host = new URL(url).hostname
@@ -325,7 +431,20 @@ class Harbor {
       return
     }
     if (!host) return
-    this.touch(registrableDomain(host))
+    const domain = registrableDomain(host)
+    // the open-tab ledger (scrub evidence, live sweep checks) is in-memory
+    // state about what is on screen right now — no toggle governs it
+    if (typeof tabId === 'number') this.tabTops.set(tabId, domain)
+    // the engagement map exists for the tide; with the tide off, nothing is
+    // written down
+    if (!settingsStore.get().privacy.tide) return
+    this.touch(domain)
+  }
+
+  /** Is this registrable domain the top-level site of any open tab? */
+  isOpenTopDomain(domain: string): boolean {
+    for (const d of this.tabTops.values()) if (d === domain) return true
+    return false
   }
 
   /** The optional clock is the test flow's; a write only happens when the day changes. */
@@ -337,7 +456,15 @@ class Harbor {
     const keys = Object.keys(hosts)
     if (keys.length > ENGAGEMENT_CAP) {
       keys.sort((a, b) => hosts[a] - hosts[b])
-      for (const k of keys.slice(0, keys.length - ENGAGEMENT_CAP)) delete hosts[k]
+      // The cap may only evict entries already outside the widest tide horizon:
+      // the sweep reads absence as staleness, so evicting a within-horizon
+      // entry would break the tideDays promise. An all-live map runs over the
+      // cap instead — self-limiting, one string and one number per site.
+      const horizon = day - MAX_TIDE_DAYS * DAY
+      for (const k of keys.slice(0, keys.length - ENGAGEMENT_CAP)) {
+        if (hosts[k] >= horizon) break // ascending sort: the rest are live too
+        delete hosts[k]
+      }
     }
     this.engagement.save()
   }
@@ -364,6 +491,15 @@ class Harbor {
   engagementDelete(domain: string): void {
     delete this.engagement.data.hosts[domain]
     this.engagement.save()
+  }
+
+  /** Flow-only: make isTrackerDomain flag a fixture domain without the network. */
+  trackerSeed(domain: string): void {
+    this.testTrackers.add(domain)
+  }
+
+  trackerSeedClear(): void {
+    this.testTrackers.clear()
   }
 
   /** A fresh map earns a fresh grace period. */
@@ -433,12 +569,28 @@ class Harbor {
         byDomain.set(d, list)
       }
       for (const [domain, cookies] of byDomain) {
-        if (!(block.has(domain) || !keep.has(domain))) {
+        // The doom decision is live, not the snapshot's: this loop awaits, and
+        // a navigation or visit landing mid-sweep must rescue its domain — the
+        // engagement map (touch() keeps it current) and the open-tab ledger
+        // are both re-read here, at the moment before destruction.
+        const last = this.engagement.data.hosts[domain]
+        const live = last !== undefined && last >= horizon
+        if (!block.has(domain) && (keep.has(domain) || live || this.isOpenTopDomain(domain))) {
           out.keptCount += 1
           continue
         }
+        // re-read the jar at doom time so the stash holds current values, not
+        // the partition snapshot's — a login racing the sweep stays undoable
+        let current = cookies
+        try {
+          current = (await ses.cookies.get({ domain })).filter(
+            (c) => registrableDomain(cookieHost(c)) === domain
+          )
+        } catch {
+          /* keep the snapshot */
+        }
         // the platform promise beats even blockSites, cookie by cookie
-        const doomed = cookies.filter((c) => !hostMatches(cookieHost(c), PRIVACY_NEVER_TOUCH))
+        const doomed = current.filter((c) => !hostMatches(cookieHost(c), PRIVACY_NEVER_TOUCH))
         if (!doomed.length) continue
         this.stashEntry(domain, now, partition, doomed)
         for (const c of doomed) await ses.cookies.remove(cookieUrl(c), c.name).catch(() => {})
@@ -499,7 +651,12 @@ class Harbor {
   }
 
   private stashEntry(domain: string, at: number, partition: string, cookies: Cookie[]): void {
-    this.stash.data.entries.push({ domain, expiredAt: at, partition, cookies })
+    // Values are live session tokens that just left Chromium's encrypted jar —
+    // at rest they get the vault's safeStorage treatment, never plaintext when
+    // the machine can do better (the file is 0600 either way).
+    const enc = stashCryptoAvailable()
+    const stored = enc ? cookies.map((c) => ({ ...c, value: encValue(c.value) })) : cookies
+    this.stash.data.entries.push({ domain, expiredAt: at, partition, cookies: stored, enc })
     this.pruneStash()
     this.stash.save()
   }
@@ -522,31 +679,63 @@ class Harbor {
   async restore(domain: string): Promise<boolean> {
     const entries = this.stash.data.entries.filter((e) => e.domain === domain)
     if (!entries.length) return false
+    // Restoring is the user asking for this site's cookies back. A standing
+    // block would hand every one straight back to the scrub — the block was
+    // what expired them, so the restore lifts it.
+    const s = settingsStore.get().privacy
+    if (s.blockSites.includes(domain)) {
+      settingsStore.set({
+        privacy: { ...s, blockSites: s.blockSites.filter((d) => d !== domain) }
+      })
+    }
+    // And the scrub must not eat the undo mid-flight (a tide-swept domain the
+    // classifier flags would otherwise be re-scrubbed on every set).
+    this.restoring.add(domain)
+    const failed = new Set<StashEntry>()
     let all = true
-    for (const e of entries) {
-      const ses = session.fromPartition(e.partition)
-      for (const c of e.cookies) {
-        const details: CookiesSetDetails = {
-          url: cookieUrl(c),
-          name: c.name,
-          value: c.value,
-          path: c.path,
-          secure: c.secure,
-          httpOnly: c.httpOnly
+    try {
+      for (const e of entries) {
+        const ses = session.fromPartition(e.partition)
+        let ok = true
+        for (const c of e.cookies) {
+          const value = e.enc ? decValue(c.value) : c.value
+          if (value === null) {
+            // ciphertext from another machine/keychain — unrecoverable
+            ok = false
+            continue
+          }
+          const details: CookiesSetDetails = {
+            url: cookieUrl(c),
+            name: c.name,
+            value,
+            path: c.path,
+            secure: c.secure,
+            httpOnly: c.httpOnly
+          }
+          if (!c.hostOnly && c.domain) details.domain = c.domain
+          if (typeof c.expirationDate === 'number') details.expirationDate = c.expirationDate
+          if (c.sameSite && !(c.sameSite === 'no_restriction' && !c.secure)) {
+            details.sameSite = c.sameSite
+          }
+          const set = await ses.cookies.set(details).then(
+            () => true,
+            () => false
+          )
+          ok &&= set
         }
-        if (!c.hostOnly && c.domain) details.domain = c.domain
-        if (typeof c.expirationDate === 'number') details.expirationDate = c.expirationDate
-        if (c.sameSite && !(c.sameSite === 'no_restriction' && !c.secure)) {
-          details.sameSite = c.sameSite
-        }
-        const ok = await ses.cookies.set(details).then(
-          () => true,
-          () => false
-        )
+        if (!ok) failed.add(e)
         all &&= ok
       }
+      // the sets' 'changed' events deliver asynchronously — hold the guard
+      // until they have had their turn
+      await new Promise((r) => setTimeout(r, 250))
+    } finally {
+      this.restoring.delete(domain)
     }
-    this.stash.data.entries = this.stash.data.entries.filter((e) => e.domain !== domain)
+    // only consume what actually came back; a failed entry stays undoable
+    this.stash.data.entries = this.stash.data.entries.filter(
+      (e) => e.domain !== domain || failed.has(e)
+    )
     this.stash.save()
     return all
   }

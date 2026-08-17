@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { EventEmitter } from 'events'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import {
   DEFAULT_SETTINGS,
@@ -56,6 +56,9 @@ export class JsonFile<T> {
     try {
       mkdirSync(dirname(this.path), { recursive: true })
       writeFileSync(this.path, JSON.stringify(this.data, null, 2), { mode: this.mode })
+      // writeFileSync's mode only applies at creation — tighten files that
+      // predate their mode (a stash written before it went owner-only)
+      if (this.mode !== undefined) chmodSync(this.path, this.mode)
     } catch (err) {
       console.warn('[stores] failed to save:', err)
     }

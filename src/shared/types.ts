@@ -833,6 +833,8 @@ export interface PrivacySettings {
 export interface TabPrivacyInfo {
   /** Tracker cookies kept out of requests made by this page (this document). */
   cookiesStripped: number
+  /** Tracker cookies the response-side scrub deleted from the jar for this page. */
+  cookiesScrubbed: number
   /** Consent auto-answer state for this document. */
   consent: 'none' | 'found' | 'handled' | 'failed'
   /** CMP name when one was detected (e.g. "Cybotcookiebot"). */

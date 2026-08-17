@@ -162,6 +162,8 @@ void app.whenReady().then(async () => {
     }
     // Turning the brief itself off forgets everything it kept
     if (prev.morning.enabled && !next.morning.enabled) morningBrief.wipe()
+    // cookieGuard back on mid-session: its classifier shouldn't wait 6 hours
+    if (!prev.privacy.cookieGuard && next.privacy.cookieGuard) harbor.ensureClassifier()
     // First-run onboarding finished: open anything that arrived while it ran
     if (!prev.onboarded && next.onboarded) flushPendingUrls()
   })

@@ -206,7 +206,6 @@ export interface OffshoreInternalApi {
   focus: {
     /** Hosts Focus is currently on for, sorted. */
     sites(): Promise<string[]>
-    forget(host: string): Promise<void>
     forgetAll(): Promise<void>
   }
   privacy: {

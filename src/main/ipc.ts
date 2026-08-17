@@ -737,10 +737,6 @@ export function setupIpc(): void {
   // ---- Focus ----
   ipcMain.handle('focus:toggle', (e) => chromeWindow(e)?.tabs.toggleFocus())
   ipcMain.handle('focus:sites', (e) => (isTrustedSender(e) ? focusStore.sites() : []))
-  ipcMain.handle('focus:forget', (e, host: string) => {
-    if (!isTrustedSender(e) || typeof host !== 'string') return
-    focusStore.set(host, false)
-  })
   ipcMain.handle('focus:forget-all', (e) => {
     if (!isTrustedSender(e)) return
     const hosts = focusStore.sites()
@@ -1023,6 +1019,11 @@ export function setupIpc(): void {
       historyStore.clear()
       // the brief is distilled history — it goes with the history
       morningBrief.wipe()
+      // so are Harbor's records of where you've been: the tide's site-name map
+      // (a fresh map earns a fresh grace period, so logins stay safe) and the
+      // expired-cookie stash, which names domains and holds their tokens
+      harbor.clearEngagement()
+      harbor.clearStash()
     }
   })
   // Site-info popover: wipe one origin's cookies/storage in the active tab's jar
@@ -1043,6 +1044,11 @@ export function setupIpc(): void {
       for (const c of cookies) {
         await tab.wc.session.cookies.remove(origin, c.name).catch(() => {})
       }
+      // "Clear cookies & data for this site" must not leave the site's tokens
+      // in the undo stash (one Restore away) or its name in the tide's map
+      const domain = registrableDomain(new URL(origin).hostname)
+      harbor.stashDelete(domain)
+      harbor.engagementDelete(domain)
       tab.wc.reload()
       return true
     } catch (err) {

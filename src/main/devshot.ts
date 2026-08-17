@@ -1,5 +1,5 @@
-import { BrowserWindow, app, ipcMain, screen, session } from 'electron'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { BrowserWindow, app, ipcMain, safeStorage, screen, session } from 'electron'
+import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import * as nodeHttp from 'http'
 import { ADBLOCK_LISTS, HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_HEAVY_MIN, type AppearanceSettings, type SiteReport, type SlopReport } from '@shared/types'
@@ -1757,12 +1757,19 @@ function setupTestFlows(): void {
         return railBack && chipGone ? true : undefined
       }, 8000)
       check('the master switch restores pages and hides the chip', masterOff === true)
+      // every surface must agree with the page: TabInfo drops focusOn while
+      // the master is off, though the per-site memory itself survives
+      check(
+        'master off: TabInfo drops focusOn, memory intact',
+        w.tabs.activeTab!.info().focusOn === false && focusStore.isOn('127.0.0.1') === true
+      )
       settingsStore.set({ focus: { enabled: true } })
       const masterBack = await settle(
         async () => ((await inPage(`getComputedStyle(document.getElementById('rail')).display`)) === 'none' ? true : undefined),
         8000
       )
       check('re-enabling honors the site memory', masterBack === true)
+      check('re-enabled: TabInfo wears focusOn again', w.tabs.activeTab!.info().focusOn === true)
 
       focusStore.set('127.0.0.1', false)
       // flows leave over app.exit, which skips the debounced save — write now
@@ -1837,7 +1844,11 @@ function setupTestFlows(): void {
         }
         res.setHeader('content-type', 'text/html')
         if (path === '/cmp') res.end(cmpPage)
-        else if (path === '/tracked') res.end(trackedPage(query.replace(/^g=/, '') || '0', port))
+        else if (path === '/login') {
+          // a login-shaped response: the session cookie rides Set-Cookie
+          res.setHeader('set-cookie', 'session=alive; Path=/')
+          res.end('<html><body><p>Signed in.</p></body></html>')
+        } else if (path === '/tracked') res.end(trackedPage(query.replace(/^g=/, '') || '0', port))
         else if (path === '/framed') res.end(`<html><body><iframe src="http://127.0.0.1:${port}/frame"></iframe></body></html>`)
         else if (path === '/frame') {
           res.setHeader('set-cookie', 'framecookie=1; Path=/')
@@ -1865,11 +1876,20 @@ function setupTestFlows(): void {
           privacy: {
             ...s,
             cookieGuard: true,
-            blockSites: s.blockSites.filter((d) => d !== '127.0.0.1'),
+            tide: true,
+            blockSites: s.blockSites.filter((d) => d !== '127.0.0.1' && d !== 'blocked.example'),
             keepSites: s.keepSites.filter((d) => d !== 'localhost')
           }
         })
-        for (const d of ['stale.example', 'fresh.example', 'kept.example']) {
+        harbor.trackerSeedClear()
+        for (const d of [
+          'stale.example',
+          'fresh.example',
+          'kept.example',
+          'flagged.example',
+          'blocked.example',
+          'gone.example'
+        ]) {
           harbor.engagementDelete(d)
           harbor.stashDelete(d)
           for (const c of await ses.cookies.get({ url: `https://${d}/` })) {
@@ -1988,6 +2008,15 @@ function setupTestFlows(): void {
         return (p?.cookiesStripped ?? 0) >= 1 ? p!.cookiesStripped : undefined
       }, 8000)
       check('tab counts its strips', (strips ?? 0) >= 1, `stripped=${strips}`)
+      // A jar deletion is counted too — the site panel must not be silent.
+      // The write lands document.cookie-style (no request context), so the
+      // count is pinned on this page via the strip ledger the g=2 run left.
+      await plantPre('3').catch(() => {})
+      const scrubs = await settle(async () => {
+        const p = tab()!.info().privacy
+        return (p?.cookiesScrubbed ?? 0) >= 1 ? p!.cookiesScrubbed : undefined
+      }, 8000)
+      check('tab counts the scrubs', (scrubs ?? 0) >= 1, `scrubbed=${scrubs}`)
       check(
         'documents are never stripped',
         harbor.shouldStripRequest({
@@ -2024,13 +2053,56 @@ function setupTestFlows(): void {
           ) === true
       )
 
+      // -- 2b. first-party evidence: a flagged domain the user actually uses --
+      // The lists flag analytics vendors whose dashboards have real logins
+      // (mixpanel.com is a product with customers). Evidence that the domain is
+      // first-party — an open tab on it, or a visit within the tide horizon —
+      // must beat classification. The tide is off for this section, which also
+      // proves the engagement map records nothing while it's off.
+      const tideWas = settingsStore.get().privacy.tide
+      settingsStore.set({ privacy: { ...settingsStore.get().privacy, tide: false } })
+      harbor.trackerSeed('localhost')
+      harbor.trackerSeed('flagged.example')
+      harbor.engagementDelete('localhost')
+      w.tabs.navigate(null, local('/login'))
+      const loginSet = await settle(async () => {
+        const cs = await ses.cookies.get({ url: local('/') })
+        return cs.some((c) => c.name === 'session') ? true : undefined
+      }, 8000)
+      await delay(800) // the scrub is fire-and-forget; give a wrong removal time to land
+      const loginStays = (await ses.cookies.get({ url: local('/') })).some((c) => c.name === 'session')
+      check(
+        'flagged domain, visited top-level: login cookie survives',
+        loginSet === true && loginStays,
+        `set=${loginSet} stays=${loginStays}`
+      )
+      check('tide off: the visit was not written down', harbor.lastVisit('localhost') === null)
+      harbor.engagementSeed('flagged.example', Date.now() - 1 * DAY)
+      await ses.cookies.set({ url: 'https://flagged.example/', name: 'sess', value: 'ok' }).catch(() => {})
+      await delay(800)
+      check(
+        'flagged domain with recent engagement: cookie survives',
+        (await ses.cookies.get({ url: 'https://flagged.example/' })).some((c) => c.name === 'sess')
+      )
+      harbor.engagementDelete('flagged.example')
+      await ses.cookies.set({ url: 'https://flagged.example/', name: 'sess2', value: 'x' }).catch(() => {})
+      const controlGone = await settle(async () => {
+        const cs = await ses.cookies.get({ url: 'https://flagged.example/' })
+        return cs.some((c) => c.name === 'sess2') ? undefined : true
+      }, 8000)
+      check('no evidence, no mercy: the flagged domain is scrubbed (control)', controlGone === true)
+      harbor.trackerSeedClear()
+      settingsStore.set({ privacy: { ...settingsStore.get().privacy, tide: tideWas } })
+
       // -- 3. the tide, on an injected clock --
       const now = Date.now()
       harbor.engagementSeed('stale.example', now - 40 * DAY)
       harbor.engagementSeed('fresh.example', now - 1 * DAY)
       harbor.engagementSetCreatedAt(now - 90 * DAY)
       for (const d of ['stale.example', 'fresh.example', 'kept.example']) {
-        await ses.cookies.set({ url: `https://${d}/`, name: 'jar', value: d }).catch(() => {})
+        // values distinguishable from the domain, so the stash-at-rest check
+        // can tell a plaintext value from a mere domain mention
+        await ses.cookies.set({ url: `https://${d}/`, name: 'jar', value: `secret-${d}` }).catch(() => {})
       }
       const bm = bookmarksStore.add('https://kept.example/', 'Kept')
       const sweep1 = await harbor.sweep(now)
@@ -2048,11 +2120,51 @@ function setupTestFlows(): void {
         receipts.some((x) => x.domain === 'stale.example' && x.cookieCount >= 1),
         JSON.stringify(receipts)
       )
+      // the stash at rest: owner-only file, values never in plaintext
+      harbor.flush()
+      const stashPath = join(app.getPath('userData'), 'expired-cookies.json')
+      const rawStash = readFileSync(stashPath, 'utf-8')
+      const stashMode = statSync(stashPath).mode & 0o777
+      check('stash file is owner-only (0600)', stashMode === 0o600, stashMode.toString(8))
+      if (safeStorage.isEncryptionAvailable()) {
+        check(
+          'stash holds no plaintext cookie values',
+          rawStash.includes('stale.example') && !rawStash.includes('secret-stale.example'),
+          rawStash.slice(0, 200)
+        )
+      } else {
+        say('[flowtest] safeStorage unavailable — plaintext stash check skipped')
+      }
       const restored = await harbor.restore('stale.example')
       check(
         'restore brings cookies back',
         restored === true &&
-          (await ses.cookies.get({ url: 'https://stale.example/' })).some((c) => c.name === 'jar')
+          (await ses.cookies.get({ url: 'https://stale.example/' })).some(
+            (c) => c.name === 'jar' && c.value === 'secret-stale.example'
+          )
+      )
+
+      // -- 3b. block, then change your mind: restore must really bring them back --
+      await ses.cookies.set({ url: 'https://blocked.example/', name: 'keepme', value: 'v1' }).catch(() => {})
+      const spb = settingsStore.get().privacy
+      settingsStore.set({ privacy: { ...spb, blockSites: [...spb.blockSites, 'blocked.example'] } })
+      await harbor.expireDomain('blocked.example')
+      check(
+        'blocking expires the jar into the undo list',
+        (await ses.cookies.get({ url: 'https://blocked.example/' })).length === 0 &&
+          harbor.expiredList().some((x) => x.domain === 'blocked.example')
+      )
+      const restoredBlocked = await harbor.restore('blocked.example')
+      await delay(800) // any wrongful scrub of the restored cookies would land here
+      const backJar = await ses.cookies.get({ url: 'https://blocked.example/' })
+      check(
+        'restore on a blocked site genuinely brings cookies back',
+        restoredBlocked === true && backJar.some((c) => c.name === 'keepme' && c.value === 'v1'),
+        JSON.stringify(backJar)
+      )
+      check(
+        'restore lifts the block',
+        !settingsStore.get().privacy.blockSites.includes('blocked.example')
       )
       harbor.engagementSetCreatedAt(now - 2 * DAY)
       await ses.cookies.set({ url: 'https://stale.example/', name: 'jar2', value: '1' }).catch(() => {})
@@ -2067,6 +2179,45 @@ function setupTestFlows(): void {
         rawMap.slice(0, 160)
       )
       bookmarksStore.remove(bm.id)
+
+      // -- 3c. Clear history takes the tide's map and the stash with it --
+      // seed a fresh stash entry (restore consumed the earlier ones)
+      await ses.cookies.set({ url: 'https://gone.example/', name: 'jar', value: 'secret-gone' }).catch(() => {})
+      await harbor.expireDomain('gone.example')
+      check(
+        'pre-clear: map and stash are non-empty',
+        harbor.lastVisit('fresh.example') !== null && harbor.expiredList().length >= 1
+      )
+      // through the real surface: the settings page's internal bridge
+      w.tabs.navigate(null, 'offshore://settings')
+      const bridgeUp = await settle(
+        async () =>
+          (await inPage(`!!window.offshoreInternal`).catch(() => false)) === true ? true : undefined,
+        8000
+      )
+      check('settings page carries the internal bridge', bridgeUp === true)
+      await inPage(`window.offshoreInternal.history.clear()`)
+      harbor.flush()
+      check(
+        'history:clear empties the stash',
+        harbor.expiredList().length === 0,
+        JSON.stringify(harbor.expiredList())
+      )
+      const rawMapCleared = readFileSync(join(app.getPath('userData'), 'engagement.json'), 'utf-8')
+      check(
+        'history:clear empties the engagement map',
+        harbor.lastVisit('fresh.example') === null && /"hosts": \{\}/.test(rawMapCleared),
+        rawMapCleared.slice(0, 160)
+      )
+      // the wipe reset the grace clock; the panel section needs a local page again
+      w.tabs.navigate(null, local('/plain'))
+      await settle(
+        async () =>
+          ((await inPage(`document.body.innerText`).catch(() => '')) as string).trim() === 'plain'
+            ? true
+            : undefined,
+        8000
+      )
 
       // -- 4. the per-site panel, on the freeze-frame contract --
       const report = (await inChrome(`window.offshore.privacy.siteReport()`)) as SiteReport | null

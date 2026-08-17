@@ -34,10 +34,13 @@ function App(): React.JSX.Element {
   const isDark = useIsDark()
 
   // "Show welcome again" arrives mid-life with a real appearance — honor it
-  // (muted stays muted, the accent stays the accent), and stay live for flips.
+  // (muted stays muted, the accent stays the accent, the theme stays the
+  // theme), and stay live for flips. Theme matters twice: step 5's picker
+  // highlights it, and finish() writes it back.
   useEffect(() => {
     const take = (s: Settings): void => {
       setAppearance(s.appearance)
+      setTheme(s.appearance?.theme ?? 'system')
       applyMuted(s.appearance?.muted === true)
     }
     void internal?.settings.get().then((s) => s && take(s))

@@ -555,7 +555,7 @@ function MorningStatusRow({ settings, patch }: { settings: Settings; patch: (p: 
       <div className="row-sub">
         {status.ollama.reachable && status.ollama.model
           ? `Composed by ${status.ollama.model} — Ollama on this machine.`
-          : `Ollama not found at ${status.ollama.host} — using Offshore's built-in heuristics. Everything stays local either way.`}
+          : `Ollama not found at ${status.ollama.host} — using Offshore's built-in heuristics. Composing stays on this Mac; only the cookie-less YouTube check for new videos goes out.`}
       </div>
     </div>
   )

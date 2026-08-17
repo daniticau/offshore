@@ -82,7 +82,7 @@ function setupBeforeSendHeaders(ses: Session): void {
         for (const k of Object.keys(details.requestHeaders)) {
           if (k.toLowerCase() === 'cookie') delete details.requestHeaders[k]
         }
-        harbor.countStripped(details.webContentsId)
+        harbor.countStripped(details.webContentsId, details.url)
       }
     }
     cb({ requestHeaders: details.requestHeaders })

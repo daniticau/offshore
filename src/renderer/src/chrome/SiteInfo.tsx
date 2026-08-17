@@ -58,6 +58,9 @@ function IconTide(): React.JSX.Element {
  * Freeze-frame contract: the panel opens over a still of the page, so every
  * row is on screen at its final height from the first paint — async report
  * data fills in behind an "…" placeholder, and nothing may grow the panel.
+ * The page keeps running behind the still, so the set of rows is captured
+ * once at mount (rowsAtOpen); live events may update a mounted row's text,
+ * never add or remove a row.
  */
 export function SiteInfo({ tab, settings, shieldOff, onToggleShield, onClose }: SiteInfoProps): React.JSX.Element {
   const [cleared, setCleared] = useState(false)
@@ -67,6 +70,15 @@ export function SiteInfo({ tab, settings, shieldOff, onToggleShield, onClose }: 
   const popupsAllowed = settings.popups.allowlist.includes(host)
   const consent = tab.privacy?.consent ?? 'none'
   const stripped = tab.privacy?.cookiesStripped ?? 0
+  const scrubbed = tab.privacy?.cookiesScrubbed ?? 0
+  // Row PRESENCE is decided once, at open: the page keeps running behind the
+  // still, and a strip or consent event mid-open must not pop a row in (or
+  // out) under the pointer. Contents inside a mounted row stay live.
+  const [rowsAtOpen] = useState(() => ({
+    consent: settings.privacy.consentAuto && (tab.privacy?.consent ?? 'none') !== 'none',
+    stripped: (tab.privacy?.cookiesStripped ?? 0) + (tab.privacy?.cookiesScrubbed ?? 0) > 0,
+    focus: tab.focusOn
+  }))
 
   useEffect(() => {
     let alive = true
@@ -131,7 +143,7 @@ export function SiteInfo({ tab, settings, shieldOff, onToggleShield, onClose }: 
         <span className="si-text">{cookieText}</span>
       </div>
 
-      {settings.privacy.consentAuto && consent !== 'none' && (
+      {rowsAtOpen.consent && (
         <div className={`si-row si-consent si-fixed ${consent === 'handled' ? 'handled' : ''}`}>
           <span className="si-icon">
             <IconConsent />
@@ -146,13 +158,17 @@ export function SiteInfo({ tab, settings, shieldOff, onToggleShield, onClose }: 
         </div>
       )}
 
-      {stripped > 0 && (
+      {rowsAtOpen.stripped && (
         <div className="si-row si-strip si-fixed">
           <span className="si-icon">
             <IconShieldFilled size={12} />
           </span>
           <span className="si-text">
-            {stripped} tracker cookie{stripped === 1 ? '' : 's'} kept out of requests
+            {scrubbed > 0 && stripped > 0
+              ? `${stripped} tracker cookie${stripped === 1 ? '' : 's'} kept out of requests · ${scrubbed} scrubbed from the jar`
+              : scrubbed > 0
+                ? `${scrubbed} tracker cookie${scrubbed === 1 ? '' : 's'} scrubbed from the jar`
+                : `${stripped} tracker cookie${stripped === 1 ? '' : 's'} kept out of requests`}
           </span>
         </div>
       )}
@@ -224,14 +240,14 @@ export function SiteInfo({ tab, settings, shieldOff, onToggleShield, onClose }: 
         </div>
       )}
 
-      {tab.focusOn && (
+      {rowsAtOpen.focus && (
         <div className="si-row">
           <span className="si-icon si-focus">
             <IconFocus size={13} />
           </span>
-          <span className="si-text">Focus is on for this site</span>
+          <span className="si-text">{tab.focusOn ? 'Focus is on for this site' : 'Focus is off for this site'}</span>
           <button className="si-action" onClick={() => void offshore.focus.toggle()}>
-            Turn off
+            {tab.focusOn ? 'Turn off' : 'Turn on'}
           </button>
         </div>
       )}
