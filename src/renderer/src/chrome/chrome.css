@@ -2321,106 +2321,13 @@ browser-action-list {
   color: #c98a3a;
 }
 
-/* ---------- Page Cleaner chip + panel ---------- */
+/* ---------- Focus chip ---------- */
 
-.modes-chip-wrap {
-  position: relative;
-  display: inline-flex;
-}
-.modes-chip.active,
-.modes-chip.open {
+.focus-chip.active {
   color: var(--accent-strong);
   background: var(--glass-strong);
 }
-.modes-panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  width: 300px;
-  padding: 6px;
-  z-index: 96;
-  animation: omni-in 140ms var(--ease-spring);
-}
-/* the sidebar pill is 200px with the chip inside it — the panel stands on the
-   page instead, aligned to the column, the way the slop report does */
-.mode-vertical .modes-panel {
-  position: fixed;
-  left: var(--chrome-pad);
-  top: calc(var(--toolbar-row) + var(--btn-h) + 12px);
-  right: auto;
-  width: calc(var(--sidebar-w) - var(--chrome-pad) * 2);
-}
-.mp-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 8px 12px 6px;
-  border-bottom: 0.5px solid var(--hairline);
-  margin-bottom: 4px;
-  font-weight: 600;
-  color: var(--ink);
-  font-size: var(--font-chrome);
-}
-.mp-host {
-  font-weight: 400;
-  color: var(--ink-soft);
-  font-size: var(--text-xs);
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mp-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 8px 12px;
-}
-.mp-meta {
-  flex: 1;
-  min-width: 0;
-}
-.mp-title {
-  color: var(--ink);
-  font-size: var(--font-chrome);
-}
-.mp-sub {
-  color: var(--ink-soft);
-  font-size: var(--text-xs);
-  line-height: 1.35;
-}
-.mp-fine {
-  padding: 4px 12px 8px;
-  color: var(--ink-faint);
-  font-size: var(--text-xs);
-}
-.si-action:disabled {
-  opacity: 0.45;
-}
-
-/* ---------- page-edit chip ---------- */
-
-.edit-chip {
-  position: relative;
-}
-.edit-chip.active {
-  color: var(--accent-strong);
-  background: var(--glass-strong);
-}
-/* the site holds saved edits — a quiet mark, not an alarm */
-.edit-dot {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--accent-strong);
-}
-.edit-dot.off {
-  background: var(--ink-faint);
-}
-.si-pencil {
+.si-focus {
   color: var(--accent-strong);
 }
 

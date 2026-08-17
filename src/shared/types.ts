@@ -28,14 +28,8 @@ export interface TabInfo {
   isBookmarked: boolean
   /** The slop detector's verdict on the loaded page; absent until it reports */
   slop?: SlopReport
-  /** This tab is in page-edit mode right now (per-document; ends on navigate). */
-  editing: boolean
-  /** Saved page edits for this tab's host — the chip and site panel read these. */
-  editCount: number
-  /** False when the host's edits are switched off without being thrown away. */
-  editsOn: boolean
-  /** The Page Cleaner's per-site switches, as stored for this tab's host. */
-  modes: PageModes
+  /** Focus is on for this tab's site (per-site memory; see focusStore). */
+  focusOn: boolean
   /**
    * A home screen with its search still up. Only ever true for a blank new tab:
    * the search is a panel over the home page, and dismissing it leaves the page.
@@ -186,16 +180,12 @@ export const SLOP_BLOCK_TIERS = [
   { tier: 'yellow', min: 25 }
 ] as const
 
-/** The Page Cleaner's per-site switches: what it takes off a page, and keeps off. */
-export interface PageModes {
-  /** Hide every block of prose the slop detector flagged */
-  clean: boolean
-  /** Hide the furniture around the content — rails, promos, sticky overlays */
-  focus: boolean
-}
+// ---------------- Focus ----------------
 
-export interface CleanerSettings {
-  /** Master switch for the Page Cleaner (the Clean / Focus page modes) */
+/** The Focus built-in: one switch that strips a page's distractions and
+ *  compacts the layout around what's left. Per-site state lives in
+ *  src/main/focus.ts; this is only the master switch. */
+export interface FocusSettings {
   enabled: boolean
 }
 
@@ -533,8 +523,8 @@ export interface Settings {
   newTabWidgetLayout: Partial<Record<keyof NewTabWidgets, WidgetLayout>>
   /** Local heuristic prose analysis that flags AI-generated-looking pages. No AI involved. */
   slop: SlopSettings
-  /** The Page Cleaner built-in: Clean / Focus modes for any page */
-  cleaner: CleanerSettings
+  /** The Focus built-in: strip distractions and close the gaps, per site */
+  focus: FocusSettings
   /** Pop playing video into a floating mini-player when its tab is backgrounded */
   autoPip: boolean
   /** Tiny interface sounds (tab close, download done, …) */
@@ -545,44 +535,6 @@ export interface Settings {
   appearance: AppearanceSettings
   /** First-launch onboarding completed */
   onboarded: boolean
-}
-
-// ---------------- Page edits ----------------
-
-/**
- * One remembered change to a page, replayed on every future visit.
- *
- * 'hide' takes an element (and everything that re-renders into its place)
- * off the page. 'text' rewrites an element's content. 'focus' hides every
- * sibling along the element's ancestor chain — the page becomes that element.
- */
-export type PageEditOp = 'hide' | 'text' | 'focus'
-
-export interface PageEdit {
-  id: string
-  op: PageEditOp
-  selector: string
-  /** op 'text': the replacement markup, sanitized before it is ever applied */
-  value?: string
-  /**
-   * op 'text': the exact pathname the edit was made on. Hiding generalizes
-   * across a site — the same rail is unwanted on every profile — but rewritten
-   * words stay on the page where they were written, or an edited headline
-   * would stamp itself onto every article the selector happens to match.
-   */
-  path?: string
-  /** How the element read when it was picked — the settings list shows this. */
-  label?: string
-  createdAt: number
-}
-
-export interface SiteEdits {
-  host: string
-  /** Off = keep the edits but stop applying them (the site panel's toggle). */
-  enabled: boolean
-  edits: PageEdit[]
-  /** The Page Cleaner's switches for this host; absent = both off. */
-  modes?: Partial<PageModes>
 }
 
 // ---------------- Bookmarks (v2: tree) ----------------
@@ -631,7 +583,7 @@ export type ActionId =
   | 'new-space'
   | 'toggle-layout'
   | 'toggle-sidebar'
-  | 'edit-page'
+  | 'focus-page'
   | 'open-settings'
   | 'open-downloads'
   | 'show-welcome'
@@ -652,7 +604,7 @@ export const ACTION_DEFS: ActionDef[] = [
   { id: 'new-space', label: 'New Space', keywords: 'workspace create' },
   { id: 'toggle-layout', label: 'Switch Tab Layout', keywords: 'sidebar top bar horizontal vertical' },
   { id: 'toggle-sidebar', label: 'Toggle Sidebar', keywords: 'hide show collapse' },
-  { id: 'edit-page', label: 'Edit This Page', keywords: 'modify remove hide delete element text focus refit' },
+  { id: 'focus-page', label: 'Focus This Page', keywords: 'declutter strip clean ads sidebar rails comments distraction reader' },
   { id: 'open-settings', label: 'Open Settings', keywords: 'preferences options' },
   { id: 'open-downloads', label: 'Open Downloads Folder', keywords: 'finder files' },
   { id: 'show-welcome', label: 'Show Welcome', keywords: 'onboarding intro tour' },
@@ -909,7 +861,7 @@ export const DEFAULT_SETTINGS: Settings = {
   newTabWidgetOrder: ['clock', 'date', 'greeting', 'weather', 'forecast', 'sun', 'moon'],
   newTabWidgetLayout: {},
   slop: { detector: true, highlight: true, veil: true, allowlist: [] },
-  cleaner: { enabled: true },
+  focus: { enabled: true },
   autoPip: true,
   uiSounds: true,
   toolbarDensity: 'compact',

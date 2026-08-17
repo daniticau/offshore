@@ -73,27 +73,6 @@ export function setupDevshot(): void {
         .catch(() => false)
       await delay(500)
     }
-    /**
-     * OFFSHORE_SHOT_EDITPAGE=1: flip page-edit mode on and select something,
-     * so the capture shows the pill, the selection box and the toolbar.
-     */
-    if (process.env['OFFSHORE_SHOT_EDITPAGE']) {
-      w.tabs.toggleEditMode()
-      await delay(500)
-      await w.tabs.activeTab?.wc
-        .executeJavaScript(
-          `(() => { const el = document.querySelector('main h1, main p, h1, p, div')
-             if (!el) return false
-             const r = el.getBoundingClientRect()
-             el.dispatchEvent(new PointerEvent('pointerdown', {
-               bubbles: true, composed: true, button: 0,
-               clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
-             }))
-             return true })()`
-        )
-        .catch(() => false)
-      await delay(400)
-    }
     if (process.env['OFFSHORE_TEST_BOOKMARK']) {
       const { bookmarksStore } = await import('./stores')
       const tab = w.tabs.activeTab
@@ -345,7 +324,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|pageedits|cleaner
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -386,7 +365,17 @@ function setupTestFlows(): void {
     }, 4000)
   })
 
+  const KNOWN_FLOWS = [
+    'chrome', 'passwords', 'popups', 'spaces', 'headers', 'privacy',
+    'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus'
+  ]
+
   async function runFlow(): Promise<void> {
+    if (!KNOWN_FLOWS.includes(flow ?? '')) {
+      say(`[flowtest] unknown flow: ${flow}`)
+      app.exit(1)
+      return
+    }
     const w = await waitForWindow(20_000)
     if (!w) {
       say('[flowtest] no window appeared within 20s')
@@ -693,314 +682,309 @@ function setupTestFlows(): void {
       return
     }
 
-    if (flow === 'cleaner') {
+    if (flow === 'focus') {
       /**
-       * The two built-ins working together: the slop scan washes flagged
-       * paragraphs by tier, Clean mode hides exactly what the wash marked,
-       * Focus mode hides the furniture — and both survive a reload.
+       * The Focus built-in, end to end: strip (tiers, token tripwires),
+       * compaction (the emptied grid track really goes to the content, the
+       * comments hole closes), the observer against a page that fights back,
+       * per-site persistence across a reload, a full live restore, and the
+       * master switch. The grid fixture is built so naive hiding would leave
+       * an obvious hole.
        */
-      const slopPara = `In today's fast-paced digital landscape, it's important to note that you must
-        delve into the ever-evolving landscape of tools. Moreover, this comprehensive guide will
-        unlock the potential of your workflow — a game-changer that will revolutionize the way you
-        work. Furthermore, when it comes to navigating the complexities of modern software, a
-        holistic approach stands as a testament to seamless integration. Ultimately, embark on a
-        journey to elevate your results with this treasure trove of actionable insights.`
-      const honestPara = `The tide came in around four and we hauled the skiff past the wrack line.
-        Tom checked the traps while I sorted bait, cold to the wrist, and the gulls worked the
-        shallows where the creek cuts the flat. Nothing about the afternoon asked to be improved.
-        We tied off at the pilings, hosed the deck, and walked up the hill before the light went.`
-      const page = `<html><body>
-        <div id="sticky" style="position:fixed;top:0;left:0;right:0;height:48px;background:#333;color:#fff">subscribe to our newsletter</div>
-        <main>
-          <article>
-            ${Array.from({ length: 3 }, (_, i) => `<p id="slop${i}">${slopPara}</p>`).join('')}
-            <p id="honest">${honestPara}</p>
-          </article>
-        </main>
-        <aside id="rail" class="sidebar-related"><p>You may also like: ten weird tricks.</p></aside>
-      </body></html>`
-      const server = nodeHttp.createServer((_req, res) => {
-        res.setHeader('content-type', 'text/html')
-        res.end(page)
-      })
-      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
-      const port = (server.address() as { port: number }).port
-      const { pageEditsStore } = await import('./pageedits')
-      const { settingsStore } = await import('./stores')
-      pageEditsStore.clear('127.0.0.1')
-
-      w.tabs.navigate(null, `http://127.0.0.1:${port}/`)
-      const tab = w.tabs.activeTab!
-
-      // 1. the wash: slop paragraphs wear marks and tints, honest prose doesn't
-      const washed = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          marked: document.querySelectorAll('[data-offshore-slop]').length,
-          red: document.getElementById('slop0').getAttribute('data-offshore-slop'),
-          tint: document.getElementById('slop0').style.backgroundColor !== '',
-          honest: document.getElementById('honest').hasAttribute('data-offshore-slop')
-        })`)) as string
-        return /"marked":[1-9]/.test(d) ? d : undefined
-      }, 8000)
-      say(`[flowtest] wash: ${washed}`)
-      check('slop paragraphs wear the mark', /"marked":3/.test(String(washed)), String(washed))
-      check('the heaviest tier is red', /"red":"red"/.test(String(washed)))
-      check('flagged blocks are tinted', /"tint":true/.test(String(washed)))
-      check('honest prose is left alone', /"honest":false/.test(String(washed)))
-
-      // 2. Clean mode hides exactly what the wash marked
-      pageEditsStore.setMode('127.0.0.1', 'clean', true)
-      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
-      const cleaned = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          slop: getComputedStyle(document.getElementById('slop0')).display,
-          honest: getComputedStyle(document.getElementById('honest')).display
-        })`)) as string
-        return d.includes('"slop":"none"') ? d : undefined
-      }, 5000)
-      say(`[flowtest] clean: ${cleaned}`)
-      check('Clean hides the flagged prose', String(cleaned).includes('"slop":"none"'))
-      check('Clean spares the honest paragraph', String(cleaned).includes('"honest":"block"'))
-
-      // 3. Focus mode hides the rail and the sticky bar, not the article
-      pageEditsStore.setMode('127.0.0.1', 'focus', true)
-      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
-      const focused = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          rail: getComputedStyle(document.getElementById('rail')).display,
-          sticky: getComputedStyle(document.getElementById('sticky')).display,
-          article: getComputedStyle(document.querySelector('article')).display
-        })`)) as string
-        return d.includes('"rail":"none"') && d.includes('"sticky":"none"') ? d : undefined
-      }, 5000)
-      say(`[flowtest] focus: ${focused}`)
-      check('Focus hides the related rail', String(focused).includes('"rail":"none"'))
-      check('Focus hides the sticky bar', String(focused).includes('"sticky":"none"'))
-      check('Focus leaves the article standing', String(focused).includes('"article":"block"'))
-
-      // 4. both switches survive a reload — Clean has to wait for the wash
-      tab.wc.reload()
-      const survived = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          slop: getComputedStyle(document.getElementById('slop0')).display,
-          rail: getComputedStyle(document.getElementById('rail')).display
-        })`).catch(() => '')) as string
-        return d.includes('"slop":"none"') && d.includes('"rail":"none"') ? d : undefined
-      }, 10_000)
-      check('Clean and Focus survive a reload', survived !== undefined, String(survived))
-
-      // 5. the highlight switch clears the tint but keeps the verdict machinery
-      pageEditsStore.setMode('127.0.0.1', 'clean', false)
-      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
-      const s = settingsStore.get()
-      settingsStore.set({ slop: { ...s.slop, highlight: false } })
-      const untinted = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          tint: document.getElementById('slop0').style.backgroundColor,
-          marked: document.querySelectorAll('[data-offshore-slop]').length
-        })`)) as string
-        return d.includes('"tint":""') ? d : undefined
-      }, 5000)
-      say(`[flowtest] highlight off: ${untinted}`)
-      check('turning highlight off clears the wash', String(untinted).includes('"tint":""'))
-      check('the marks stay for Clean mode', /"marked":3/.test(String(untinted)))
-
-      // 6. switches off restore the page
-      pageEditsStore.setMode('127.0.0.1', 'focus', false)
-      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
-      const restored = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          slop: getComputedStyle(document.getElementById('slop0')).display,
-          rail: getComputedStyle(document.getElementById('rail')).display
-        })`)) as string
-        return d.includes('"slop":"block"') && d.includes('"rail":"block"') ? d : undefined
-      }, 5000)
-      check('everything comes back when the modes go off', restored !== undefined, String(restored))
-      // scoped to this flow's host — the shared profile may hold the human's own edits
-      check('a hollow site leaves the ledger', pageEditsStore.forHost('127.0.0.1') === undefined)
-
-      settingsStore.set({ slop: { ...settingsStore.get().slop, highlight: true } })
-      pageEditsStore.clear('127.0.0.1')
-      // flows leave over app.exit, which skips the debounced save — write now
-      pageEditsStore.flush()
-      settingsStore.flush()
-      server.close()
-      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
-      app.exit(failures === 0 ? 0 : 1)
-      return
-    }
-
-    if (flow === 'pageedits') {
-      /**
-       * The whole life of a page edit: made with the pointer, remembered by
-       * main, replayed onto a reload, defended against a re-render, and taken
-       * back. The page is a little SPA on purpose — its banner re-inserts
-       * itself every 700ms, which is exactly the fight LinkedIn would put up.
-       */
-      const page = `<html><body>
-        <div id="banner" style="height:60px;background:#c00">the banner</div>
-        <main>
-          <h1 id="headline">Original headline</h1>
-          <article id="story"><p>The story text.</p></article>
-          <x-widget id="widget"></x-widget>
-        </main>
+      const prose = Array.from({ length: 10 }, (_, i) =>
+        `The tide came in around four and we hauled the skiff past the wrack line. Tom checked
+         the traps while I sorted bait, cold to the wrist, and the gulls worked the shallows
+         where the creek cuts the flat. Sentence ${i} of a plain account of the afternoon.`
+      ).join(' ')
+      const gridPage = `<html><body>
+        <div id="cookie" class="cookie-banner"
+             style="position:fixed;bottom:0;left:0;right:0;height:64px;background:#222;color:#fff">
+          We value your privacy</div>
+        <div id="sticky" style="position:fixed;top:0;left:0;right:0;height:48px;background:#333;color:#fff">
+          subscribe to our newsletter</div>
+        <div id="shell" style="display:grid;grid-template-columns:220px 1fr 300px;gap:24px;padding:24px">
+          <nav id="leftnav"><a href="#a">Section A</a><a href="#b">Section B</a></nav>
+          <main id="content">
+            <article id="story">
+              <h1>An honest page</h1>
+              <p id="p1">${prose}</p>
+              <div id="inline-promo" class="promo-box" style="height:120px">Subscribe now!</div>
+              <p id="p2">${prose}</p>
+              <p class="commentary">A paragraph of commentary that must survive.</p>
+              <div class="broadcast" id="tripwire-broadcast">Broadcast schedule (must survive)</div>
+              <div class="badge" id="tripwire-badge">A badge (must survive)</div>
+            </article>
+            <section id="comments" style="min-height:400px"><h2>Comments</h2><p>hot takes</p></section>
+          </main>
+          <div id="railwrap" style="padding:24px;border-left:1px solid #ccc">
+            <aside id="rail" class="sidebar">
+              <div class="advert" id="ad1" style="height:600px">ad</div>
+              <div class="related" id="rel">You may also like</div>
+            </aside>
+          </div>
+        </div>
+        <footer id="footer">colophon</footer>
         <script>
-          customElements.define('x-widget', class extends HTMLElement {
-            constructor() {
-              super()
-              const root = this.attachShadow({ mode: 'open' })
-              const b = document.createElement('button')
-              b.id = 'inner'
-              b.textContent = 'in the shadows'
-              root.append(b)
-            }
-          })
-          setInterval(() => {
-            if (!document.getElementById('banner')) {
+          setInterval(() => {                       // the page fights back
+            if (!document.getElementById('sticky')) {
               const d = document.createElement('div')
-              d.id = 'banner'
-              d.style.cssText = 'height:60px;background:#c00'
-              d.textContent = 'the banner is back'
+              d.id = 'sticky'
+              d.style.cssText = 'position:fixed;top:0;left:0;right:0;height:48px;background:#333'
+              d.textContent = 'the bar is back'
               document.body.prepend(d)
             }
           }, 700)
         </script>
       </body></html>`
-      const server = nodeHttp.createServer((_req, res) => {
+      const flexPage = `<html><body>
+        <div id="row" style="display:flex;gap:24px">
+          <main id="main" style="width:70%"><p>${prose}</p></main>
+          <aside id="aside" class="sidebar" style="width:30%">rail</aside>
+        </div>
+      </body></html>`
+      const plainPage = `<html><body>
+        <article id="plainstory">
+          <h1>Nothing to strip</h1>
+          <p>${prose}</p>
+          <p class="commentary">A paragraph of commentary that must survive.</p>
+          <div class="broadcast">Broadcast schedule (must survive)</div>
+          <div class="badge">A badge (must survive)</div>
+        </article>
+      </body></html>`
+      const server = nodeHttp.createServer((req, res) => {
         res.setHeader('content-type', 'text/html')
-        res.end(page)
+        res.end(req.url === '/flexcase' ? flexPage : req.url === '/plain' ? plainPage : gridPage)
       })
       await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
       const port = (server.address() as { port: number }).port
-      const { pageEditsStore } = await import('./pageedits')
-      // the dev profile persists across runs; this flow owns its host's ledger
-      pageEditsStore.clear('127.0.0.1')
+      const { focusStore } = await import('./focus')
+      const { settingsStore } = await import('./stores')
+      // this flow owns its host's Focus flag, coming and going
+      focusStore.set('127.0.0.1', false)
+      const tab = (): typeof w.tabs.activeTab => w.tabs.activeTab
+      const inPage = (js: string): Promise<unknown> => tab()!.wc.executeJavaScript(js)
+      const inChrome = (js: string): Promise<unknown> => w.win.webContents.executeJavaScript(js)
 
+      // 1. the chip is on the bar, idle, and the pristine geometry is on record
       w.tabs.navigate(null, `http://127.0.0.1:${port}/`)
-      await delay(2500)
-      const tab = w.tabs.activeTab!
+      const chipIdle = await settle(async () => {
+        const raw = (await inChrome(
+          `JSON.stringify({chip: !!document.querySelector('.focus-chip'),
+                           active: !!document.querySelector('.focus-chip.active')})`
+        )) as string
+        const p = JSON.parse(raw) as { chip: boolean; active: boolean }
+        return p.chip ? p : undefined
+      }, 10_000)
+      check('chip on the address bar, idle', chipIdle?.chip === true && chipIdle?.active === false, JSON.stringify(chipIdle))
+      check('tab reports Focus off', tab()!.info().focusOn === false)
+      const before = await settle(async () => {
+        const raw = (await inPage(`(() => {
+          const c = document.getElementById('content'), s = document.getElementById('shell')
+          if (!c || !s) return ''
+          return JSON.stringify({ contentW: c.getBoundingClientRect().width,
+                                  cols: getComputedStyle(s).gridTemplateColumns })
+        })()`)) as string
+        return raw ? (JSON.parse(raw) as { contentW: number; cols: string }) : undefined
+      }, 10_000)
+      say(`[flowtest] pristine: ${JSON.stringify(before)}`)
+      check('pristine geometry read', !!before && before.cols.split(' ').length === 3, JSON.stringify(before))
 
-      // 1. edit mode goes on, and the tab says so
-      w.tabs.toggleEditMode()
-      await delay(400)
-      check('edit mode reaches the tab state', tab.info().editing === true)
-      const overlay = await tab.wc.executeJavaScript(`!!document.querySelector('offshore-page-edit')`)
-      check('the editor overlay is on the page', overlay === true)
-
-      // 2. pick the banner with the pointer and hide it with the keyboard
-      await tab.wc.executeJavaScript(`(() => {
-        const el = document.getElementById('banner')
-        const r = el.getBoundingClientRect()
-        const o = { bubbles: true, composed: true, clientX: r.left + 10, clientY: r.top + 10, button: 0 }
-        el.dispatchEvent(new PointerEvent('pointerdown', o))
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
-        return true
-      })()`)
-      const hidden = await settle(
-        () =>
-          tab.wc.executeJavaScript(
-            `getComputedStyle(document.getElementById('banner')).display === 'none'`
-          ) as Promise<boolean>,
+      // 2. the chip flips Focus on, for the site
+      await inChrome(`document.querySelector('.focus-chip')?.click()`)
+      const storeOn = await settle(async () => (focusStore.isOn('127.0.0.1') ? true : undefined), 4000)
+      check('chip toggles Focus on for the site', storeOn === true)
+      check('tab reports Focus on', tab()!.info().focusOn === true)
+      const chipLit = await settle(
+        () => inChrome(`!!document.querySelector('.focus-chip.active')`) as Promise<boolean>,
         4000
       )
-      check('picked element is hidden', hidden === true)
-      check('the edit reached the ledger', pageEditsStore.count('127.0.0.1') === 1)
+      check('chip lights up', chipLit === true)
 
-      // 2b. rewrite the headline in place: Enter opens the editor, ⌘Enter saves
-      const editable = await tab.wc.executeJavaScript(`(() => {
-        const el = document.getElementById('headline')
-        const r = el.getBoundingClientRect()
-        el.dispatchEvent(new PointerEvent('pointerdown', {
-          bubbles: true, composed: true, button: 0, clientX: r.left + 5, clientY: r.top + 5
-        }))
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-        return el.isContentEditable
-      })()`)
-      check('Enter on a selection opens the text editor', editable === true)
-      await tab.wc.executeJavaScript(`(() => {
-        const el = document.getElementById('headline')
-        el.textContent = 'Typed by hand'
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }))
-        return true
-      })()`)
-      const committed = await settle(async () => {
-        const done = (await tab.wc.executeJavaScript(
-          `!document.getElementById('headline').isContentEditable && document.getElementById('headline').hasAttribute('data-offshore-text')`
-        )) as boolean
-        return done && pageEditsStore.count('127.0.0.1') === 2 ? true : undefined
-      }, 4000)
-      check('⌘Enter commits the rewrite to the ledger', committed === true)
+      // 3. strip: every tier lands, the reading stands
+      const stripped = await settle(async () => {
+        const raw = (await inPage(`(() => {
+          const d = (id) => { const el = document.getElementById(id); return el ? getComputedStyle(el).display : 'gone' }
+          return JSON.stringify({
+            ad1: d('ad1'), rel: d('rel'), rail: d('rail'), railwrap: d('railwrap'),
+            cookie: d('cookie'), sticky: d('sticky'), promo: d('inline-promo'), comments: d('comments'),
+            p1: d('p1'), p2: d('p2'), leftnav: d('leftnav'), story: d('story'), footer: d('footer')
+          })
+        })()`)) as string
+        const p = JSON.parse(raw) as Record<string, string>
+        return p.rail === 'none' && p.railwrap === 'none' && p.comments === 'none' ? p : undefined
+      }, 8000)
+      say(`[flowtest] stripped: ${JSON.stringify(stripped)}`)
+      check('tier 2 hides the ads and the rail', stripped?.ad1 === 'none' && stripped?.rel === 'none' && stripped?.rail === 'none')
+      check('an emptied wrapper cascades away', stripped?.railwrap === 'none')
+      check('tier 3 hides the viewport riders', stripped?.cookie === 'none' && stripped?.sticky === 'none')
+      check('the in-article promo goes too', stripped?.promo === 'none')
+      check('comments are stripped', stripped?.comments === 'none')
+      check(
+        'the reading survives',
+        stripped?.p1 === 'block' && stripped?.p2 === 'block' && stripped?.story === 'block' &&
+          stripped?.leftnav === 'block' && stripped?.footer === 'block'
+      )
 
-      // 2c. a pick inside a web component takes the whole widget, not its guts
-      await tab.wc.executeJavaScript(`(() => {
-        const inner = document.getElementById('widget').shadowRoot.getElementById('inner')
-        inner.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true, button: 0 }))
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
-        return true
-      })()`)
-      const widgetGone = await settle(async () => {
-        const gone = (await tab.wc.executeJavaScript(
-          `getComputedStyle(document.getElementById('widget')).display === 'none'`
-        )) as boolean
-        return gone && pageEditsStore.count('127.0.0.1') === 3 ? true : undefined
-      }, 4000)
-      check('a shadow-DOM pick hides the whole component', widgetGone === true)
+      // 4. token verification spares near-miss names
+      const tripwires = JSON.parse(
+        (await inPage(`(() => {
+          const ok = (el) => !!el && getComputedStyle(el).display !== 'none' && !el.hasAttribute('data-offshore-focus')
+          return JSON.stringify({
+            commentary: ok(document.querySelector('.commentary')),
+            broadcast: ok(document.getElementById('tripwire-broadcast')),
+            badge: ok(document.getElementById('tripwire-badge'))
+          })
+        })()`)) as string
+      ) as Record<string, boolean>
+      check('tripwires survive token verification', tripwires.commentary && tripwires.broadcast && tripwires.badge, JSON.stringify(tripwires))
 
-      // 3. the page fights back; the observer puts it away again
-      await tab.wc.executeJavaScript(`document.getElementById('banner').remove(), 0`)
-      const rehidden = await settle(async () => {
-        const s = (await tab.wc.executeJavaScript(`(() => {
-          const el = document.getElementById('banner')
+      // 5. compaction, horizontal: the dead 300px track (and its gap) goes to the content
+      const focused = await settle(async () => {
+        const raw = (await inPage(`JSON.stringify({
+          contentW: document.getElementById('content').getBoundingClientRect().width,
+          cols: getComputedStyle(document.getElementById('shell')).gridTemplateColumns
+        })`)) as string
+        const p = JSON.parse(raw) as { contentW: number; cols: string }
+        return p.contentW - (before?.contentW ?? Infinity) >= 240 ? p : undefined
+      }, 8000)
+      say(`[flowtest] focused geometry: ${JSON.stringify(focused)}`)
+      check(
+        'the emptied track goes to the content',
+        (focused?.contentW ?? 0) - (before?.contentW ?? Infinity) >= 240,
+        `${before?.contentW} → ${focused?.contentW}`
+      )
+      check('the dead grid track is removed', (focused?.cols ?? '').split(' ').length === 2, focused?.cols)
+
+      // 6. compaction, vertical: no 400px comments hole above the footer
+      const vgap = Number(
+        await inPage(
+          `document.getElementById('footer').getBoundingClientRect().top - document.getElementById('story').getBoundingClientRect().bottom`
+        )
+      )
+      check('no comments hole above the footer', vgap <= 150, `gap=${Math.round(vgap)}`)
+
+      // 7. the page fights back; the observer puts the bar away again
+      await inPage(`document.getElementById('sticky').remove(), 0`)
+      const reasserted = await settle(async () => {
+        const s = (await inPage(`(() => {
+          const el = document.getElementById('sticky')
           return el ? getComputedStyle(el).display : 'gone'
         })()`)) as string
         return s === 'none' ? true : undefined
-      }, 5000)
-      check('a re-rendered element is re-hidden', rehidden === true)
+      }, 6000)
+      check('a re-inserted sticky is re-hidden', reasserted === true)
 
-      // 4. re-recording the same element replaces its record instead of stacking
-      pageEditsStore.record('127.0.0.1', {
-        op: 'text',
-        selector: '#headline',
-        value: 'Rewritten by Offshore',
-        path: '/'
-      })
-      check('same-selector rewrite replaces, not appends', pageEditsStore.count('127.0.0.1') === 3)
-      w.tabs.toggleEditMode()
-      await delay(300)
-      check('edit mode ends on request', tab.info().editing === false)
-      tab.wc.reload()
-      await delay(2500)
-      const applied = await tab.wc.executeJavaScript(`JSON.stringify({
-        banner: getComputedStyle(document.getElementById('banner')).display,
-        headline: document.getElementById('headline').textContent
-      })`)
-      say(`[flowtest] after reload: ${applied}`)
-      check('hide survives a reload', String(applied).includes('"banner":"none"'))
-      check('text edit survives a reload', String(applied).includes('Rewritten by Offshore'))
-      check('tab info counts every edit', tab.info().editCount === 3)
+      // 8. persistence: strip and compaction both replay on a fresh document
+      tab()!.wc.reload()
+      const replayed = await settle(async () => {
+        const raw = (await inPage(`(() => {
+          const rail = document.getElementById('rail'), c = document.getElementById('content')
+          if (!rail || !c) return ''
+          return JSON.stringify({ rail: getComputedStyle(rail).display, contentW: c.getBoundingClientRect().width })
+        })()`).catch(() => '')) as string
+        if (!raw) return undefined
+        const p = JSON.parse(raw) as { rail: string; contentW: number }
+        return p.rail === 'none' && Math.abs(p.contentW - (focused?.contentW ?? Infinity)) <= 24 ? p : undefined
+      }, 10_000)
+      check('strip and compaction replay on reload', !!replayed, JSON.stringify(replayed))
 
-      // 5. switching the site off restores the page without forgetting anything
-      pageEditsStore.setEnabled('127.0.0.1', false)
-      w.tabs.refreshPageEdits('127.0.0.1')
+      // 9. live restore: off = exactly the page as served
+      w.tabs.toggleFocus()
       const restored = await settle(async () => {
-        const s = (await tab.wc.executeJavaScript(`JSON.stringify({
-          banner: getComputedStyle(document.getElementById('banner')).display,
-          headline: document.getElementById('headline').textContent
+        const raw = (await inPage(`(() => {
+          const d = (id) => { const el = document.getElementById(id); return el ? getComputedStyle(el).display : 'gone' }
+          return JSON.stringify({
+            rail: d('rail'), railwrap: d('railwrap'), cookie: d('cookie'), sticky: d('sticky'),
+            promo: d('inline-promo'), comments: d('comments'),
+            contentW: document.getElementById('content').getBoundingClientRect().width,
+            cols: getComputedStyle(document.getElementById('shell')).gridTemplateColumns,
+            marks: document.querySelectorAll('[data-offshore-focus]').length
+          })
+        })()`)) as string
+        const p = JSON.parse(raw) as { rail: string; marks: number }
+        return p.rail === 'block' && p.marks === 0 ? (JSON.parse(raw) as Record<string, unknown>) : undefined
+      }, 8000)
+      say(`[flowtest] restored: ${JSON.stringify(restored)}`)
+      check(
+        'toggle off restores every element',
+        restored?.rail === 'block' && restored?.railwrap === 'block' && restored?.cookie === 'block' &&
+          restored?.sticky === 'block' && restored?.promo === 'block' && restored?.comments === 'block'
+      )
+      check(
+        'geometry restored',
+        Math.abs(Number(restored?.contentW) - (before?.contentW ?? Infinity)) <= 24 &&
+          String(restored?.cols).split(' ').length === 3,
+        JSON.stringify(restored)
+      )
+      check('zero marks left behind', restored?.marks === 0)
+      check('the site leaves the ledger', !focusStore.isOn('127.0.0.1') && !focusStore.sites().includes('127.0.0.1'))
+
+      // 10. flex survivor: the single survivor takes the row, and gives it back
+      w.tabs.navigate(null, `http://127.0.0.1:${port}/flexcase`)
+      await settle(async () => ((await inPage(`!!document.getElementById('row')`).catch(() => false)) ? true : undefined), 8000)
+      w.tabs.toggleFocus()
+      const flexed = await settle(async () => {
+        const raw = (await inPage(`(() => {
+          const aside = document.getElementById('aside'), main = document.getElementById('main'), row = document.getElementById('row')
+          if (!aside || !main || !row) return ''
+          return JSON.stringify({ aside: getComputedStyle(aside).display,
+                                  mainW: main.getBoundingClientRect().width, rowW: row.clientWidth })
+        })()`)) as string
+        if (!raw) return undefined
+        const p = JSON.parse(raw) as { aside: string; mainW: number; rowW: number }
+        return p.aside === 'none' && p.mainW >= 0.9 * p.rowW ? p : undefined
+      }, 8000)
+      check('the flex survivor takes the row', !!flexed, JSON.stringify(flexed))
+      w.tabs.toggleFocus()
+      const unflexed = await settle(async () => {
+        const raw = (await inPage(`JSON.stringify({
+          aside: getComputedStyle(document.getElementById('aside')).display,
+          mainW: document.getElementById('main').getBoundingClientRect().width,
+          rowW: document.getElementById('row').clientWidth
         })`)) as string
-        return s.includes('"banner":"block"') && s.includes('Original headline') ? true : undefined
-      }, 5000)
-      check('turning the site off restores the page live', restored === true)
-      check('the ledger still holds the edits', pageEditsStore.count('127.0.0.1') === 3)
+        const p = JSON.parse(raw) as { aside: string; mainW: number; rowW: number }
+        return p.aside !== 'none' && Math.abs(p.mainW - 0.7 * p.rowW) <= 24 ? p : undefined
+      }, 8000)
+      check('toggle off hands the width back', !!unflexed, JSON.stringify(unflexed))
 
-      // 6. forgetting the site really forgets
-      pageEditsStore.clear('127.0.0.1')
-      w.tabs.refreshPageEdits('127.0.0.1')
-      await delay(300)
-      check('clearing empties the ledger', pageEditsStore.count('127.0.0.1') === 0)
-      check('tab info agrees', tab.info().editCount === 0)
+      // 11. do no harm: an honest page comes through untouched
+      w.tabs.navigate(null, `http://127.0.0.1:${port}/plain`)
+      await settle(async () => ((await inPage(`!!document.getElementById('plainstory')`).catch(() => false)) ? true : undefined), 8000)
+      const plainLen = Number(await inPage(`document.body.innerText.length`))
+      w.tabs.toggleFocus()
+      await delay(2000)
+      const harm = JSON.parse(
+        (await inPage(`JSON.stringify({
+          marks: document.querySelectorAll('[data-offshore-focus]').length,
+          len: document.body.innerText.length
+        })`)) as string
+      ) as { marks: number; len: number }
+      check('an honest page is untouched', harm.marks === 0 && harm.len === plainLen, JSON.stringify({ ...harm, plainLen }))
+      w.tabs.toggleFocus()
 
+      // 12. the master switch acts on open pages; site memory survives it
+      w.tabs.navigate(null, `http://127.0.0.1:${port}/`)
+      await settle(async () => ((await inPage(`!!document.getElementById('rail')`).catch(() => false)) ? true : undefined), 8000)
+      w.tabs.toggleFocus()
+      await settle(async () => ((await inPage(`getComputedStyle(document.getElementById('rail')).display`)) === 'none' ? true : undefined), 8000)
+      settingsStore.set({ focus: { enabled: false } })
+      const masterOff = await settle(async () => {
+        const railBack = (await inPage(`getComputedStyle(document.getElementById('rail')).display`)) === 'block'
+        const chipGone = (await inChrome(`!document.querySelector('.focus-chip')`)) === true
+        return railBack && chipGone ? true : undefined
+      }, 8000)
+      check('the master switch restores pages and hides the chip', masterOff === true)
+      settingsStore.set({ focus: { enabled: true } })
+      const masterBack = await settle(
+        async () => ((await inPage(`getComputedStyle(document.getElementById('rail')).display`)) === 'none' ? true : undefined),
+        8000
+      )
+      check('re-enabling honors the site memory', masterBack === true)
+
+      focusStore.set('127.0.0.1', false)
       // flows leave over app.exit, which skips the debounced save — write now
-      pageEditsStore.flush()
+      focusStore.flush()
+      settingsStore.flush()
       server.close()
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)

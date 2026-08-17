@@ -3,7 +3,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { OffshoreInternalApi } from '@shared/bridge'
 import { SLOP_BLOCK_TIERS } from '@shared/types'
-import { initPageEdit, slopMarksChanged } from './pageedit'
+import { initFocus } from './focus'
 
 /**
  * Preload attached to every tab (and tracked popup). Four concerns:
@@ -14,7 +14,7 @@ import { initPageEdit, slopMarksChanged } from './pageedit'
  * 2. Gesture pings — feed the popup blocker's transient-activation model.
  * 3. Password capture + autofill — credentials only ever travel over dedicated
  *    channels that main validates against the sender frame's real origin.
- * 4. The page editor (see pageedit.ts) — dormant until main flips it on.
+ * 4. The Focus engine (see focus.ts) — dormant until main flips it on.
  */
 
 const invoke = (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args)
@@ -69,10 +69,10 @@ const api: OffshoreInternalApi = {
   history: {
     clear: () => invoke('history:clear')
   },
-  pageEdits: {
-    list: () => invoke('pageedit:list'),
-    clear: (host: string) => invoke('pageedit:clear-host', host),
-    setEnabled: (host: string, on: boolean) => invoke('pageedit:set-host-enabled', host, on)
+  focus: {
+    sites: () => invoke('focus:sites'),
+    forget: (host: string) => invoke('focus:forget', host),
+    forgetAll: () => invoke('focus:forget-all')
   },
   privacy: {
     clearSiteData: () => invoke('privacy:clear-site-data')
@@ -109,8 +109,8 @@ const api: OffshoreInternalApi = {
 if (isInternalDocument()) {
   contextBridge.exposeInMainWorld('offshoreInternal', api)
 } else if (/^https?:$/.test(location.protocol)) {
-  // real pages get the editor; Offshore's own pages have widgets instead
-  initPageEdit()
+  // real pages get the Focus engine; Offshore's own pages have widgets instead
+  initFocus()
 }
 
 // ---------------- 2. gesture pings (popup blocker) ----------------
@@ -527,7 +527,7 @@ function scoreSlop(sample: ProseSample): { score: number; signals: { label: stri
 // *which sentences*. Each prose block is scored alone and tinted yellow →
 // orange → red by how hard it leans on the tells. The tint is a low-alpha
 // background written through the CSSOM (page CSP never gets a say), and the
-// mark is a data attribute the Page Cleaner's Clean mode hides by.
+// mark is a data attribute.
 
 const SLOP_MARK = 'data-offshore-slop'
 const TIER_WASH: Record<string, string> = {
@@ -602,8 +602,6 @@ function washBlocks(blocks: ProseBlock[]): void {
     untintOne(el)
     el.removeAttribute(SLOP_MARK)
   }
-  // Clean mode hides by these marks — tell it the ground shifted
-  slopMarksChanged()
 }
 
 ipcRenderer.on('slop:style', (_e, style: { mark?: boolean; tint?: boolean }) => {

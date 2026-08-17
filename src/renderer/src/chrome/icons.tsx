@@ -57,16 +57,14 @@ export const IconSearch = svg(
     <path d="M21 21l-4.35-4.35" />
   </>
 )
-export const IconPencil = svg(
+/** A viewfinder: four corner brackets and a subject. Reads as "focus" at 14px. */
+export const IconFocus = svg(
   <>
-    <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-    <path d="m15 5 4 4" />
-  </>
-)
-export const IconSparkle = svg(
-  <>
-    <path d="M11 4l1.7 4.6L17.3 10l-4.6 1.7L11 16.3l-1.7-4.6L4.7 10l4.6-1.4Z" />
-    <path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8Z" />
+    <path d="M4 8V6a2 2 0 0 1 2-2h2" />
+    <path d="M16 4h2a2 2 0 0 1 2 2v2" />
+    <path d="M20 16v2a2 2 0 0 1-2 2h-2" />
+    <path d="M8 20H6a2 2 0 0 1-2-2v-2" />
+    <circle cx="12" cy="12" r="2.5" />
   </>
 )
 export const IconGlobe = svg(

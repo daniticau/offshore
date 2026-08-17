@@ -11,7 +11,6 @@ import type {
   PasswordMeta,
   PasswordsStatus,
   Settings,
-  SiteEdits,
   SpaceProfile,
   Suggestion,
   TabsState
@@ -136,15 +135,9 @@ export interface OffshoreApi {
     set(patch: Partial<Settings>): Promise<Settings>
   }
   adblock: { toggleSite(url: string): Promise<boolean> }
-  pageEdits: {
-    /** Flip page-edit mode on the active tab. */
+  focus: {
+    /** Flip Focus for the active tab's site — strip + compact on, restore off. */
     toggle(): Promise<void>
-    /** Forget every edit saved for the active tab's site. */
-    clearSite(): Promise<void>
-    /** Keep the active tab's site edits but stop (or resume) applying them. */
-    setSiteEnabled(on: boolean): Promise<void>
-    /** Flip a Page Cleaner switch (Clean / Focus) for the active tab's site. */
-    setMode(mode: 'clean' | 'focus', on: boolean): Promise<void>
   }
   window: {
     zoom(): Promise<void>
@@ -185,10 +178,11 @@ export interface OffshoreInternalApi {
     geocode(q: string): Promise<GeocodeResult[]>
   }
   history: { clear(): Promise<void> }
-  pageEdits: {
-    list(): Promise<SiteEdits[]>
-    clear(host: string): Promise<void>
-    setEnabled(host: string, on: boolean): Promise<void>
+  focus: {
+    /** Hosts Focus is currently on for, sorted. */
+    sites(): Promise<string[]>
+    forget(host: string): Promise<void>
+    forgetAll(): Promise<void>
   }
   privacy: { clearSiteData(): Promise<void> }
   app: { info(): Promise<{ version: string } | null> }

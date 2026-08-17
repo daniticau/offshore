@@ -80,7 +80,7 @@ function mergeSettings(base: Settings, patch: Partial<Settings>): Settings {
     passwords: { ...base.passwords, ...(patch.passwords ?? {}) },
     brief: { ...base.brief, ...(patch.brief ?? {}) },
     slop: { ...base.slop, ...(patch.slop ?? {}) },
-    cleaner: { ...base.cleaner, ...(patch.cleaner ?? {}) }
+    focus: { ...base.focus, ...(patch.focus ?? {}) }
   }
 }
 
@@ -92,6 +92,11 @@ class SettingsStore extends EventEmitter {
       const legacy = (parsed as { slopDetector?: unknown })?.slopDetector
       if (legacy === false && (parsed as { slop?: unknown })?.slop === undefined) {
         merged.slop = { ...merged.slop, detector: false }
+      }
+      // the Page Cleaner's master switch becomes Focus's: keep an old "off"
+      const cleaner = (parsed as { cleaner?: { enabled?: unknown } })?.cleaner
+      if (cleaner?.enabled === false && (parsed as { focus?: unknown })?.focus === undefined) {
+        merged.focus = { ...merged.focus, enabled: false }
       }
       return merged
     }

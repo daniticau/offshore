@@ -20,16 +20,12 @@ skips.
   it. A page scoring 55+ gets **the veil**: a frosted card over it before you sink time into
   it, one click to read anyway, one to never veil that site (managed in Settings → Shield).
   The site panel carries the quiet verdict for every page. The web as it was meant to be surfed.
-- **Page Cleaner** — two switches on the sparkle beside the address, remembered per site:
-  **Clean** hides every block of prose the slop detector flagged, **Focus** hides the furniture
-  around the content — related rails, promo boxes, newsletter begs, sticky bars. Both are
-  re-asserted as the page re-renders, so what you turned off stays off.
-- **Page edits** — press ⇧⌘E (or the pencil in the address bar) and reshape any page: click to
-  hide an element, rewrite its text in place, or focus the page down to one thing. Edits are
-  remembered per site and replayed on every visit — deleted feed modules stay deleted, even when
-  the site re-renders them — with undo, a per-site off switch, and a ledger in Settings. No
-  extension, no userScripts permission: the browser owns the page, so the editor is built in.
-  The slop detector and the Page Cleaner ship as **built-in extensions** — toggled from
+- **Focus** — one switch on any page (⇧⌘F, or the viewfinder in the address bar): ads, cookie
+  nags, sticky bars, comments, autoplay and recommendation rails come off, and the layout
+  closes up around what's left — an emptied rail's column really goes to the content, not to a
+  hole. Remembered per site, re-asserted as the page re-renders, and off means off: the page
+  comes back exactly as the site served it.
+  The slop detector and Focus ship as **built-in extensions** — toggled from
   Settings → Extensions, above whatever you install from the Web Store.
 - **Protected content plays** — Widevine DRM via castLabs Electron for Content Security, so
   Netflix, Spotify Web, and friends actually work (dev builds are VMP-signed out of the box)
@@ -114,8 +110,7 @@ OFFSHORE_TEST_FLOW=drm npm run dev         # Widevine CDM present and answering
 OFFSHORE_TEST_FLOW=split npm run dev       # split view: geometry, activation, dissolution
 OFFSHORE_TEST_FLOW=lasttab npm run dev     # closing the last tab keeps the window
 OFFSHORE_TEST_FLOW=slop npm run dev        # slop detector flags filler, spares honest prose
-OFFSHORE_TEST_FLOW=pageedits npm run dev   # pick → hide/rewrite, survives re-renders & reloads
-OFFSHORE_TEST_FLOW=cleaner npm run dev     # block wash tiers; Clean/Focus modes persist per site
+OFFSHORE_TEST_FLOW=focus npm run dev       # strip + compaction geometry, per-site memory, live restore
 ```
 
 Each flow writes its `[flowtest]` transcript to `OFFSHORE_TEST_LOG=<file>` as well as stdout —

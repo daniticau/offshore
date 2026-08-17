@@ -222,7 +222,6 @@ export function App(): React.JSX.Element {
   const [hasExtensions, setHasExtensions] = useState(false)
   const [popupPanelOpen, setPopupPanelOpen] = useState(false)
   const [slopPanelOpen, setSlopPanelOpen] = useState(false)
-  const [modesPanelOpen, setModesPanelOpen] = useState(false)
   const [siteInfoOpen, setSiteInfoOpen] = useState(false)
   const [appMenuOpen, setAppMenuOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
@@ -303,7 +302,6 @@ export function App(): React.JSX.Element {
     downloadsPanelOpen ||
     popupPanelOpen ||
     slopPanelOpen ||
-    modesPanelOpen ||
     siteInfoOpen ||
     appMenuOpen ||
     profileMenuOpen
@@ -572,7 +570,7 @@ export function App(): React.JSX.Element {
      * the views until they step aside. Overhanging the page is what earns the
      * dance, and only the topbar's panel does.
      */
-    (mode === 'horizontal' && (bookmarkEdit !== null || popupPanelOpen || slopPanelOpen || modesPanelOpen || downloadsPanelOpen))
+    (mode === 'horizontal' && (bookmarkEdit !== null || popupPanelOpen || slopPanelOpen || downloadsPanelOpen))
   useEffect(() => {
     void offshore.chrome.setOverlay(overlayOpen)
   }, [overlayOpen])
@@ -584,7 +582,6 @@ export function App(): React.JSX.Element {
       !bookmarkEdit &&
       !popupPanelOpen &&
       !slopPanelOpen &&
-      !modesPanelOpen &&
       !siteInfoOpen &&
       !appMenuOpen &&
       !profileMenuOpen
@@ -597,7 +594,6 @@ export function App(): React.JSX.Element {
         setBookmarkEdit(null)
         setPopupPanelOpen(false)
         setSlopPanelOpen(false)
-        setModesPanelOpen(false)
         setSiteInfoOpen(false)
         setAppMenuOpen(false)
         setProfileMenuOpen(false)
@@ -605,7 +601,7 @@ export function App(): React.JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [downloadsPanelOpen, bookmarkEdit, popupPanelOpen, slopPanelOpen, modesPanelOpen, siteInfoOpen, appMenuOpen, profileMenuOpen])
+  }, [downloadsPanelOpen, bookmarkEdit, popupPanelOpen, slopPanelOpen, siteInfoOpen, appMenuOpen, profileMenuOpen])
 
   // devshot composite render completion
   useEffect(() => {
@@ -757,8 +753,6 @@ export function App(): React.JSX.Element {
     onTogglePopupPanel: setPopupPanelOpen,
     slopPanelOpen,
     onToggleSlopPanel: setSlopPanelOpen,
-    modesPanelOpen,
-    onToggleModesPanel: setModesPanelOpen,
     siteInfoOpen,
     onToggleSiteInfo: setSiteInfoOpen,
     appMenuOpen,
@@ -796,9 +790,6 @@ export function App(): React.JSX.Element {
         if (!t.closest('.bm-edit, .popup-list, .popup-chip')) {
           if (bookmarkEdit) setBookmarkEdit(null)
           if (popupPanelOpen) setPopupPanelOpen(false)
-        }
-        if (!t.closest('.modes-panel, .modes-chip')) {
-          if (modesPanelOpen) setModesPanelOpen(false)
         }
         if (!t.closest('.slop-panel, .slop-chip')) {
           if (slopPanelOpen) setSlopPanelOpen(false)

@@ -138,9 +138,9 @@ export function installMenu(): void {
         },
         { type: 'separator' },
         {
-          label: 'Edit This Page',
-          accelerator: 'Cmd+Shift+E',
-          click: withActive((w) => w.tabs.toggleEditMode())
+          label: 'Focus This Page',
+          accelerator: 'Cmd+Shift+F',
+          click: withActive((w) => w.tabs.toggleFocus())
         },
         { type: 'separator' },
         {

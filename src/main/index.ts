@@ -6,7 +6,7 @@ import { setupDevshot } from './devshot'
 import { initExtensions } from './extensions'
 import { setupIpc } from './ipc'
 import { installMenu } from './menu'
-import { pageEditsStore } from './pageedits'
+import { focusStore } from './focus'
 import { passwordVault } from './passwords'
 import { flushAllStores, historyStore, sessionStore, settingsStore } from './stores'
 import { initSessions, prepareTabSession, TAB_PARTITION } from './sessions'
@@ -186,8 +186,8 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   markQuitting()
   flushAllStores()
-  // The vault and the edit ledger debounce their writes like the stores do,
+  // The vault and the Focus ledger debounce their writes like the stores do,
   // but live apart from them
   passwordVault.flush()
-  pageEditsStore.flush()
+  focusStore.flush()
 })

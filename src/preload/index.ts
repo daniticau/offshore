@@ -120,11 +120,8 @@ const api: OffshoreApi = {
   adblock: {
     toggleSite: (url: string) => invoke('adblock:toggle-site', url)
   },
-  pageEdits: {
-    toggle: () => invoke('pageedit:toggle'),
-    clearSite: () => invoke('pageedit:clear-site'),
-    setSiteEnabled: (on: boolean) => invoke('pageedit:set-site-enabled', on),
-    setMode: (mode: 'clean' | 'focus', on: boolean) => invoke('pagemode:set', mode, on)
+  focus: {
+    toggle: () => invoke('focus:toggle')
   },
   window: {
     zoom: () => invoke('window:zoom'),

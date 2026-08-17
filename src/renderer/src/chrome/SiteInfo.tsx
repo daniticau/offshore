@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import type { Settings, TabInfo } from '@shared/types'
 import { SLOP_FLAG_MIN } from '@shared/types'
 import { offshore, prettyHost } from './api'
-import { IconLock, IconPencil, IconShieldFilled, IconSlop, IconUnlock } from './icons'
+import { IconFocus, IconLock, IconShieldFilled, IconSlop, IconUnlock } from './icons'
 
 interface SiteInfoProps {
   tab: TabInfo
@@ -91,32 +91,20 @@ export function SiteInfo({ tab, settings, shieldOff, onToggleShield, onClose }: 
         </div>
       )}
 
-      {tab.editCount > 0 && (
+      {tab.focusOn && (
         <div className="si-row">
-          <span className="si-icon si-pencil">
-            <IconPencil size={13} />
+          <span className="si-icon si-focus">
+            <IconFocus size={13} />
           </span>
-          <span className="si-text">
-            {tab.editsOn
-              ? `${tab.editCount} page edit${tab.editCount === 1 ? '' : 's'} on this site`
-              : 'Page edits are off for this site'}
-          </span>
-          <button
-            className="si-action"
-            onClick={() => void offshore.pageEdits.setSiteEnabled(!tab.editsOn)}
-          >
-            {tab.editsOn ? 'Turn off' : 'Turn on'}
+          <span className="si-text">Focus is on for this site</span>
+          <button className="si-action" onClick={() => void offshore.focus.toggle()}>
+            Turn off
           </button>
         </div>
       )}
 
       <div className="si-divider" />
 
-      {tab.editCount > 0 && (
-        <button className="si-wide" onClick={() => void offshore.pageEdits.clearSite()}>
-          Forget this site’s page edits
-        </button>
-      )}
       <button
         className="si-wide"
         onClick={() => {

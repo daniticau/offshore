@@ -11,7 +11,6 @@ import type {
   PasswordMeta,
   PasswordsStatus,
   Settings,
-  SiteEdits,
   ThemePref,
   ToolbarDensity
 } from '@shared/types'
@@ -541,77 +540,6 @@ function NewTabSection({ settings, patch }: { settings: Settings; patch: (p: Par
   )
 }
 
-// ---------------- Page edits section ----------------
-
-/**
- * The ledger of reshaped sites: every host with remembered page edits, each
- * one pausable (keep the edits, stop applying them) or forgettable outright.
- * The edits themselves are made on the pages, never here — this is where you
- * take them back.
- */
-function PageEditsSection(): React.JSX.Element {
-  const [sites, setSites] = useState<SiteEdits[]>([])
-  const refresh = (): void => {
-    void internal?.pageEdits.list().then((s) => s && setSites(s))
-  }
-  useEffect(refresh, [])
-
-  return (
-    <section>
-      <h2>Page Edits</h2>
-      <div className="card">
-        <div className="row">
-          <div className="row-title">
-            Pages you have reshaped
-            <div className="row-sub">
-              Edit any page from its right-click menu or ⇧⌘E — hide things, rewrite text, focus on
-              one element. Changes are remembered per site and replayed on every visit, on this Mac
-              only.
-            </div>
-          </div>
-        </div>
-        {sites.length === 0 && (
-          <div className="row">
-            <div className="row-sub">Nothing yet. Press ⇧⌘E on a busy page and take something off it.</div>
-          </div>
-        )}
-        {sites.map((s) => (
-          <div className="row" key={s.host}>
-            <div className="pw-meta">
-              <div className="row-title clamp">{s.host}</div>
-              <div className="row-sub clamp">
-                {s.edits.length === 1 ? '1 edit' : `${s.edits.length} edits`}
-                {s.enabled ? '' : ' — off'}
-                {s.modes?.clean ? ' · Clean on' : ''}
-                {s.modes?.focus ? ' · Focus on' : ''}
-                {s.edits[s.edits.length - 1]?.label ? ` · latest: ${s.edits[s.edits.length - 1].label}` : ''}
-              </div>
-            </div>
-            <div className="row-actions">
-              <button
-                className="ghost"
-                onClick={() => {
-                  void internal?.pageEdits.setEnabled(s.host, !s.enabled).then(refresh)
-                }}
-              >
-                {s.enabled ? 'Turn off' : 'Turn on'}
-              </button>
-              <button
-                className="danger"
-                onClick={() => {
-                  void internal?.pageEdits.clear(s.host).then(refresh)
-                }}
-              >
-                Forget
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  )
-}
-
 // ---------------- App ----------------
 
 type SectionId =
@@ -619,7 +547,6 @@ type SectionId =
   | 'appearance'
   | 'newtab'
   | 'shield'
-  | 'pageedits'
   | 'passwords'
   | 'extensions'
   | 'bookmarks'
@@ -631,7 +558,6 @@ const NAV: { id: SectionId; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'newtab', label: 'New Tab' },
   { id: 'shield', label: 'Shield' },
-  { id: 'pageedits', label: 'Page Edits' },
   { id: 'passwords', label: 'Passwords' },
   { id: 'extensions', label: 'Extensions' },
   { id: 'bookmarks', label: 'Bookmarks' },
@@ -646,6 +572,7 @@ const CORE_LISTS = ADBLOCK_LISTS.filter((l) => l.defaultOn).map((l) => l.id)
 function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([])
+  const [focusSites, setFocusSites] = useState<string[]>([])
   const [rulesDraft, setRulesDraft] = useState('')
   const [rulesFlash, flashRules] = useFlash()
   const [historyFlash, flashHistory] = useFlash()
@@ -665,6 +592,7 @@ function App(): React.JSX.Element {
       }
     })
     void internal?.extensions.list().then((e) => e && setExtensions(e))
+    void internal?.focus.sites().then((s) => s && setFocusSites(s))
     void internal?.app.info().then((i) => i && setVersion(i.version))
   }, [])
 
@@ -1063,7 +991,6 @@ function App(): React.JSX.Element {
             </section>
           )}
 
-          {active === 'pageedits' && <PageEditsSection />}
           {active === 'passwords' && <PasswordsSection settings={settings} patch={patch} />}
 
           {active === 'extensions' && (
@@ -1097,18 +1024,30 @@ function App(): React.JSX.Element {
                 </div>
                 <div className="row">
                   <div className="ext-info">
-                    <span className="ext-icon builtin">✨</span>
+                    <span className="ext-icon builtin">◉</span>
                     <div className="row-title">
-                      Page Cleaner
+                      Focus
                       <div className="row-sub">
-                        Clean and Focus modes for any page, from the sparkle beside the address —
-                        Clean hides flagged slop, Focus hides the clutter around the content.
+                        One switch on any page: ads, cookie nags, sticky bars, comments and
+                        recommendation rails come off, and the layout closes up around what&apos;s
+                        left. Remembered per site
+                        {focusSites.length > 0
+                          ? ` — on for ${focusSites.length} site${focusSites.length === 1 ? '' : 's'}.`
+                          : '.'}
                       </div>
                     </div>
                   </div>
+                  {focusSites.length > 0 && (
+                    <button
+                      className="ghost"
+                      onClick={() => void internal?.focus.forgetAll().then(() => setFocusSites([]))}
+                    >
+                      Forget sites
+                    </button>
+                  )}
                   <Toggle
-                    on={settings.cleaner.enabled}
-                    onChange={(v) => patch({ cleaner: { enabled: v } })}
+                    on={settings.focus.enabled}
+                    onChange={(v) => patch({ focus: { enabled: v } })}
                   />
                 </div>
                 {extensions.map((ext) => (
