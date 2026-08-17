@@ -68,7 +68,7 @@ const api: OffshoreApi = {
     setOverlay: (open: boolean) => invoke('chrome:overlay', open),
     setCollapsed: (collapsed: boolean) => invoke('chrome:set-collapsed', collapsed),
     /** The page still is up — main may hide the live view now. */
-    freezeAck: () => ipcRenderer.send('chrome:freeze-ack'),
+    freezeAck: (gen: number) => ipcRenderer.send('chrome:freeze-ack', gen),
     focusPage: () => invoke('chrome:focus-page'),
     copyText: (text: string) => invoke('chrome:copy-text', text)
   },

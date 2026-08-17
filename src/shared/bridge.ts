@@ -45,6 +45,7 @@ export const CHROME_EVENTS = [
   'devshot:composite',
   'chrome:page-freeze',
   'chrome:freeze-settled',
+  'chrome:home-cover',
   'spaces:begin-rename',
   'bookmarks:begin-rename',
   'bookmarks:edit-current',
@@ -101,7 +102,8 @@ export interface OffshoreApi {
     setInsets(insets: Insets): Promise<void>
     setOverlay(open: boolean): Promise<void>
     setCollapsed(collapsed: boolean): Promise<void>
-    freezeAck(): void
+    /** The stand-in frames sent with this token are painted — echo it back. */
+    freezeAck(gen: number): void
     focusPage(): Promise<void>
     copyText(text: string): Promise<void>
   }
