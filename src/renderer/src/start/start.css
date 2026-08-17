@@ -83,6 +83,14 @@ body,
   font-size: min(var(--display-clock), 11vw);
 }
 
+/* Horizontal layout: this page carries no search pill (the address bar above
+   the page is the search), so the middle of the pane belongs to the clock. */
+.start.clock-mid .plain-clock {
+  top: 0;
+  bottom: 0;
+  align-items: center;
+}
+
 /* the two rows the search pill keeps for itself, held on both home screens */
 .grid-band {
   position: absolute;
@@ -334,6 +342,10 @@ body,
 .clock-ch {
   display: inline-block;
   animation: clock-roll 320ms var(--ease-spring);
+}
+/* the digits the clock mounted with — already "there", nothing to roll in */
+.clock-ch.no-roll {
+  animation: none;
 }
 @keyframes clock-roll {
   from {

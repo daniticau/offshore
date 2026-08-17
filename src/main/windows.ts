@@ -1,6 +1,6 @@
 import { app, BrowserWindow, screen } from 'electron'
 import { join } from 'path'
-import type { Insets, SessionWindowV2, TabsState } from '@shared/types'
+import type { Insets, PageFreezeFrame, SessionWindowV2, TabsState } from '@shared/types'
 import { HARNESS_ACTIVE, HARNESS_QUIET } from './bootstrap'
 import { popupOwner } from './popups'
 import { sessionStore, settingsStore } from './stores'
@@ -123,10 +123,11 @@ export class OffshoreWindow implements TabHost {
   private insets: Insets
   private contentFullscreen = false
   private overlayOpen = false
-  /** Resolves when the chrome has the freeze frames up; see setOverlay. */
-  private freezeAck: (() => void) | null = null
   /** Bumped per overlay change so a stale capture never lands. */
   private overlayGen = 0
+  /** Token per stand-in send; the chrome echoes it back when painted. */
+  private freezeGen = 0
+  private freezeWaiters = new Map<number, () => void>()
 
   constructor(restore?: SessionWindowV2 | string[]) {
     this.insets = DEFAULT_INSETS[settingsStore.get().tabOrientation]
@@ -343,7 +344,7 @@ export class OffshoreWindow implements TabHost {
     this.overlayOpen = open
     if (!open) {
       this.tabs.setActiveVisible(true, () => {
-        if (gen === this.overlayGen) this.sendToChrome('chrome:page-freeze', null)
+        if (gen === this.overlayGen) void this.sendFreeze('chrome:page-freeze', null)
       })
       this.tabs.activeTab?.wc.focus()
       return
@@ -353,34 +354,48 @@ export class OffshoreWindow implements TabHost {
       // the panel may have come and gone while the shutter was open
       if (gen !== this.overlayGen || this.win.isDestroyed()) return
       if (frames.length) {
-        this.sendToChrome('chrome:page-freeze', frames)
-        await this.awaitFreezeAck()
+        await this.sendFreeze('chrome:page-freeze', frames)
         if (gen !== this.overlayGen || this.win.isDestroyed()) return
       }
       this.tabs.setActiveVisible(false)
     })()
   }
 
-  /** The chrome has the still up — or it has had long enough to say so. */
-  onFreezeAck(): void {
-    const ack = this.freezeAck
-    this.freezeAck = null
-    ack?.()
-  }
-
-  private awaitFreezeAck(): Promise<void> {
-    this.onFreezeAck()
+  /**
+   * Hand the chrome a set of stand-in frames — or none — and resolve once the
+   * chrome says they are on screen. Every send carries its own token and the
+   * ack echoes it back, so a late ack from an earlier set can never stand in
+   * for this one: that stale ack used to hide the live view a frame before the
+   * still existed, which is the blink of bare card you could catch by working
+   * a panel button twice quickly. A clearing send has nothing to wait for.
+   */
+  sendFreeze(
+    channel: 'chrome:page-freeze' | 'chrome:home-cover',
+    frames: PageFreezeFrame[] | null
+  ): Promise<void> {
+    const gen = ++this.freezeGen
+    this.sendToChrome(channel, frames, gen)
+    if (!frames || frames.length === 0) return Promise.resolve()
     return new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        if (this.freezeAck === fire) this.freezeAck = null
+        this.freezeWaiters.delete(gen)
         resolve()
       }, FREEZE_ACK_MS)
-      const fire = (): void => {
+      this.freezeWaiters.set(gen, () => {
         clearTimeout(timer)
+        this.freezeWaiters.delete(gen)
         resolve()
-      }
-      this.freezeAck = fire
+      })
     })
+  }
+
+  /** The chrome has that send's stills up — or, tokenless, release everyone. */
+  onFreezeAck(gen?: number): void {
+    if (typeof gen === 'number') {
+      this.freezeWaiters.get(gen)?.()
+      return
+    }
+    for (const fire of [...this.freezeWaiters.values()]) fire()
   }
 
   /**

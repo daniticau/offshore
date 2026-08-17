@@ -1403,15 +1403,28 @@ browser-action-list {
   height: var(--topbar-tabs-h);
 }
 
+/*
+ * Horizontal wears its lights bigger and pinned: flush with the content card's
+ * left edge (the topbar already pays --gutter, which is the card's own inset),
+ * filling the whole tab-row height so the hover target is the corner itself
+ * rather than a 12px strip you have to thread the pointer onto, and stacked
+ * over anything else that shares the row — the lights are always reachable.
+ */
+.chrome.mode-horizontal {
+  --tl-size: 14px;
+}
 .traffic-spacer-h {
   width: 76px;
+  height: 100%;
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  position: relative;
+  z-index: 50;
 }
-/* the topbar pays its own left padding, so the strip owes less of the inset */
 .traffic-spacer-h .traffic-inline {
-  padding-left: calc(var(--tl-inset) - var(--topbar-pad));
+  padding-left: 0;
+  height: 100%;
 }
 
 /* The space between tabs is each tab's own margin, not the strip's gap — a gap

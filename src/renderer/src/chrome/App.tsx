@@ -48,10 +48,13 @@ export interface FindState {
  */
 function PageFreeze({
   frames,
+  gen,
   settings,
   onPatch
 }: {
   frames: PageFreezeFrame[]
+  /** The send's token — the ack echoes it so main can tell whose it is. */
+  gen: number
   settings: Settings
   onPatch(patch: Partial<Settings>): void
 }): React.JSX.Element | null {
@@ -69,11 +72,11 @@ function PageFreeze({
      */
     let raf = requestAnimationFrame(() => {
       raf = requestAnimationFrame(() => {
-        raf = requestAnimationFrame(() => offshore.chrome.freezeAck())
+        raf = requestAnimationFrame(() => offshore.chrome.freezeAck(gen))
       })
     })
     return () => cancelAnimationFrame(raf)
-  }, [frames, loaded, stills])
+  }, [frames, gen, loaded, stills])
   if (!frames.length) return null
   return (
     <>
@@ -233,7 +236,15 @@ export function App(): React.JSX.Element {
   const [siteInfoOpen, setSiteInfoOpen] = useState(false)
   const [appMenuOpen, setAppMenuOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
-  const [freeze, setFreeze] = useState<PageFreezeFrame[]>([])
+  const [freeze, setFreeze] = useState<{ frames: PageFreezeFrame[]; gen: number }>({
+    frames: [],
+    gen: 0
+  })
+  /** Cold home views the chrome fills with its own live home — see main's pushHomeCovers. */
+  const [homeCover, setHomeCover] = useState<{ frames: PageFreezeFrame[]; gen: number }>({
+    frames: [],
+    gen: 0
+  })
   /** The page card in window coordinates — what the chrome draws over it needs it. */
   const [contentRect, setContentRect] = useState<Rect | null>(null)
   const [passwordOffer, setPasswordOffer] = useState<PasswordOffer | null>(null)
@@ -468,8 +479,13 @@ export function App(): React.JSX.Element {
       offshore.on('devshot:composite', (payload: DevshotPayload | null) => setDevshot(payload))
     )
     un.push(
-      offshore.on('chrome:page-freeze', (frames: PageFreezeFrame[] | null) => {
-        setFreeze(frames ?? [])
+      offshore.on('chrome:page-freeze', (frames: PageFreezeFrame[] | null, gen: number) => {
+        setFreeze({ frames: frames ?? [], gen: gen ?? 0 })
+      })
+    )
+    un.push(
+      offshore.on('chrome:home-cover', (frames: PageFreezeFrame[] | null, gen: number) => {
+        setHomeCover({ frames: frames ?? [], gen: gen ?? 0 })
       })
     )
     const onSpaceRename = (e: Event): void => {
@@ -851,7 +867,12 @@ export function App(): React.JSX.Element {
       </ContentFrame>
 
       {/* stands in for the page views while a panel needs their space */}
-      <PageFreeze frames={freeze} settings={settings} onPatch={patchSettings} />
+      <PageFreeze frames={freeze.frames} gen={freeze.gen} settings={settings} onPatch={patchSettings} />
+
+      {/* the live home the chrome draws over a cold home view — a new tab or a
+          fresh split half is this the instant it exists, and the real page
+          lands behind it unseen */}
+      <PageFreeze frames={homeCover.frames} gen={homeCover.gen} settings={settings} onPatch={patchSettings} />
 
       {/* the docked DevTools panel's own title bar, ✕ and all */}
       <DevToolsHeader

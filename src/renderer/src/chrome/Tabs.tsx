@@ -947,11 +947,20 @@ function HTab({
   drag: ReturnType<typeof useDragReorder>
   motion: ReturnType<typeof useTabMotion>
 }): React.JSX.Element {
+  /*
+   * Whether this row slides open is decided the moment it first renders, and
+   * never re-litigated. The strip re-renders plenty inside the animation's
+   * 260ms — a new tab focuses the omnibox, which opens its list, which opens
+   * the overlay — and recomputing the flag on each of those dropped the class
+   * mid-slide, so the tab just popped into existence whenever anything else
+   * was going on. The class staying put is free: a finished animation is inert.
+   */
+  const [entered] = useState(() => motion.entering(tab.id))
   return (
     <div
       className={`htab ${active ? 'active' : ''} ${drag.dragId === tab.id ? 'dragging' : ''} ${
         motion.closing(tab.id) ? 'closing' : ''
-      } ${motion.entering(tab.id) ? 'entering' : ''}`}
+      } ${entered ? 'entering' : ''}`}
       draggable
       onDragStart={(e) => drag.onDragStart(e, tab.id)}
       onDragOver={(e) => drag.onDragOver(e, tab.id)}

@@ -12,13 +12,22 @@ import './start.css'
 
 type WidgetKey = keyof NewTabWidgets
 
-/** Each character keys on its value, so only changed digits roll in. */
+/** Each character keys on its value, so only changed digits roll in.
+ *
+ * The set present at first render never rolls at all: this surface also mounts
+ * as a stand-in over a page already showing the same clock, and as the first
+ * frame of a brand-new tab — in both, the time is simply *there*, and digits
+ * tumbling in read as the clock resetting. Only a digit that changes while
+ * you watch earns the roll. */
 function SlidingClock({ time, className }: { time: string; className?: string }): React.JSX.Element {
+  const atMount = useRef<Set<string> | null>(null)
+  const keys = time.split('').map((ch, i) => `${i}-${ch}`)
+  if (atMount.current === null) atMount.current = new Set(keys)
   return (
     <div className={`clock ${className ?? ''}`} aria-label={time}>
-      {time.split('').map((ch, i) => (
-        <span className="clock-ch" key={`${i}-${ch}`}>
-          {ch === ' ' ? ' ' : ch}
+      {keys.map((key, i) => (
+        <span className={`clock-ch ${atMount.current!.has(key) ? 'no-roll' : ''}`} key={key}>
+          {time[i] === ' ' ? ' ' : time[i]}
         </span>
       ))}
     </div>
@@ -915,7 +924,9 @@ export function HomeCanvas({
   return (
     <div
       ref={hostRef}
-      className={`start ${editing ? 'editing' : ''} ${resizing ? 'no-anim' : ''} ${className}`}
+      className={`start ${editing ? 'editing' : ''} ${resizing ? 'no-anim' : ''} ${
+        settings.tabOrientation === 'horizontal' ? 'clock-mid' : ''
+      } ${className}`}
       style={{
         background: `linear-gradient(180deg, ${acc.tintTop} 0%, ${acc.tintBottom} 100%)`
       }}

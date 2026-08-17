@@ -677,7 +677,7 @@ export function setupIpc(): void {
     chromeWindow(e)?.setCollapsed(collapsed)
   )
   // "the still is on screen" — the page view can step aside now
-  ipcMain.on('chrome:freeze-ack', (e) => chromeWindow(e)?.onFreezeAck())
+  ipcMain.on('chrome:freeze-ack', (e, gen?: number) => chromeWindow(e)?.onFreezeAck(gen))
   ipcMain.handle('chrome:copy-text', (e, text: string) => {
     if (!isTrustedSender(e) || typeof text !== 'string' || !text) return
     clipboard.writeText(text)

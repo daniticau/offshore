@@ -95,6 +95,11 @@ export interface TabHost {
   isOverlayOpen(): boolean
   pushState(state: TabsState): void
   sendToChrome(channel: string, ...args: unknown[]): void
+  /** Stand-in frames to the chrome; resolves once they are painted (see OffshoreWindow). */
+  sendFreeze(
+    channel: 'chrome:page-freeze' | 'chrome:home-cover',
+    frames: PageFreezeFrame[] | null
+  ): Promise<void>
   onTabsChanged(): void
 }
 
@@ -214,6 +219,15 @@ export class Tab {
   /** Whatever is loading now, it isn't the home screen; the usual signals apply. */
   ungate(): void {
     this.paintGate = false
+  }
+
+  /**
+   * Loading or showing the home screen — the one page the chrome can draw for
+   * itself. The gate covers the stretch before the navigation commits, when
+   * getURL() still answers for the page before this one (or for nothing).
+   */
+  get isHomeBound(): boolean {
+    return this.paintGate || isHomePage(this.wc.getURL())
   }
 
   /** The document has been parsed; the compositor still needs a frame or two. */
@@ -877,6 +891,7 @@ export class TabManager {
         this.staged.delete(t)
       }
       if (cover && !wanted.has(cover)) cover.view.setVisible(false)
+      void this.pushHomeCovers()
       this.placeDevTools()
       onSwapped?.()
       return
@@ -902,6 +917,7 @@ export class TabManager {
         }
         if (cover && !wanted.has(cover)) cover.view.setVisible(false)
         this.placeDevTools()
+        void this.pushHomeCovers()
       }
       onSwapped?.()
     }
@@ -916,9 +932,52 @@ export class TabManager {
       tab.view.setBounds(TabManager.offscreen(rect))
       tab.view.setVisible(true)
     }
+
+    /*
+     * Views that already have pixels take their new places at once — only the
+     * cold ones raster off to the side. Splitting used to hold the live page at
+     * full width until its brand-new partner was ready (~a third of a second)
+     * and then snap both in together; now the page steps to its half the moment
+     * you ask, and the chrome's own home fills the other half (below) while the
+     * real one warms up.
+     */
+    for (const [tab, rect] of rects) {
+      if (this.staged.has(tab) || tab.wc.isDestroyed()) continue
+      tab.view.setBounds(rect)
+    }
+
+    /*
+     * A cold home view is a page the chrome can draw itself, and it draws it
+     * now — so a new tab shows its home the instant it exists rather than
+     * after the renderer's first paint. Once the chrome says the stand-in is
+     * up, whatever old page was holding the screen for the swap can go: the
+     * home is already there, and the live view lands behind it unseen.
+     */
+    const coverAck = this.pushHomeCovers()
+    if (cover && !wanted.has(cover) && cold.every(([t]) => t.isHomeBound)) {
+      void coverAck.then(() => {
+        if (gen === this.swapGen && !cover.wc.isDestroyed()) cover.view.setVisible(false)
+      })
+    }
+
     void Promise.all(cold.map(([t]) => t.whenReady(COLD_SWAP_MS))).then(() => {
       setTimeout(land, PAINT_GRACE_MS)
     })
+  }
+
+  /**
+   * The chrome-drawn home over every cold home view: same widgets, same
+   * settings, same water off the same clock, so the swap to the real page is
+   * invisible. Sent as the full current set — an empty set clears it.
+   */
+  private pushHomeCovers(): Promise<void> {
+    const frames: PageFreezeFrame[] = []
+    for (const [tab, rect] of this.viewBounds()) {
+      if (this.staged.has(tab) && tab.isHomeBound) {
+        frames.push({ tabId: tab.id, dataUrl: null, bounds: rect })
+      }
+    }
+    return this.host.sendFreeze('chrome:home-cover', frames.length ? frames : null)
   }
 
   /** The split tabs in visual order (by tab-strip index), or null if not splitting. */
@@ -1092,8 +1151,12 @@ export class TabManager {
   async captureVisible(): Promise<PageFreezeFrame[]> {
     const shots = await Promise.all(
       this.viewBounds().map(async ([tab, rect]): Promise<PageFreezeFrame | null> => {
-        if (tab.wc.isDestroyed() || !tab.view.getVisible() || this.staged.has(tab)) return null
-        if (isHomePage(tab.wc.getURL())) return { tabId: tab.id, dataUrl: null, bounds: rect }
+        if (tab.wc.isDestroyed()) return null
+        // The chrome draws the home screen live — visible, staged or still
+        // cold, there is always a frame for it, so a panel opened over a
+        // brand-new tab never opens onto a bare card.
+        if (tab.isHomeBound) return { tabId: tab.id, dataUrl: null, bounds: rect }
+        if (!tab.view.getVisible() || this.staged.has(tab)) return null
         try {
           const img = await tab.wc.capturePage()
           if (img.isEmpty()) return null
@@ -1116,6 +1179,8 @@ export class TabManager {
         t.view.setVisible(false)
         this.staged.delete(t)
       }
+      // nothing staged any more, so nothing for the chrome to cover
+      void this.pushHomeCovers()
       this.placeDevTools()
       onShown?.()
     }
