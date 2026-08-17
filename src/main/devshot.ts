@@ -2,7 +2,7 @@ import { BrowserWindow, app, ipcMain, screen, session } from 'electron'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import * as nodeHttp from 'http'
-import { HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_HEAVY_MIN, type SiteReport, type SlopReport } from '@shared/types'
+import { ADBLOCK_LISTS, HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_HEAVY_MIN, type SiteReport, type SlopReport } from '@shared/types'
 import { TAB_PARTITION } from './sessions'
 import { windows, type OffshoreWindow } from './windows'
 
@@ -327,7 +327,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor|shield
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -370,7 +370,7 @@ function setupTestFlows(): void {
 
   const KNOWN_FLOWS = [
     'chrome', 'passwords', 'popups', 'spaces', 'headers', 'privacy',
-    'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus', 'harbor'
+    'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus', 'harbor', 'shield'
   ]
 
   async function runFlow(): Promise<void> {
@@ -871,6 +871,224 @@ function setupTestFlows(): void {
       resetSlop()
       // flows leave over app.exit, which skips the debounced save — write now
       settingsStore.flush()
+      server.close()
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
+    if (flow === 'shield') {
+      /**
+       * The built-in Shield end to end, offline: an empty list set plus
+       * fixture custom rules ride the same engine paths the real lists do —
+       * network block, wire silence, per-tab and lifetime counts, cosmetic
+       * hide, per-site allow, and the row in Settings → Extensions flipping
+       * the whole engine live. No assertion depends on a live list fetch.
+       */
+      const { settingsStore, shieldStatsStore } = await import('./stores')
+      const { adblock } = await import('./adblock')
+
+      const hits = new Map<string, number>()
+      const hit = (p: string): number => hits.get(p) ?? 0
+      const page = `<html><body><div class="ad-banner">AD</div><p id="content">hello</p>
+        <script src="/ads/ad.js"></script><img src="/track/pixel.gif"></body></html>`
+      const server = nodeHttp.createServer((req, res) => {
+        const path = (req.url ?? '/').split('?')[0]
+        hits.set(path, (hits.get(path) ?? 0) + 1)
+        if (path === '/ads/ad.js') {
+          res.setHeader('content-type', 'text/javascript')
+          res.end('window.adLoaded = true')
+        } else if (path === '/track/pixel.gif') {
+          res.setHeader('content-type', 'image/gif')
+          res.end(Buffer.from('R0lGODlhAQABAAAAACw=', 'base64'))
+        } else {
+          res.setHeader('content-type', 'text/html')
+          res.end(page)
+        }
+      })
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+      const port = (server.address() as { port: number }).port
+      const tab = (): typeof w.tabs.activeTab => w.tabs.activeTab
+      const inPage = (js: string): Promise<unknown> => tab()!.wc.executeJavaScript(js)
+
+      // proof the deep-merge delivered the full default set to this profile —
+      // logged before the flow touches the lists, so a pre-seeded old-shape
+      // settings.json shows its migration here
+      say(`[flowtest] lists at boot: ${JSON.stringify(settingsStore.get().adblock.lists)}`)
+
+      // -- 1. the default set is uBO's out-of-box lists (+ Harbor's cookie backstop) --
+      const defaults = ADBLOCK_LISTS.filter((l) => l.defaultOn).map((l) => l.id).sort()
+      const wanted = [
+        'easylist', 'easylist-cookie', 'easyprivacy', 'peter-lowe', 'ublock-ads', 'ublock-badware',
+        'ublock-privacy', 'ublock-quick-fixes', 'ublock-unbreak', 'urlhaus'
+      ]
+      check(
+        "defaults match uBO's out-of-box set (+ easylist-cookie)",
+        JSON.stringify(defaults) === JSON.stringify(wanted),
+        defaults.join(',')
+      )
+
+      // -- setup: offline-deterministic engine — no lists, fixture custom rules --
+      const before = settingsStore.get().adblock
+      const statsBefore = shieldStatsStore.get().blockedTotal
+      settingsStore.set({
+        adblock: {
+          enabled: true,
+          lists: Object.fromEntries(ADBLOCK_LISTS.map((l) => [l.id, false])),
+          customRules: '/ads/ad.js$script\n/track/pixel.gif$image\n127.0.0.1##.ad-banner',
+          allowlist: []
+        }
+      })
+
+      // rebuild is async with no exposed completion — navigate a tokened URL
+      // and retry until the engine answers; only the judged load counts
+      let nav = 0
+      const loadPage = async (): Promise<void> => {
+        nav += 1
+        w.tabs.navigate(null, `http://127.0.0.1:${port}/page?t=${nav}`)
+        await settle(
+          async () =>
+            ((await inPage(
+              `location.search === '?t=${nav}' && document.readyState === 'complete'`
+            )) === true
+              ? true
+              : undefined),
+          8000
+        )
+        await delay(300)
+      }
+      const adLoaded = async (): Promise<boolean> => (await inPage('window.adLoaded === true')) === true
+      const converge = async (want: boolean, tries: number): Promise<boolean> => {
+        for (let i = 0; i < tries; i++) {
+          await loadPage()
+          if ((await adLoaded()) === want) return true
+          await delay(1500)
+        }
+        return false
+      }
+      const engineUp = await converge(false, 12)
+      say(`[flowtest] engine converged: ${engineUp}`)
+
+      // -- 2–3. the judged load: blocked in the page, silent on the wire --
+      hits.clear()
+      await loadPage()
+      check('known-bad script blocked', (await inPage('window.adLoaded === undefined')) === true)
+      check(
+        'blocked request never reached the wire',
+        hit('/page') >= 1 && hit('/ads/ad.js') === 0 && hit('/track/pixel.gif') === 0,
+        JSON.stringify([...hits])
+      )
+
+      // -- 4. the per-tab count reaches TabInfo --
+      const counted = await settle(async () => {
+        const n = adblock.counts.get(tab()!.id) ?? 0
+        return n >= 2 ? n : undefined
+      }, 4000)
+      check('blocked count increments', (counted ?? 0) >= 2, `count=${counted ?? adblock.counts.get(tab()!.id)}`)
+
+      // -- 5. the cosmetic rule hides the banner --
+      const hidden = await settle(
+        async () =>
+          ((await inPage(`getComputedStyle(document.querySelector('.ad-banner')).display`)) === 'none'
+            ? true
+            : undefined),
+        6000
+      )
+      check('cosmetic rule hides the banner', hidden === true)
+
+      // -- 6. the lifetime ledger advances --
+      const lifetime = await settle(async () => {
+        const n = shieldStatsStore.get().blockedTotal
+        return n >= statsBefore + 2 ? n : undefined
+      }, 4000)
+      check(
+        'lifetime counter advances',
+        (lifetime ?? 0) >= statsBefore + 2,
+        `total=${shieldStatsStore.get().blockedTotal} before=${statsBefore}`
+      )
+
+      // -- 7. per-site allow un-breaks the page (and the count reads honest) --
+      const allowed = adblock.toggleSite('127.0.0.1')
+      const through = await converge(true, 6)
+      const countAllowed = adblock.counts.get(tab()!.id) ?? 0
+      check(
+        'per-site allow lets the page through',
+        allowed === true && through && countAllowed === 0,
+        `allowed=${allowed} through=${through} count=${countAllowed}`
+      )
+
+      // -- 8. revoking the allow restores blocking --
+      const revoked = adblock.toggleSite('127.0.0.1')
+      const blockedAgain = await converge(false, 6)
+      check('revoking allow restores blocking', revoked === false && blockedAgain, `revoked=${revoked}`)
+
+      // -- 9. Shield worn as a built-in in Settings → Extensions --
+      const openExtensions = async (): Promise<void> => {
+        w.tabs.navigate(null, 'offshore://settings')
+        await settle(
+          async () =>
+            ((await inPage(`!!document.querySelector('.settings-nav')`).catch(() => false)) === true
+              ? true
+              : undefined),
+          10_000
+        )
+        await inPage(
+          `[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Extensions')?.click(), 0`
+        )
+      }
+      await openExtensions()
+      const row = await settle(async () => {
+        const raw = (await inPage(
+          `(() => {
+             const t = [...document.querySelectorAll('.row-title')].find((el) => el.textContent.trim().startsWith('Shield'))
+             return JSON.stringify({ title: !!t, sub: t?.querySelector('.row-sub')?.textContent ?? '' })
+           })()`
+        )) as string
+        const p = JSON.parse(raw) as { title: boolean; sub: string }
+        return p.title && p.sub.includes('blocked so far') ? p : undefined
+      }, 10_000)
+      check('Shield worn as a built-in', !!row, JSON.stringify(row))
+
+      // -- 10. the row's toggle is the engine's switch, both directions, live --
+      const clickShieldToggle = async (): Promise<void> => {
+        await inPage(
+          `[...document.querySelectorAll('.row-title')]
+             .find((el) => el.textContent.trim().startsWith('Shield'))
+             ?.closest('.row')?.querySelector('button.toggle')?.click(), 0`
+        )
+      }
+      await clickShieldToggle()
+      const offInStore = await settle(
+        async () => (settingsStore.get().adblock.enabled === false ? true : undefined),
+        6000
+      )
+      const engineOff = offInStore === true && (await converge(true, 6))
+      check('extension row toggles the Shield off live', engineOff, `store=${offInStore}`)
+      await openExtensions()
+      await clickShieldToggle()
+      const onInStore = await settle(
+        async () => (settingsStore.get().adblock.enabled === true ? true : undefined),
+        6000
+      )
+      // the row's on-flip restores the standard lists (a live fetch) — put the
+      // flow back on its offline fixture set; rebuilds serialize, so the last
+      // set wins no matter how slowly the list build lands
+      settingsStore.set({
+        adblock: {
+          ...settingsStore.get().adblock,
+          lists: Object.fromEntries(ADBLOCK_LISTS.map((l) => [l.id, false]))
+        }
+      })
+      const engineBack = onInStore === true && (await converge(false, 20))
+      check('extension row toggles the Shield back on live', engineBack, `store=${onInStore}`)
+
+      say(`[flowtest] lifetime stats: ${JSON.stringify(shieldStatsStore.get())}`)
+
+      // teardown: app.exit skips debounced saves, and mutated settings must
+      // not leak into the next flow — restore, then write now
+      settingsStore.set({ adblock: before })
+      settingsStore.flush()
+      shieldStatsStore.flush()
       server.close()
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)

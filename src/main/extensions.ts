@@ -14,6 +14,15 @@ import {
   windowForTab
 } from './windows'
 
+/**
+ * MV3 blockers that filter via chrome.declarativeNetRequest — an API neither
+ * Electron nor electron-chrome-extensions implements. They install cleanly and
+ * then block nothing, which is worse than refusing.
+ */
+const DNR_ONLY_BLOCKERS = new Set([
+  'ddkjiahejlhfcafbddmgiahcphecmpfh' // uBlock Origin Lite
+])
+
 export async function initExtensions(): Promise<void> {
   const ses = tabSession()
 
@@ -55,6 +64,20 @@ export async function initExtensions(): Promise<void> {
     session: ses,
     async beforeInstall(details) {
       const focused = focusedOffshoreWindow()
+      if (details.id && DNR_ONLY_BLOCKERS.has(details.id)) {
+        const info = {
+          type: 'info' as const,
+          buttons: ['OK'],
+          message: 'This blocker can’t work in Offshore',
+          detail:
+            `${details.manifest?.name ?? details.id} filters through a Chrome API Electron doesn’t provide, ` +
+            'so it would install and then block nothing. Offshore’s built-in Shield already runs the full ' +
+            'uBlock Origin filter lists — it’s in Settings → Extensions.'
+        }
+        if (focused) await dialog.showMessageBox(focused.win, info)
+        else await dialog.showMessageBox(info)
+        return { action: 'deny' as const }
+      }
       const opts = {
         type: 'question' as const,
         buttons: ['Add Extension', 'Cancel'],

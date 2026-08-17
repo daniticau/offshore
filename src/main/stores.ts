@@ -8,6 +8,7 @@ import {
   type SessionV2,
   type SessionWindowV2,
   type Settings,
+  type ShieldStats,
   type Suggestion
 } from '@shared/types'
 
@@ -544,6 +545,40 @@ class DownloadsStore {
 
 export const downloadsStore = new DownloadsStore()
 
+// ---------------- Shield lifetime stats ----------------
+
+/**
+ * The Shield's lifetime blocked counter. A trailing throttle, not JsonFile's
+ * debounce — save() resets its timer on every call, so a stream of blocks
+ * would postpone the write forever.
+ */
+class ShieldStatsStore {
+  private file = new JsonFile<ShieldStats>('shield-stats.json', { blockedTotal: 0, since: Date.now() })
+  private timer: NodeJS.Timeout | null = null
+
+  get(): ShieldStats {
+    return this.file.data
+  }
+
+  add(n: number): void {
+    this.file.data = { ...this.file.data, blockedTotal: this.file.data.blockedTotal + n }
+    if (!this.timer) {
+      this.timer = setTimeout(() => {
+        this.timer = null
+        this.file.saveNow()
+      }, 2000)
+    }
+  }
+
+  flush(): void {
+    if (this.timer) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
+    this.file.saveNow()
+  }
+}
+
 // ---------------- Session (open windows/spaces/tabs) ----------------
 
 type SessionFileShape = SessionV2 & { urls?: string[] }
@@ -594,10 +629,12 @@ export const settingsStore = new SettingsStore()
 export const bookmarksStore = new BookmarksStore()
 export const historyStore = new HistoryStore()
 export const sessionStore = new SessionStore()
+export const shieldStatsStore = new ShieldStatsStore()
 
 export function flushAllStores(): void {
   settingsStore.flush()
   bookmarksStore.flush()
   historyStore.flush()
   sessionStore.flush()
+  shieldStatsStore.flush()
 }

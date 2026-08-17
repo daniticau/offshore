@@ -12,6 +12,7 @@ import type {
   PasswordMeta,
   PasswordsStatus,
   Settings,
+  ShieldStats,
   SiteReport,
   SpaceProfile,
   Suggestion,
@@ -184,6 +185,8 @@ export interface OffshoreInternalApi {
     geocode(q: string): Promise<GeocodeResult[]>
   }
   history: { clear(): Promise<void> }
+  /** The built-in Shield's lifetime ledger; per-tab counts ride TabInfo. */
+  shield: { stats(): Promise<ShieldStats | null> }
   focus: {
     /** Hosts Focus is currently on for, sorted. */
     sites(): Promise<string[]>

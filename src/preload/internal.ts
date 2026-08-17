@@ -70,6 +70,9 @@ const api: OffshoreInternalApi = {
   history: {
     clear: () => invoke('history:clear')
   },
+  shield: {
+    stats: () => invoke('shield:stats')
+  },
   focus: {
     sites: () => invoke('focus:sites'),
     forget: (host: string) => invoke('focus:forget', host),

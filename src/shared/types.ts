@@ -637,6 +637,13 @@ export interface AdblockListMeta {
   defaultOn: boolean
 }
 
+/** Lifetime Shield ledger — requests blocked across all tabs, since `since`. */
+export interface ShieldStats {
+  blockedTotal: number
+  /** epoch ms when the counter started (first run of this build) */
+  since: number
+}
+
 export interface ExtensionInfo {
   id: string
   name: string
@@ -888,6 +895,9 @@ export const ADBLOCK_LISTS: AdblockListMeta[] = [
   { id: 'ublock-privacy', name: 'uBlock filters — Privacy', description: 'uBlock Origin privacy filters', defaultOn: true },
   { id: 'ublock-unbreak', name: 'uBlock filters — Unbreak', description: 'Fixes sites broken by blocking', defaultOn: true },
   { id: 'peter-lowe', name: "Peter Lowe's list", description: 'Ad and tracking server hosts', defaultOn: true },
+  { id: 'ublock-badware', name: 'uBlock filters — Badware', description: 'Sites hosting scams and malware', defaultOn: true },
+  { id: 'ublock-quick-fixes', name: 'uBlock filters — Quick fixes', description: 'Fast-moving fixes shipped between uBlock releases', defaultOn: true },
+  { id: 'urlhaus', name: 'Malicious URL Blocklist', description: 'URLhaus malware-distribution sites', defaultOn: true },
   { id: 'annoyances', name: 'Fanboy Annoyances', description: 'Cookie banners, popups, widgets', defaultOn: false },
   { id: 'easylist-cookie', name: 'EasyList Cookie', description: 'Hides cookie banners the auto-answer misses', defaultOn: true }
 ]
@@ -895,10 +905,14 @@ export const ADBLOCK_LISTS: AdblockListMeta[] = [
 export const ADBLOCK_LIST_URLS: Record<string, string[]> = {
   easylist: ['https://easylist.to/easylist/easylist.txt'],
   easyprivacy: ['https://easylist.to/easylist/easyprivacy.txt'],
-  'ublock-ads': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/filters.min.txt'],
-  'ublock-privacy': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/privacy.min.txt'],
+  // the .min aggregates live on uBO's CDN, not in the repo's raw files
+  'ublock-ads': ['https://ublockorigin.github.io/uAssets/filters/filters.min.txt'],
+  'ublock-privacy': ['https://ublockorigin.github.io/uAssets/filters/privacy.min.txt'],
   'ublock-unbreak': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/unbreak.txt'],
   'peter-lowe': ['https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&showintro=1&mimetype=plaintext'],
+  'ublock-badware': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/badware.txt'],
+  'ublock-quick-fixes': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/quick-fixes.txt'],
+  urlhaus: ['https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-online.txt'],
   annoyances: ['https://secure.fanboy.co.nz/fanboy-annoyance.txt'],
   'easylist-cookie': ['https://secure.fanboy.co.nz/fanboy-cookiemonster.txt']
 }

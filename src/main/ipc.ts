@@ -41,7 +41,7 @@ import {
 } from './popups'
 import { openDownload, preparedSessions, revealDownload } from './sessions'
 import { searchSuggestions } from './suggest'
-import { bookmarksStore, downloadsStore, historyStore, settingsStore } from './stores'
+import { bookmarksStore, downloadsStore, historyStore, settingsStore, shieldStatsStore } from './stores'
 import { devRendererUrl, internalPageUrl, prettyHost, resolveOmniboxInput } from './util'
 import { windowForChromeContents, windowForTab, windows, type OffshoreWindow } from './windows'
 
@@ -726,6 +726,7 @@ export function setupIpc(): void {
     if (!isTrustedSender(e)) return false
     return adblock.toggleSite(prettyHost(url))
   })
+  ipcMain.handle('shield:stats', (e) => (isTrustedSender(e) ? shieldStatsStore.get() : null))
 
   // ---- Focus ----
   ipcMain.handle('focus:toggle', (e) => chromeWindow(e)?.tabs.toggleFocus())

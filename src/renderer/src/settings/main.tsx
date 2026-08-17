@@ -12,6 +12,7 @@ import type {
   PasswordMeta,
   PasswordsStatus,
   Settings,
+  ShieldStats,
   ThemePref,
   ToolbarDensity
 } from '@shared/types'
@@ -778,6 +779,7 @@ const CORE_LISTS = ADBLOCK_LISTS.filter((l) => l.defaultOn).map((l) => l.id)
 function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([])
+  const [shieldStats, setShieldStats] = useState<ShieldStats | null>(null)
   const [focusSites, setFocusSites] = useState<string[]>([])
   const [rulesDraft, setRulesDraft] = useState('')
   const [rulesFlash, flashRules] = useFlash()
@@ -800,6 +802,18 @@ function App(): React.JSX.Element {
     void internal?.app.info().then((i) => i && setVersion(i.version))
   }, [])
 
+  // The lifetime blocked count is ambient, not live-critical: fetch it while a
+  // section that shows it is open, on a lazy interval, and let it rest otherwise.
+  useEffect(() => {
+    if (active !== 'extensions' && active !== 'shield') return
+    const load = (): void => {
+      void internal?.shield.stats().then((s) => s && setShieldStats(s))
+    }
+    load()
+    const timer = setInterval(load, 5000)
+    return () => clearInterval(timer)
+  }, [active])
+
   const patch = (p: Partial<Settings>): void => {
     const next = {
       ...settings,
@@ -819,6 +833,22 @@ function App(): React.JSX.Element {
   const patchAdblock = (p: Partial<Settings['adblock']>): void => {
     patch({ adblock: { ...settings.adblock, ...p } })
   }
+
+  /** The one Shield switch — the Shield section row and the Extensions row both flip this. */
+  const patchShieldEnabled = (v: boolean): void => {
+    patchAdblock({
+      enabled: v,
+      // flipping the big switch restores the standard bundle
+      lists: v
+        ? { ...settings.adblock.lists, ...Object.fromEntries(CORE_LISTS.map((l) => [l, true])) }
+        : settings.adblock.lists
+    })
+  }
+
+  /** "N requests blocked so far." — or nothing while the number is still loading. */
+  const blockedSoFar = shieldStats
+    ? ` ${shieldStats.blockedTotal.toLocaleString()} requests blocked so far.`
+    : ''
 
   const annoyancesOn = settings.adblock.lists['annoyances'] ?? false
 
@@ -1019,22 +1049,11 @@ function App(): React.JSX.Element {
                   <div className="row-title">
                     Block ads &amp; trackers
                     <div className="row-sub">
-                      Removes ads and stops trackers from following you around, using the same community
-                      filter lists as uBlock Origin. Pages load faster and sites learn less about you.
+                      Removes ads and stops trackers with the full uBlock Origin filter set.
+                      Pages load faster and sites learn less about you.{blockedSoFar}
                     </div>
                   </div>
-                  <Toggle
-                    on={settings.adblock.enabled}
-                    onChange={(v) =>
-                      patchAdblock({
-                        enabled: v,
-                        // flipping the big switch restores the standard bundle
-                        lists: v
-                          ? { ...settings.adblock.lists, ...Object.fromEntries(CORE_LISTS.map((l) => [l, true])) }
-                          : settings.adblock.lists
-                      })
-                    }
-                  />
+                  <Toggle on={settings.adblock.enabled} onChange={patchShieldEnabled} />
                 </div>
                 <div className="row">
                   <div className="row-title">
@@ -1192,10 +1211,24 @@ function App(): React.JSX.Element {
                   <div className="row-title">
                     Built into Offshore
                     <div className="row-sub">
-                      Two extensions that ship with the browser — no store, no install, nothing
+                      Extensions that ship with the browser — no store, no install, nothing
                       leaves your Mac.
                     </div>
                   </div>
+                </div>
+                <div className="row">
+                  <div className="ext-info">
+                    <span className="ext-icon builtin">🛡</span>
+                    <div className="row-title">
+                      Shield
+                      <div className="row-sub">
+                        The full uBlock Origin filter set on the Ghostery engine — ads, trackers,
+                        and malware domains never load.{blockedSoFar} Tuning lives in
+                        Settings → Shield.
+                      </div>
+                    </div>
+                  </div>
+                  <Toggle on={settings.adblock.enabled} onChange={patchShieldEnabled} />
                 </div>
                 <div className="row">
                   <div className="ext-info">
