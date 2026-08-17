@@ -58,6 +58,12 @@ export function popupDecision(openerWc: WebContents, url: string): 'allow' | 'bl
   return 'block'
 }
 
+/** Harness hook: ambient input (a stray click on the parked sliver) must not
+ * count as a gesture for the popup checks. */
+export function resetGestures(): void {
+  lastGestureAt.clear()
+}
+
 export function recordBlocked(openerWc: WebContents, url: string): void {
   const list = blockedByTab.get(openerWc.id) ?? []
   list.push({ url, ts: Date.now() })

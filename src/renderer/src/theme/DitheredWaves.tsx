@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react'
-import { liftAt, REDUCED_MOTION, swirlAt, trackWaveCursor, waveTime } from './waveMouse'
+import { parseColorRgba } from '@shared/mute'
+import { DEAD_CURSOR, liftAt, REDUCED_MOTION, swirlAt, trackWaveCursor, WAVE_STILL_TIME, waveTime } from './waveMouse'
 
 /**
  * Chunky retro waves, now fully live: three bands rendered every frame on one
@@ -7,7 +8,8 @@ import { liftAt, REDUCED_MOTION, swirlAt, trackWaveCursor, waveTime } from './wa
  * direction at different speeds, deeper water darker and denser — and the
  * cursor rides in the water like an object, each band shoved radially aside
  * around it and piled into a soft rim (front band most).
- * Everything is deterministic math; with reduced motion it renders once.
+ * Everything is deterministic math; stilled (Muted, or reduced motion) it
+ * renders WAVE_STILL_TIME once — no raf, no cursor tracking, one agreed frame.
  */
 
 const CELL = 4
@@ -20,15 +22,9 @@ const BAYER = [
   [15, 7, 13, 5]
 ]
 
+/** Shared parser (shared/mute.ts) — custom accents arrive as hsl() strings. */
 function parseRgba(rgba: string): [number, number, number, number] {
-  const m = rgba.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/)
-  if (m) return [+m[1], +m[2], +m[3], m[4] ? +m[4] : 1]
-  const hex = rgba.match(/^#([0-9a-f]{6})$/i)
-  if (hex) {
-    const v = parseInt(hex[1], 16)
-    return [(v >> 16) & 255, (v >> 8) & 255, v & 255, 1]
-  }
-  return [100, 180, 220, 0.4]
+  return parseColorRgba(rgba) ?? [100, 180, 220, 0.4]
 }
 
 interface Band {
@@ -107,14 +103,16 @@ function buildBands(colors: [string, string, string], H: number): Band[] {
 }
 
 interface DitheredWavesProps {
-  /** back / mid / front band colors (rgba() or #hex strings) */
+  /** back / mid / front band colors (rgba(), #hex or hsl() strings) */
   colors: [string, string, string]
   /** rendered height in css px */
   height?: number
   className?: string
+  /** Muted: draw the one still frame and never move (reduced motion implies it) */
+  still?: boolean
 }
 
-export function DitheredWaves({ colors, height = 190, className }: DitheredWavesProps): React.JSX.Element {
+export function DitheredWaves({ colors, height = 190, className, still }: DitheredWavesProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -146,8 +144,15 @@ export function DitheredWaves({ colors, height = 190, className }: DitheredWaves
     }
     resize()
 
-    const cursor = trackWaveCursor(host)
-    const reduced = REDUCED_MOTION()
+    /*
+     * One mode for "the water does not move": Muted and reduced motion both
+     * skip the cursor tracker (whose raf used to run even in reduced mode) and
+     * the draw loop, and paint WAVE_STILL_TIME exactly once. A live Muted flip
+     * lands here through the effect deps — the raf tears down via the cleanup,
+     * and unmuting resumes from the wall clock, so the phase has no seam.
+     */
+    const stilled = still === true || REDUCED_MOTION()
+    const cursor = stilled ? { current: DEAD_CURSOR, detach: (): void => {} } : trackWaveCursor(host)
 
     const draw = (tSec: number): void => {
       if (!img) return
@@ -211,15 +216,16 @@ export function DitheredWaves({ colors, height = 190, className }: DitheredWaves
       if (document.visibilityState === 'visible') draw(waveTime())
       raf = requestAnimationFrame(loop)
     }
-    if (reduced) {
-      draw(waveTime())
+    if (stilled) {
+      draw(WAVE_STILL_TIME)
     } else {
       raf = requestAnimationFrame(loop)
     }
 
     const ro = new ResizeObserver(() => {
       resize()
-      if (reduced) draw(waveTime())
+      // still water resized is the same still water, redrawn to fit
+      if (stilled) draw(WAVE_STILL_TIME)
     })
     ro.observe(host)
     return () => {
@@ -227,7 +233,7 @@ export function DitheredWaves({ colors, height = 190, className }: DitheredWaves
       cursor.detach()
       cancelAnimationFrame(raf)
     }
-  }, [colorKey, height])
+  }, [colorKey, height, still])
 
   return (
     <div ref={hostRef} className={`waves-host ${className ?? ''}`} style={{ height }} aria-hidden>

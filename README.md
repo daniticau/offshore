@@ -15,21 +15,17 @@ skips.
 - **AI slop detector** — every page is scored 0–100 for the tells of machine-generated filler
   (stock phrases, formula structure), by plain local heuristics: no AI involved, nothing leaves
   your Mac. A flagged page wears a scored chip on the address bar; press it for the report —
-  which tells were counted, and how often. The guilty prose itself is **washed** in the page,
-  block by block: yellow for a lean on the phrasebook, orange for a habit, red for the worst of
-  it. A page scoring 55+ gets **the veil**: a frosted card over it before you sink time into
-  it, one click to read anyway, one to never veil that site (managed in Settings → Shield).
-  The site panel carries the quiet verdict for every page. The web as it was meant to be surfed.
-- **Page Cleaner** — two switches on the sparkle beside the address, remembered per site:
-  **Clean** hides every block of prose the slop detector flagged, **Focus** hides the furniture
-  around the content — related rails, promo boxes, newsletter begs, sticky bars. Both are
-  re-asserted as the page re-renders, so what you turned off stays off.
-- **Page edits** — press ⇧⌘E (or the pencil in the address bar) and reshape any page: click to
-  hide an element, rewrite its text in place, or focus the page down to one thing. Edits are
-  remembered per site and replayed on every visit — deleted feed modules stay deleted, even when
-  the site re-renders them — with undo, a per-site off switch, and a ledger in Settings. No
-  extension, no userScripts permission: the browser owns the page, so the editor is built in.
-  The slop detector and the Page Cleaner ship as **built-in extensions** — toggled from
+  which tells were counted, and how often. The guilty prose itself is **barred at its edge**,
+  block by block: a slim graded stripe, yellow for a lean on the phrasebook, orange for a
+  habit, red for the worst of it. Sites you'd rather not hear it on go on the quiet list in
+  Settings → Shield. The site panel carries the verdict for every page. The web as it was
+  meant to be surfed.
+- **Focus** — one switch on any page (⇧⌘F, or the viewfinder in the address bar): ads, cookie
+  nags, sticky bars, comments, autoplay and recommendation rails come off, and the layout
+  closes up around what's left — an emptied rail's column really goes to the content, not to a
+  hole. Remembered per site, re-asserted as the page re-renders, and off means off: the page
+  comes back exactly as the site served it.
+  The slop detector and Focus ship as **built-in extensions** — toggled from
   Settings → Extensions, above whatever you install from the Web Store.
 - **Protected content plays** — Widevine DRM via castLabs Electron for Content Security, so
   Netflix, Spotify Web, and friends actually work (dev builds are VMP-signed out of the box)
@@ -40,9 +36,10 @@ skips.
   / Never for this site, over a dimmed page), and autofills on return. Encrypted at rest
   (username *and* password) with a macOS-Keychain-backed key via `safeStorage`; exact-origin
   matching, per-profile account memory, Touch ID-gated reveal. Local only, forever.
-- **Shield** — built-in uBlock-compatible ad/tracker blocker (EasyList, EasyPrivacy, uBlock
-  filters, Peter Lowe's, Fanboy Annoyances), per-site toggle, custom rules, live counter —
-  active in every space profile. Allowlist changes apply instantly, no refetch.
+- **Shield** — built-in uBlock-compatible ad/tracker blocker running uBlock Origin's
+  out-of-box list set (EasyList, EasyPrivacy, the uBlock filter family, Peter Lowe's, URLhaus)
+  plus EasyList Cookie, per-site toggle, custom rules, live counter — active in every space
+  profile. Allowlist changes apply instantly, no refetch.
 - **Popup blocker** — real transient-activation model: popups need a recent click or an
   allowlisted site; blocked ones collect in a chip in the address bar.
 - **Bookmarks with folders** — real site favicons in the sidebar tree (the icon captured when
@@ -114,8 +111,12 @@ OFFSHORE_TEST_FLOW=drm npm run dev         # Widevine CDM present and answering
 OFFSHORE_TEST_FLOW=split npm run dev       # split view: geometry, activation, dissolution
 OFFSHORE_TEST_FLOW=lasttab npm run dev     # closing the last tab keeps the window
 OFFSHORE_TEST_FLOW=slop npm run dev        # slop detector flags filler, spares honest prose
-OFFSHORE_TEST_FLOW=pageedits npm run dev   # pick → hide/rewrite, survives re-renders & reloads
-OFFSHORE_TEST_FLOW=cleaner npm run dev     # block wash tiers; Clean/Focus modes persist per site
+OFFSHORE_TEST_FLOW=focus npm run dev       # strip + compaction geometry, per-site memory, live restore
+OFFSHORE_TEST_FLOW=widgets npm run dev     # the widget board stays parked behind HOME_WIDGETS
+OFFSHORE_TEST_FLOW=harbor npm run dev      # consent auto-answer, cookie stripping, the tide + undo stash
+OFFSHORE_TEST_FLOW=shield npm run dev      # Shield engine offline: wire blocks, counts, cosmetic hide, per-site allow
+OFFSHORE_TEST_FLOW=morning npm run dev     # morning brief offline: enable card, digest hygiene on the wire, day gate
+OFFSHORE_TEST_FLOW=appearance npm run dev  # Muted vs Water: accent derivation, live retint, deterministic waves
 ```
 
 Each flow writes its `[flowtest]` transcript to `OFFSHORE_TEST_LOG=<file>` as well as stdout —

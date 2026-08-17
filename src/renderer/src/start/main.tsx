@@ -1,12 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { OffshoreInternalApi } from '@shared/bridge'
-import type { Settings } from '@shared/types'
+import type { MorningAnswer, Settings } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
+import { applyMuted } from '../theme/useTheme'
 import { HomeCanvas } from './HomeCanvas'
 
 const internal = (window as unknown as { offshoreInternal?: OffshoreInternalApi })
   .offshoreInternal
+
+/*
+ * The morning brief is asked for once per document — module-level flags, so the
+ * visibilitychange re-load() never re-asks and a remount keeps the answer.
+ * Main's day gate makes the ask idempotent for this document anyway (a reload
+ * keeps its claim); this just spares the chatter.
+ */
+let morningAsked = false
+let morningCache: MorningAnswer | null = null
 
 /**
  * The new tab page — a thin shell around HomeCanvas, which the zero-tab window
@@ -27,6 +37,7 @@ function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [editSignal, setEditSignal] = useState(0)
   const [searchOpen, setSearchOpen] = useState(true)
+  const [morning, setMorning] = useState<MorningAnswer | null>(morningCache)
 
   /*
    * "The page is on screen." Main holds a new tab off screen until this lands,
@@ -43,19 +54,44 @@ function App(): React.JSX.Element {
     requestAnimationFrame(() => requestAnimationFrame(() => internal?.home?.painted()))
   }
 
+  /*
+   * Ask whether today's brief is this page's to show — strictly after
+   * reportPainted() has fired, so the brief can never delay the home:painted
+   * handshake that swaps a new tab in (tabs.ts markPainted gates on it).
+   */
+  const askMorning = (): void => {
+    if (morningAsked || !internal?.morning) return
+    morningAsked = true
+    void internal.morning
+      .get()
+      .then((a) => {
+        morningCache = a
+        setMorning(a)
+      })
+      .catch(() => undefined)
+  }
+
   useEffect(() => {
+    const take = (s: Settings): void => {
+      setSettings(s)
+      applyMuted(s.appearance?.muted === true)
+    }
     const load = (): void => {
       if (!internal) return
       void internal.settings
         .get()
-        .then((s) => s && setSettings(s))
+        .then((s) => s && take(s))
         .catch(() => undefined)
-        .finally(reportPainted)
+        .finally(() => {
+          reportPainted()
+          askMorning()
+        })
     }
     load()
-    // Settings changes reach the chrome, not tab pages — so re-read whenever
-    // this page comes back into view (layout switched, widgets edited on the
-    // zero-tab screen) instead of showing a stale home.
+    // Main pushes settings changes to internal pages live (a Muted or accent
+    // flip must land while this page is on screen); the visibility re-read
+    // stays as belt-and-braces for anything the push predates.
+    internal?.settings.onChanged(take)
     const onVisible = (): void => {
       if (document.visibilityState === 'visible') load()
     }
@@ -98,6 +134,12 @@ function App(): React.JSX.Element {
       }}
       autoFocus={pill}
       editSignal={editSignal}
+      morning={morning}
+      onMorningDismiss={() => {
+        morningCache = { kind: 'none' }
+        setMorning(null)
+        void internal?.morning.dismiss()
+      }}
     />
   )
 }

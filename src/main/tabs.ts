@@ -33,7 +33,8 @@ import {
 import { adblock } from './adblock'
 import { HARNESS_ACTIVE } from './bootstrap'
 import { extensionsRef } from './extensions-ref'
-import { pageEditsStore } from './pageedits'
+import { focusStore } from './focus'
+import { harbor } from './harbor'
 import { passwordVault } from './passwords'
 import {
   blockedPopupCount,
@@ -131,8 +132,6 @@ export class Tab {
   favicon?: string
   /** The slop detector's verdict, reported by the page preload */
   slop?: SlopReport
-  /** Page-edit mode is a property of the document, so navigation ends it. */
-  editing = false
   /**
    * Is the home screen's search still up? A new tab opens with it in front of
    * the widgets, and dismissing it leaves the home page there — the tab does not
@@ -254,7 +253,7 @@ export class Tab {
       /* navigation history unavailable during teardown */
     }
     const effectiveUrl = errorTarget ?? url
-    const editHost = /^https?:/.test(url) && !errorTarget && !isInternalUrl(url) ? prettyHost(url) : ''
+    const host = /^https?:/.test(url) && !errorTarget && !isInternalUrl(url) ? prettyHost(url) : ''
     return {
       id: this.id,
       spaceId: this.spaceId,
@@ -271,10 +270,10 @@ export class Tab {
       blockedPopups: blockedPopupCount(this.id),
       isBookmarked: bookmarksStore.isBookmarked(effectiveUrl),
       slop: this.slop,
-      editing: this.editing,
-      editCount: editHost ? pageEditsStore.count(editHost) : 0,
-      editsOn: editHost ? pageEditsStore.enabled(editHost) : true,
-      modes: editHost ? pageEditsStore.modes(editHost) : { clean: false, focus: false },
+      privacy: harbor.tabPrivacy(this.id),
+      // the master switch gates every surface: a page the switch un-focused
+      // must not wear focusOn anywhere (site memory stays in focusStore)
+      focusOn: host ? settingsStore.get().focus.enabled && focusStore.isOn(host) : false,
       homeSearch: this.homeSearch && (errorTarget ?? toDisplayUrl(url)).startsWith('offshore://start')
     }
   }
@@ -443,6 +442,7 @@ export class TabManager {
       /* view already detached */
     }
     adblock.dropTab(tab.id)
+    harbor.dropTab(tab.id)
     if (!tab.wc.isDestroyed()) tab.wc.close()
   }
 
@@ -501,64 +501,42 @@ export class TabManager {
     tab.wc.focus()
   }
 
-  // ---- page edits ----
+  // ---- Focus ----
 
-  /** ⇧⌘E, the pencil chip, the context menu: flip edit mode on a real page. */
-  toggleEditMode(id?: number): void {
+  /** ⇧⌘F, the chip, the palette, the context menu: flip Focus for this site. */
+  toggleFocus(id?: number): void {
     const tab = id == null ? this.activeTab : this.byId(id)
     const url = tab?.wc.getURL() ?? ''
     if (!tab || !/^https?:/.test(url) || isInternalUrl(url)) return
-    this.setEditMode(tab, !tab.editing)
+    if (!settingsStore.get().focus.enabled) return
+    const host = prettyHost(url)
+    // live apply rides the store's 'changed' event (see ipc.ts), which brings
+    // every window's tabs on this host in line
+    focusStore.set(host, !focusStore.isOn(host))
   }
 
-  setEditMode(tab: Tab, on: boolean): void {
-    if (tab.editing === on || tab.wc.isDestroyed()) return
-    tab.editing = on
-    tab.wc.send('pageedit:mode', on)
-    // the engine's own keys (Esc, Delete, ⌘Z) only hear a focused page
-    if (on) tab.wc.focus()
-    this.pushState()
-  }
-
-  /** Hand a freshly parsed document the edits its site has on file. */
-  sendPageEdits(tab: Tab): void {
-    const url = tab.wc.getURL()
-    if (!/^https?:/.test(url) || isInternalUrl(url)) return
-    const site = pageEditsStore.forHost(prettyHost(url))
-    if (site && site.enabled && site.edits.length) tab.wc.send('pageedit:apply', site.edits)
-    this.sendPageModes(tab)
-    this.sendSlopStyle(tab)
-  }
-
-  /** The Page Cleaner's switches for wherever this tab is, as they stand now. */
-  sendPageModes(tab: Tab): void {
+  /** Tell a document whether Focus applies to it, as things stand now. */
+  sendFocus(tab: Tab): void {
     const url = tab.wc.getURL()
     if (!/^https?:/.test(url) || isInternalUrl(url) || tab.wc.isDestroyed()) return
-    const modes = settingsStore.get().cleaner.enabled
-      ? pageEditsStore.modes(prettyHost(url))
-      : { clean: false, focus: false }
-    tab.wc.send('pagemode:apply', modes)
+    tab.wc.send('focus:apply', settingsStore.get().focus.enabled && focusStore.isOn(prettyHost(url)))
   }
 
-  /** Whether the slop scan should mark blocks at all, and tint what it marks. */
+  /** Whether the slop scan should mark blocks at all, and bar what it marks. */
   sendSlopStyle(tab: Tab): void {
     if (tab.wc.isDestroyed()) return
     const s = settingsStore.get()
-    tab.wc.send('slop:style', { mark: s.slop.detector, tint: s.slop.detector && s.slop.highlight })
+    const host = prettyHost(tab.wc.getURL())
+    const mark = s.slop.detector && !(host && s.slop.quiet.includes(host))
+    tab.wc.send('slop:style', { mark, bars: mark && s.slop.highlight })
   }
 
-  /**
-   * A host's ledger changed shape (cleared, or switched off/on) — bring every
-   * tab already sitting on that host in line without waiting for a reload.
-   */
-  refreshPageEdits(host: string): void {
+  /** A host's Focus flag changed — bring every tab on it in line, live. */
+  refreshFocus(host: string): void {
     for (const tab of this.tabs) {
       const url = tab.wc.getURL()
       if (!/^https?:/.test(url) || isInternalUrl(url) || prettyHost(url) !== host) continue
-      const site = pageEditsStore.forHost(host)
-      if (site && site.enabled && site.edits.length) tab.wc.send('pageedit:apply', site.edits)
-      else tab.wc.send('pageedit:reset')
-      this.sendPageModes(tab)
+      this.sendFocus(tab)
     }
     this.pushState()
   }
@@ -1292,11 +1270,15 @@ export class TabManager {
       if (!isHomePage(url)) tab.ungate()
       tab.slop = undefined
       tab.favicon = undefined
-      // edit mode belongs to the document that was being edited
-      tab.editing = false
       if (this.pipTabId === tab.id) this.pipTabId = null
       adblock.resetCount(tab.id)
+      harbor.resetTab(tab.id)
       if (!isInternalUrl(url) && settingsStore.get().keepHistory) historyStore.record(url)
+      // deliberately not gated on keepHistory (the map holds registrable
+      // domain → UTC day only, and it is what lets the tide tell a site you
+      // live on from one you've abandoned) — Harbor itself gates the write on
+      // the tide setting, and always tracks the tab's open top-level domain
+      if (!isInternalUrl(url) && /^https?:/.test(url)) harbor.noteTopVisit(url, tab.id)
       this.pushState()
       this.host.onTabsChanged()
     })
@@ -1304,6 +1286,7 @@ export class TabManager {
     wc.on('did-navigate-in-page', (_e, url, isMainFrame) => {
       if (isMainFrame) {
         if (!isInternalUrl(url) && settingsStore.get().keepHistory) historyStore.record(url)
+        if (!isInternalUrl(url) && /^https?:/.test(url)) harbor.noteTopVisit(url, tab.id)
         // an SPA route change is a new page in the old document — ask the
         // detector to look again (the standing verdict holds until it answers)
         wc.send('slop:rescan')
@@ -1323,7 +1306,8 @@ export class TabManager {
     wc.on('dom-ready', () => {
       tab.markReady()
       maybeAutofill(wc, tab.partition)
-      this.sendPageEdits(tab)
+      this.sendFocus(tab)
+      this.sendSlopStyle(tab)
     })
 
     // Internal pages never load in subframes (privileged bridge lives there)
@@ -1531,9 +1515,10 @@ export class TabManager {
 
     if (/^https?:/.test(wc.getURL()) && !isInternalUrl(wc.getURL())) {
       add({
-        label: tab.editing ? 'Done Editing Page' : 'Edit This Page',
-        accelerator: 'Cmd+Shift+E',
-        click: () => this.setEditMode(tab, !tab.editing)
+        label: focusStore.isOn(prettyHost(wc.getURL())) ? 'Unfocus This Page' : 'Focus This Page',
+        accelerator: 'Cmd+Shift+F',
+        enabled: settingsStore.get().focus.enabled,
+        click: () => this.toggleFocus(tab.id)
       })
     }
     add({ label: 'Inspect Element', click: () => wc.inspectElement(params.x, params.y) })

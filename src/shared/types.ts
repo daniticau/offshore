@@ -1,3 +1,8 @@
+// The muting derivation lives beside the palette it grays. mute.ts imports
+// only the AccentModeColors *type* back from here, so the cycle is erased at
+// compile time and tsc sees a straight line.
+import { muteAccentColors } from './mute'
+
 // ---------------- Tabs & spaces ----------------
 
 export type SpaceProfile = 'shared' | 'separate'
@@ -28,14 +33,10 @@ export interface TabInfo {
   isBookmarked: boolean
   /** The slop detector's verdict on the loaded page; absent until it reports */
   slop?: SlopReport
-  /** This tab is in page-edit mode right now (per-document; ends on navigate). */
-  editing: boolean
-  /** Saved page edits for this tab's host — the chip and site panel read these. */
-  editCount: number
-  /** False when the host's edits are switched off without being thrown away. */
-  editsOn: boolean
-  /** The Page Cleaner's per-site switches, as stored for this tab's host. */
-  modes: PageModes
+  /** Harbor's per-document verdict: cookies stripped, consent handled. */
+  privacy?: TabPrivacyInfo
+  /** Focus is on for this tab's site (per-site memory; see focusStore). */
+  focusOn: boolean
   /**
    * A home screen with its search still up. Only ever true for a blank new tab:
    * the search is a panel over the home page, and dismissing it leaves the page.
@@ -144,8 +145,8 @@ export interface PopupSettings {
 
 /** The chip appears in the address bar from this score up. */
 export const SLOP_FLAG_MIN = 25
-/** The veil (when enabled) covers the page from this score up. */
-export const SLOP_VEIL_MIN = 55
+/** From this score up the chip goes red and the verdict reads "heavy". */
+export const SLOP_HEAVY_MIN = 55
 
 /** One tell the detector counted — a stock phrase, a structural habit. */
 export interface SlopSignal {
@@ -158,44 +159,38 @@ export interface SlopSignal {
  * heuristics — the score is deterministic and the signals are the receipts.
  */
 export interface SlopReport {
-  /** 0–100; see SLOP_FLAG_MIN / SLOP_VEIL_MIN for what the chrome does with it */
+  /** 0–100; see SLOP_FLAG_MIN / SLOP_HEAVY_MIN for what the chrome does with it */
   score: number
   /** words of prose the scan judged from */
   words: number
   /** the tells found, heaviest first, at most a handful */
   signals: SlopSignal[]
-  /** 'up' = the veil covers the page now; 'lifted' = the reader clicked through */
-  veil?: 'up' | 'lifted'
+  /** the block census behind the edge bars */
+  blocks: { total: number; marked: number; heavy: number }
 }
 
 export interface SlopSettings {
   /** Scan pages for the tells of machine-generated filler */
   detector: boolean
-  /** Wash flagged prose yellow → orange → red, block by block, in the page */
+  /** Bar the flagged prose — a slim colored edge on each block that carries the tells */
   highlight: boolean
-  /** Cover heavy-scoring pages with a veil before you sink time into them */
-  veil: boolean
-  /** hostnames the veil never covers */
-  allowlist: string[]
+  /** hostnames where the detector stays quiet — no chip, no bars; SiteInfo still reports */
+  quiet: string[]
 }
 
-/** The block-tint thresholds: a paragraph wears the deepest tier it clears. */
+/** The edge-bar tiers: a prose block wears the deepest tier it clears. */
 export const SLOP_BLOCK_TIERS = [
   { tier: 'red', min: 65 },
   { tier: 'orange', min: 45 },
   { tier: 'yellow', min: 25 }
 ] as const
 
-/** The Page Cleaner's per-site switches: what it takes off a page, and keeps off. */
-export interface PageModes {
-  /** Hide every block of prose the slop detector flagged */
-  clean: boolean
-  /** Hide the furniture around the content — rails, promos, sticky overlays */
-  focus: boolean
-}
+// ---------------- Focus ----------------
 
-export interface CleanerSettings {
-  /** Master switch for the Page Cleaner (the Clean / Focus page modes) */
+/** The Focus built-in: one switch that strips a page's distractions and
+ *  compacts the layout around what's left. Per-site state lives in
+ *  src/main/focus.ts; this is only the master switch. */
+export interface FocusSettings {
   enabled: boolean
 }
 
@@ -210,6 +205,73 @@ export interface BriefSettings {
   lat: number | null
   lon: number | null
   unit: 'auto' | 'c' | 'f'
+}
+
+// ---------------- Morning brief ----------------
+// (`brief` above is the WEATHER widget; everything here is named `morning`.)
+
+export interface MorningSettings {
+  /** The once-a-day brief on the first new tab. Needs keepHistory to do anything. */
+  enabled: boolean
+}
+
+/** A site worth going back to — always the host's front door, never a deep URL. */
+export interface MorningSite {
+  /** bare host, www. stripped */
+  host: string
+  /** always `https://${host}/` */
+  url: string
+  /** best title on file for the host, '' allowed */
+  title: string
+  /** whole days since last visit */
+  daysAway: number
+  /** one model-composed line, replaces the daysAway sub-line */
+  note?: string
+}
+
+export interface MorningTopic {
+  /** display form, <= 40 chars, original casing */
+  label: string
+  /** what a click searches for (goes through the omnibox resolver) */
+  query: string
+  /** up to 2 hosts it was seen on — the receipts line */
+  hosts: string[]
+  /** model's one-line why, <= 90 chars */
+  note?: string
+  fromModel: boolean
+}
+
+export interface MorningVideo {
+  title: string
+  /** https://www.youtube.com/watch?v=<id> — always the real origin */
+  url: string
+  channel: string
+  /** ms epoch */
+  publishedAt: number
+}
+
+export interface MorningBrief {
+  /** 'YYYY-MM-DD', local calendar date */
+  day: string
+  /** one plain sentence */
+  greeting: string
+  sites: MorningSite[] // 0..5
+  topics: MorningTopic[] // 0..4
+  videos: MorningVideo[] // 0..3
+  source: 'heuristics' | 'ollama'
+  composedAt: number
+}
+
+/** What the start page hears when it asks whether today's brief is its to show. */
+export type MorningAnswer =
+  | { kind: 'brief'; brief: MorningBrief }
+  | { kind: 'enable-history' }
+  | { kind: 'none' }
+
+export interface MorningStatus {
+  ollama: { reachable: boolean; host: string; model: string | null }
+  historyEntries: number
+  todayState: 'unseen' | 'seen' | 'dismissed'
 }
 
 export type AccentId = 'sea' | 'kelp' | 'dusk' | 'sand'
@@ -254,6 +316,13 @@ export interface AppearanceSettings {
   accent: AccentId
   /** A custom accent hex (e.g. "#7a4de0"); when set it overrides the preset. */
   accentCustom?: string | null
+  /**
+   * Gray the water and still every wave — color and motion both.
+   * Independent of `waves`: `waves: false` removes the waves entirely, while
+   * `muted: true` stills them (gray, one frozen frame). Muted with waves off
+   * simply shows no water at all.
+   */
+  muted: boolean
 }
 
 // ---------------- Accents (light + dark) ----------------
@@ -497,10 +566,15 @@ export function customAccentColors(hex: string, dark: boolean): AccentModeColors
   }
 }
 
-/** The palette the whole app should use: custom hex wins over the preset. */
+/**
+ * The palette the whole app should use: custom hex wins over the preset, and
+ * Muted (one derivation, shared/mute.ts) grays whatever won.
+ */
 export function resolveAccentColors(appearance: AppearanceSettings, dark: boolean): AccentModeColors {
-  if (appearance.accentCustom) return customAccentColors(appearance.accentCustom, dark)
-  return accentColors(appearance.accent, dark)
+  const base = appearance.accentCustom
+    ? customAccentColors(appearance.accentCustom, dark)
+    : accentColors(appearance.accent, dark)
+  return appearance.muted ? muteAccentColors(base) : base
 }
 
 // ---------------- Settings ----------------
@@ -510,8 +584,12 @@ export interface Settings {
   searchEngine: SearchEngineId
   adblock: AdblockSettings
   popups: PopupSettings
+  /** Harbor: consent auto-answer, tracker-cookie stripping, the tide. */
+  privacy: PrivacySettings
   passwords: PasswordSettings
   brief: BriefSettings
+  /** The once-a-day morning brief on the first new tab (not the weather widget). */
+  morning: MorningSettings
   restoreSession: boolean
   /** Remember visited pages so they can come back as omnibox suggestions. Off by default. */
   keepHistory: boolean
@@ -533,8 +611,8 @@ export interface Settings {
   newTabWidgetLayout: Partial<Record<keyof NewTabWidgets, WidgetLayout>>
   /** Local heuristic prose analysis that flags AI-generated-looking pages. No AI involved. */
   slop: SlopSettings
-  /** The Page Cleaner built-in: Clean / Focus modes for any page */
-  cleaner: CleanerSettings
+  /** The Focus built-in: strip distractions and close the gaps, per site */
+  focus: FocusSettings
   /** Pop playing video into a floating mini-player when its tab is backgrounded */
   autoPip: boolean
   /** Tiny interface sounds (tab close, download done, …) */
@@ -545,44 +623,6 @@ export interface Settings {
   appearance: AppearanceSettings
   /** First-launch onboarding completed */
   onboarded: boolean
-}
-
-// ---------------- Page edits ----------------
-
-/**
- * One remembered change to a page, replayed on every future visit.
- *
- * 'hide' takes an element (and everything that re-renders into its place)
- * off the page. 'text' rewrites an element's content. 'focus' hides every
- * sibling along the element's ancestor chain — the page becomes that element.
- */
-export type PageEditOp = 'hide' | 'text' | 'focus'
-
-export interface PageEdit {
-  id: string
-  op: PageEditOp
-  selector: string
-  /** op 'text': the replacement markup, sanitized before it is ever applied */
-  value?: string
-  /**
-   * op 'text': the exact pathname the edit was made on. Hiding generalizes
-   * across a site — the same rail is unwanted on every profile — but rewritten
-   * words stay on the page where they were written, or an edited headline
-   * would stamp itself onto every article the selector happens to match.
-   */
-  path?: string
-  /** How the element read when it was picked — the settings list shows this. */
-  label?: string
-  createdAt: number
-}
-
-export interface SiteEdits {
-  host: string
-  /** Off = keep the edits but stop applying them (the site panel's toggle). */
-  enabled: boolean
-  edits: PageEdit[]
-  /** The Page Cleaner's switches for this host; absent = both off. */
-  modes?: Partial<PageModes>
 }
 
 // ---------------- Bookmarks (v2: tree) ----------------
@@ -631,11 +671,12 @@ export type ActionId =
   | 'new-space'
   | 'toggle-layout'
   | 'toggle-sidebar'
-  | 'edit-page'
+  | 'focus-page'
   | 'open-settings'
   | 'open-downloads'
   | 'show-welcome'
   | 'cycle-theme'
+  | 'toggle-muted'
 
 export interface ActionDef {
   id: ActionId
@@ -652,11 +693,12 @@ export const ACTION_DEFS: ActionDef[] = [
   { id: 'new-space', label: 'New Space', keywords: 'workspace create' },
   { id: 'toggle-layout', label: 'Switch Tab Layout', keywords: 'sidebar top bar horizontal vertical' },
   { id: 'toggle-sidebar', label: 'Toggle Sidebar', keywords: 'hide show collapse' },
-  { id: 'edit-page', label: 'Edit This Page', keywords: 'modify remove hide delete element text focus refit' },
+  { id: 'focus-page', label: 'Focus This Page', keywords: 'declutter strip clean ads sidebar rails comments distraction reader' },
   { id: 'open-settings', label: 'Open Settings', keywords: 'preferences options' },
   { id: 'open-downloads', label: 'Open Downloads Folder', keywords: 'finder files' },
   { id: 'show-welcome', label: 'Show Welcome', keywords: 'onboarding intro tour' },
-  { id: 'cycle-theme', label: 'Cycle Theme', keywords: 'dark light system appearance mode' }
+  { id: 'cycle-theme', label: 'Cycle Theme', keywords: 'dark light system appearance mode' },
+  { id: 'toggle-muted', label: 'Toggle Muted', keywords: 'calm quiet gray grey still water mood' }
 ]
 
 export interface Suggestion {
@@ -681,6 +723,13 @@ export interface AdblockListMeta {
   name: string
   description: string
   defaultOn: boolean
+}
+
+/** Lifetime Shield ledger — requests blocked across all tabs, since `since`. */
+export interface ShieldStats {
+  blockedTotal: number
+  /** epoch ms when the counter started (first run of this build) */
+  since: number
 }
 
 export interface ExtensionInfo {
@@ -760,6 +809,84 @@ export interface BlockedPopup {
   url: string
   ts: number
 }
+
+// ---------------- Harbor (privacy manager) ----------------
+
+export interface PrivacySettings {
+  /** Answer cookie prompts automatically with the most private choice. */
+  consentAuto: boolean
+  /** Strip cookies from requests already classified as tracking. */
+  cookieGuard: boolean
+  /** Auto-expire cookies+storage of sites not visited top-level in tideDays. */
+  tide: boolean
+  /** 14 | 30 | 60 | 90 (validated on write; anything else coerces to 30). */
+  tideDays: number
+  /** Registrable domains where Harbor does nothing at all (as the visited site). */
+  disabledSites: string[]
+  /** Registrable domains whose cookies are never stripped and never expire. */
+  keepSites: string[]
+  /** Registrable domains the user declared trackers: stripped as third-party, expired every sweep. */
+  blockSites: string[]
+}
+
+/** What Harbor knows about the loaded page, riding TabInfo. */
+export interface TabPrivacyInfo {
+  /** Tracker cookies kept out of requests made by this page (this document). */
+  cookiesStripped: number
+  /** Tracker cookies the response-side scrub deleted from the jar for this page. */
+  cookiesScrubbed: number
+  /** Consent auto-answer state for this document. */
+  consent: 'none' | 'found' | 'handled' | 'failed'
+  /** CMP name when one was detected (e.g. "Cybotcookiebot"). */
+  cmp?: string
+}
+
+/** The site panel's deep report (privacy:site-report). */
+export interface SiteReport {
+  host: string
+  /** Registrable domain the per-site switches key on. */
+  domain: string
+  cookieCount: number
+  /** navigator.storage.estimate() usage for the page origin; null when unknown. */
+  storageBytes: number | null
+  trackersBlocked: number
+  cookiesStripped: number
+  consent: TabPrivacyInfo['consent']
+  cmp?: string
+  /** Last top-level visit (UTC day start ms) from the engagement map; null = never seen. */
+  lastVisit: number | null
+  keep: boolean
+  blocked: boolean
+  off: boolean
+}
+
+export interface ExpiredSite {
+  domain: string
+  expiredAt: number
+  cookieCount: number
+}
+
+/**
+ * Hosts Harbor never touches, ever — SSO, payment, bot-check and DRM/CDN
+ * domains where a stripped or expired cookie means a broken login, a failed
+ * checkout, or dead playback. Matching is suffix-based:
+ * host === entry || host.endsWith('.' + entry).
+ */
+export const PRIVACY_NEVER_TOUCH: readonly string[] = [
+  // sign-in providers
+  'accounts.google.com', 'accounts.youtube.com', 'gstatic.com',
+  'appleid.apple.com', 'idmsa.apple.com',
+  'login.microsoftonline.com', 'login.live.com', 'login.windows.net',
+  'okta.com', 'auth0.com', 'onelogin.com', 'duosecurity.com', 'pingidentity.com',
+  // payment
+  'paypal.com', 'stripe.com', 'stripe.network', 'braintreegateway.com',
+  'braintree-api.com', 'adyen.com', 'klarna.com', 'checkout.com',
+  // bot checks (a stripped cookie = an endless challenge loop)
+  'recaptcha.net', 'hcaptcha.com', 'challenges.cloudflare.com',
+  // DRM / streaming (Netflix must keep working — locked requirement)
+  'netflix.com', 'nflxvideo.net', 'nflxso.net', 'nflximg.net', 'nflxext.com',
+  'spotify.com', 'scdn.co'
+] as const
 
 // ---------------- Weather brief ----------------
 
@@ -858,17 +985,26 @@ export const ADBLOCK_LISTS: AdblockListMeta[] = [
   { id: 'ublock-privacy', name: 'uBlock filters — Privacy', description: 'uBlock Origin privacy filters', defaultOn: true },
   { id: 'ublock-unbreak', name: 'uBlock filters — Unbreak', description: 'Fixes sites broken by blocking', defaultOn: true },
   { id: 'peter-lowe', name: "Peter Lowe's list", description: 'Ad and tracking server hosts', defaultOn: true },
-  { id: 'annoyances', name: 'Fanboy Annoyances', description: 'Cookie banners, popups, widgets', defaultOn: false }
+  { id: 'ublock-badware', name: 'uBlock filters — Badware', description: 'Sites hosting scams and malware', defaultOn: true },
+  { id: 'ublock-quick-fixes', name: 'uBlock filters — Quick fixes', description: 'Fast-moving fixes shipped between uBlock releases', defaultOn: true },
+  { id: 'urlhaus', name: 'Malicious URL Blocklist', description: 'URLhaus malware-distribution sites', defaultOn: true },
+  { id: 'annoyances', name: 'Fanboy Annoyances', description: 'Cookie banners, popups, widgets', defaultOn: false },
+  { id: 'easylist-cookie', name: 'EasyList Cookie', description: 'Hides cookie banners the auto-answer misses', defaultOn: true }
 ]
 
 export const ADBLOCK_LIST_URLS: Record<string, string[]> = {
   easylist: ['https://easylist.to/easylist/easylist.txt'],
   easyprivacy: ['https://easylist.to/easylist/easyprivacy.txt'],
-  'ublock-ads': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/filters.min.txt'],
-  'ublock-privacy': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/privacy.min.txt'],
+  // the .min aggregates live on uBO's CDN, not in the repo's raw files
+  'ublock-ads': ['https://ublockorigin.github.io/uAssets/filters/filters.min.txt'],
+  'ublock-privacy': ['https://ublockorigin.github.io/uAssets/filters/privacy.min.txt'],
   'ublock-unbreak': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/unbreak.txt'],
   'peter-lowe': ['https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&showintro=1&mimetype=plaintext'],
-  annoyances: ['https://secure.fanboy.co.nz/fanboy-annoyance.txt']
+  'ublock-badware': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/badware.txt'],
+  'ublock-quick-fixes': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/quick-fixes.txt'],
+  urlhaus: ['https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-online.txt'],
+  annoyances: ['https://secure.fanboy.co.nz/fanboy-annoyance.txt'],
+  'easylist-cookie': ['https://secure.fanboy.co.nz/fanboy-cookiemonster.txt']
 }
 
 /**
@@ -896,8 +1032,20 @@ export const DEFAULT_SETTINGS: Settings = {
     allowlist: []
   },
   popups: { block: true, allowlist: [] },
+  privacy: {
+    consentAuto: true,
+    cookieGuard: true,
+    tide: true,
+    tideDays: 30,
+    disabledSites: [],
+    keepSites: [],
+    blockSites: []
+  },
   passwords: { enabled: true },
   brief: { enabled: true, locationName: '', lat: null, lon: null, unit: 'auto' },
+  // on by default; it self-suppresses while keepHistory is off (the enable card
+  // is the only surface)
+  morning: { enabled: true },
   restoreSession: true,
   keepHistory: false,
   searchSuggestions: true,
@@ -908,12 +1056,12 @@ export const DEFAULT_SETTINGS: Settings = {
   newTabWidgets: { clock: true, date: false, greeting: false, weather: false, forecast: false, sun: false, moon: false },
   newTabWidgetOrder: ['clock', 'date', 'greeting', 'weather', 'forecast', 'sun', 'moon'],
   newTabWidgetLayout: {},
-  slop: { detector: true, highlight: true, veil: true, allowlist: [] },
-  cleaner: { enabled: true },
+  slop: { detector: true, highlight: true, quiet: [] },
+  focus: { enabled: true },
   autoPip: true,
   uiSounds: true,
   toolbarDensity: 'compact',
   devtoolsDock: 'right',
-  appearance: { theme: 'system', waves: true, waveStyle: 'dithered', accent: 'sea' },
+  appearance: { theme: 'system', waves: true, waveStyle: 'dithered', accent: 'sea', muted: false },
   onboarded: false
 }

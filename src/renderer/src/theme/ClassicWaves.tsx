@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react'
-import { liftAt, REDUCED_MOTION, swirlAt, trackWaveCursor, waveTime } from './waveMouse'
+import { parseColorRgba } from '@shared/mute'
+import { DEAD_CURSOR, liftAt, REDUCED_MOTION, swirlAt, trackWaveCursor, WAVE_STILL_TIME, waveTime } from './waveMouse'
 
 /**
  * Layered, near-realistic ocean swell in pure SVG — and alive: five depth
@@ -8,7 +9,8 @@ import { liftAt, REDUCED_MOTION, swirlAt, trackWaveCursor, waveTime } from './wa
  * own speed (far water slower), and the cursor rides in the water like an
  * object: the swell is shoved radially aside around it and piles into a soft
  * rim, strongest on the near layers.
- * Paths are recomputed per frame; with reduced motion it renders once.
+ * Paths are recomputed per frame; stilled (Muted, or reduced motion) it
+ * renders WAVE_STILL_TIME once — no raf, no cursor, one agreed frame.
  */
 
 const PERIOD = 720
@@ -25,15 +27,9 @@ interface Harmonic {
   phase: number
 }
 
+/** Shared parser (shared/mute.ts) — custom accents arrive as hsl() strings. */
 function parseColor(c: string): [number, number, number, number] {
-  const m = c.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/)
-  if (m) return [+m[1], +m[2], +m[3], m[4] ? +m[4] : 1]
-  const hex = c.match(/^#([0-9a-f]{6})$/i)
-  if (hex) {
-    const v = parseInt(hex[1], 16)
-    return [(v >> 16) & 255, (v >> 8) & 255, v & 255, 1]
-  }
-  return [90, 160, 200, 0.4]
+  return parseColorRgba(c) ?? [90, 160, 200, 0.4]
 }
 
 function rgba(r: number, g: number, b: number, a: number): string {
@@ -67,12 +63,14 @@ interface LayerSpec {
 }
 
 interface ClassicWavesProps {
-  /** back / mid / front water colors (rgba() or #hex) */
+  /** back / mid / front water colors (rgba(), #hex or hsl()) */
   colors: [string, string, string]
   height?: number
+  /** Muted: draw the one still frame and never move (reduced motion implies it) */
+  still?: boolean
 }
 
-export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React.JSX.Element {
+export function ClassicWaves({ colors, height = 200, still }: ClassicWavesProps): React.JSX.Element {
   const uid = React.useId().replace(/[^a-zA-Z0-9]/g, '')
   const hostRef = useRef<HTMLDivElement>(null)
   const fillRefs = useRef<(SVGPathElement | null)[]>([])
@@ -159,8 +157,9 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
-    const cursor = trackWaveCursor(host)
-    const reduced = REDUCED_MOTION()
+    // one mode for "the water does not move" — see DitheredWaves
+    const stilled = still === true || REDUCED_MOTION()
+    const cursor = stilled ? { current: DEAD_CURSOR, detach: (): void => {} } : trackWaveCursor(host)
 
     const surface = (layer: LayerSpec, tSec: number, viewPerPx: number): string => {
       // Every harmonic is a whole number of cycles per PERIOD, so a drift wrapped
@@ -198,8 +197,8 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
       if (document.visibilityState === 'visible') draw(waveTime())
       raf = requestAnimationFrame(loop)
     }
-    if (reduced) {
-      draw(waveTime())
+    if (stilled) {
+      draw(WAVE_STILL_TIME)
     } else {
       raf = requestAnimationFrame(loop)
     }
@@ -207,7 +206,7 @@ export function ClassicWaves({ colors, height = 200 }: ClassicWavesProps): React
       cursor.detach()
       cancelAnimationFrame(raf)
     }
-  }, [layers])
+  }, [layers, still])
 
   return (
     <div ref={hostRef} className="classic-waves" style={{ height }} aria-hidden>

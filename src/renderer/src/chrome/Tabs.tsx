@@ -15,7 +15,7 @@ import type { FindState } from './App'
 import { BookmarkEditPopover, BookmarksBar, BookmarksSection } from './Bookmarks'
 import { Omnibox } from './Omnibox'
 import { SiteInfo } from './SiteInfo'
-import { ModesChip } from './Cleaner'
+import { FocusChip } from './Focus'
 import { PopupChip } from './PasswordDialog'
 import { SlopChip } from './Slop'
 import { SpaceSwitcher } from './SpaceSwitcher'
@@ -32,7 +32,6 @@ import {
   IconGear,
   IconMore,
   IconMuted,
-  IconPencil,
   IconPlus,
   IconReload,
   IconSplit,
@@ -90,8 +89,6 @@ interface ChromeProps {
   onTogglePopupPanel: (open: boolean) => void
   slopPanelOpen: boolean
   onToggleSlopPanel: (open: boolean) => void
-  modesPanelOpen: boolean
-  onToggleModesPanel: (open: boolean) => void
   appMenuOpen: boolean
   onToggleAppMenu: (open: boolean) => void
   profileMenuOpen: boolean
@@ -311,15 +308,7 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
       {activeTab && (
         <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
       )}
-      {activeTab && (
-        <ModesChip
-          tab={activeTab}
-          settings={props.settings}
-          open={props.modesPanelOpen}
-          onToggle={props.onToggleModesPanel}
-        />
-      )}
-      <EditChip activeTab={activeTab} />
+      {activeTab && <FocusChip tab={activeTab} settings={props.settings} />}
       {/* The star belongs to the address, so it rides the address bar in both
           layouts: the far right of it, which is where every browser on this
           machine keeps one and where your hand already goes to save a page. */}
@@ -350,34 +339,6 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
     </div>
   )
 }
-
-/**
- * The pencil: page-edit mode, in the pill where the page's own controls ride.
- * Lit while the tab is in edit mode; wearing a small dot while the site has
- * saved edits, so a reshaped page never silently pretends to be the real one.
- */
-function EditChip({ activeTab }: { activeTab?: TabInfo }): React.JSX.Element | null {
-  if (!activeTab || !/^https?:/.test(activeTab.url) || activeTab.displayUrl.startsWith('offshore://')) {
-    return null
-  }
-  const { editing, editCount, editsOn } = activeTab
-  const title = editing
-    ? 'Done editing (⇧⌘E)'
-    : editCount > 0
-      ? `Edit this page (⇧⌘E)\n${editCount} saved edit${editCount === 1 ? '' : 's'}${editsOn ? '' : ' — off for this site'}`
-      : 'Edit this page (⇧⌘E)'
-  return (
-    <button
-      className={`chrome-btn edit-chip ${editing ? 'active' : ''}`}
-      title={title}
-      onClick={() => void offshore.pageEdits.toggle()}
-    >
-      <IconPencil size={14} />
-      {editCount > 0 && !editing && <i className={`edit-dot ${editsOn ? '' : 'off'}`} />}
-    </button>
-  )
-}
-
 
 function DownloadsPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
   const [items, setItems] = useState<DownloadEntry[]>([])

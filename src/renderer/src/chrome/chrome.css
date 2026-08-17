@@ -18,7 +18,7 @@ body,
 .chrome {
   position: fixed;
   inset: 0;
-  background: linear-gradient(180deg, var(--tint-top), var(--tint-bottom));
+  background: var(--depth);
   font-size: var(--font-chrome);
 
   /* ---- density contract (classic values; compact/dynamic override) ---- */
@@ -259,13 +259,14 @@ body,
 .mode-vertical.chrome-hidden.peeking .sidebar {
   transform: translateX(0);
   z-index: 40;
-  /* over the page now, so it carries its own surface rather than borrowing the
-     window's — plus the shadow that says it is in front of something */
-  background: linear-gradient(180deg, var(--tint-top), var(--tint-bottom)), var(--surface);
-  backdrop-filter: blur(26px) saturate(1.15);
+  /* over the page now — e2 glass wearing the chrome's own depth, frosting the
+     freeze-frame still behind it, plus the shadow that says it is in front */
+  background: var(--sheen), var(--depth), var(--surface);
+  -webkit-backdrop-filter: var(--frost);
+  backdrop-filter: var(--frost);
   box-shadow:
     inset -0.5px 0 0 var(--frame-ring),
-    18px 0 48px rgba(9, 52, 70, 0.22);
+    var(--shadow-pop);
 }
 .mode-horizontal.chrome-hidden .topbar {
   transform: translateY(calc(-1 * var(--topbar-h) - 16px));
@@ -276,11 +277,12 @@ body,
 .mode-horizontal.chrome-hidden.peeking .topbar {
   transform: translateY(0);
   z-index: 40;
-  background: linear-gradient(180deg, var(--tint-top), var(--tint-bottom)), var(--surface);
-  backdrop-filter: blur(26px) saturate(1.15);
+  background: var(--sheen), var(--depth), var(--surface);
+  -webkit-backdrop-filter: var(--frost);
+  backdrop-filter: var(--frost);
   box-shadow:
     inset 0 -0.5px 0 var(--frame-ring),
-    0 18px 48px rgba(9, 52, 70, 0.22);
+    var(--shadow-pop);
 }
 /*
  * Full screen: nothing of ours, anywhere, however hard you push at an edge. The
@@ -419,9 +421,6 @@ body,
   font-size: 11.5px;
   font-weight: 600;
 }
-.devtools-title {
-  letter-spacing: 0.02em;
-}
 .devtools-close {
   display: inline-flex;
   align-items: center;
@@ -475,7 +474,7 @@ body,
   background: var(--glass);
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
-    0 2px 8px rgba(14, 92, 122, 0.08);
+    var(--shadow-rest);
   color: var(--ink);
   font-size: var(--font-chrome);
   overflow: visible;
@@ -490,8 +489,8 @@ body,
   background: var(--surface);
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
-    0 0 0 2px rgba(29, 132, 173, 0.25),
-    0 2px 10px rgba(14, 92, 122, 0.12);
+    0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent),
+    var(--shadow-row);
 }
 .omni-icon {
   display: flex;
@@ -537,21 +536,16 @@ body,
   color: var(--ink-faint);
   font-weight: 400;
 }
+/* e2 material comes from .surface-card; only the dropdown's own geometry here */
 .omni-dropdown {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
   width: min(560px, calc(100vw - 2 * var(--gutter) - 8px));
   border-radius: var(--radius-xl);
-  background: var(--surface);
-  border: 0.5px solid var(--glass-border);
-  backdrop-filter: blur(20px) saturate(1.1);
-  box-shadow:
-    inset 0 1px 0 var(--glass-inset-hi),
-    var(--shadow-pop);
   padding: 6px;
   z-index: 95;
-  animation: omni-in 140ms var(--ease-spring);
+  animation: omni-in var(--dur-glide) var(--ease-water);
 }
 @keyframes omni-in {
   from {
@@ -678,11 +672,11 @@ body,
 /* standing in for the blank tab you're looking at — it wears that tab's row */
 .new-tab-btn.active,
 .new-tab-btn.active:hover {
-  background: var(--active-row);
+  background: linear-gradient(180deg, var(--accent-wash), transparent 70%), var(--active-row);
   color: var(--ink);
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
-    0 3px 10px rgba(14, 92, 122, 0.12);
+    var(--shadow-row);
 }
 /*
  * One glyph, two jobs. Quiet, it is the + that makes a tab; while the row stands
@@ -772,7 +766,7 @@ body,
   }
 }
 .tab-item.entering {
-  animation: tab-item-in 150ms var(--ease-out);
+  animation: tab-item-in var(--dur-glide) var(--ease-water);
 }
 .tab-item.closing {
   height: 0;
@@ -784,11 +778,12 @@ body,
     margin-bottom 110ms var(--ease-out),
     opacity 90ms var(--ease-out);
 }
+/* the active row's water lens: the accent as light in the water, not paint */
 .tab-item.active {
-  background: var(--active-row);
+  background: linear-gradient(180deg, var(--accent-wash), transparent 70%), var(--active-row);
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
-    0 3px 10px rgba(14, 92, 122, 0.12);
+    var(--shadow-row);
 }
 .tab-item.dragging {
   opacity: 0.5;
@@ -862,7 +857,7 @@ body,
 
 /* space switch: the list slides in from the travel direction */
 .space-pane {
-  animation: space-in 160ms var(--ease-out);
+  animation: space-in var(--dur-glide) var(--ease-water);
 }
 @keyframes space-in {
   from {
@@ -1268,20 +1263,16 @@ browser-action-list {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(9, 40, 54, 0.28);
+  background: var(--scrim);
   backdrop-filter: blur(2px) saturate(0.9);
-  animation: pw-scrim-in 160ms var(--ease-out);
-}
-@media (prefers-color-scheme: dark) {
-  .pw-scrim {
-    background: rgba(0, 0, 0, 0.44);
-  }
+  animation: pw-scrim-in var(--dur-glide) var(--ease-water);
 }
 @keyframes pw-scrim-in {
   from {
     opacity: 0;
   }
 }
+/* e2 material comes from .surface-card; radius steps up for the one modal */
 .pw-modal {
   display: flex;
   flex-direction: column;
@@ -1290,8 +1281,7 @@ browser-action-list {
   padding: 22px 22px 16px;
   border-radius: var(--radius-xl);
   text-align: center;
-  box-shadow: var(--shadow-pop);
-  animation: pw-modal-in 200ms var(--ease-spring);
+  animation: pw-modal-in var(--dur-glide) var(--ease-water);
 }
 @keyframes pw-modal-in {
   from {
@@ -1459,11 +1449,12 @@ browser-action-list {
 .htab:hover {
   background: var(--hover);
 }
+/* the same water lens the sidebar's active row wears */
 .htab.active {
-  background: var(--active-row);
+  background: linear-gradient(180deg, var(--accent-wash), transparent 70%), var(--active-row);
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
-    0 2px 8px rgba(14, 92, 122, 0.12);
+    var(--shadow-row);
 }
 .htab.dragging {
   opacity: 0.5;
@@ -1489,7 +1480,7 @@ browser-action-list {
   overflow: hidden;
 }
 .htab.entering {
-  animation: htab-in 150ms var(--ease-out);
+  animation: htab-in var(--dur-glide) var(--ease-water);
 }
 /* Everything that takes up room goes to nothing together and on one clock, so
    the strip closes the space in a single move. The row is only unmounted once
@@ -1532,10 +1523,10 @@ browser-action-list {
     box-shadow var(--dur) var(--ease-out);
 }
 .htab-split.active {
-  background: var(--active-row);
+  background: linear-gradient(180deg, var(--accent-wash), transparent 70%), var(--active-row);
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
-    0 2px 8px rgba(14, 92, 122, 0.12);
+    var(--shadow-row);
 }
 .htab.half {
   width: 50%;
@@ -1659,7 +1650,7 @@ browser-action-list {
   line-height: 1;
   flex-shrink: 0;
   cursor: default;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  box-shadow: inset 0 1px 0 var(--accent-sheen);
   transition: transform var(--dur-fast) ease;
 }
 .profile-btn:hover {
@@ -1671,7 +1662,7 @@ browser-action-list {
 /* a space with its own logins wears a ring, the way Chromium marks a profile */
 .profile-btn.separate {
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 1px 0 var(--accent-sheen),
     0 0 0 1.5px var(--surface),
     0 0 0 3px var(--space-color, var(--accent));
   margin: 0 4px;
@@ -1852,15 +1843,18 @@ browser-action-list {
 
 /* ---------- find bar ---------- */
 
+/* e2 by hand — the find bar composes its own box, not .surface-card */
 .find-bar {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 4px 6px;
   border-radius: var(--radius-row);
-  background: var(--glass-strong);
+  background: var(--sheen), var(--surface);
   border: 0.5px solid var(--glass-border);
-  box-shadow: var(--shadow-soft);
+  -webkit-backdrop-filter: var(--frost);
+  backdrop-filter: var(--frost);
+  box-shadow: var(--shadow-pop);
 }
 .find-bar input {
   border: none;
@@ -1877,7 +1871,6 @@ browser-action-list {
   right: 0;
   top: 0;
   z-index: 50;
-  background: var(--surface);
 }
 .find-count {
   font-size: 11px;
@@ -1907,7 +1900,7 @@ browser-action-list {
   background: var(--glass-strong);
   border: 0.5px solid var(--glass-border);
   font-size: 12px;
-  box-shadow: 0 2px 8px rgba(14, 92, 122, 0.1);
+  box-shadow: var(--shadow-rest);
   overflow: hidden;
 }
 .download-toast.done:hover {
@@ -2108,9 +2101,10 @@ browser-action-list {
 .si-conn.secure .si-icon {
   color: var(--accent-strong);
 }
+/* semantic warning — never muted, and the one danger token the app already has */
 .si-conn.insecure .si-icon,
 .si-conn.insecure .si-text {
-  color: #c25a3a;
+  color: var(--danger);
 }
 .si-shield {
   color: var(--accent-strong);
@@ -2156,15 +2150,35 @@ browser-action-list {
 .si-wide:hover {
   background: var(--hover);
 }
+/* Harbor rows: fixed height while the async report fills in — the panel
+   stands on a freeze-frame and must never grow once the still is up */
+.si-fixed {
+  min-height: 33px;
+}
+.si-fixed .si-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.si-consent.handled .si-icon {
+  color: var(--accent-strong);
+}
 
 /* ---------- slop chip + report panel ---------- */
+
+/* The slop grade amber is a semantic color — it carries a verdict, not the
+   water's identity. It is deliberately NOT muted; a muted chrome still shows
+   amber chips and amber/red bars in pages. */
+.chrome {
+  --slop-amber: #c98a3a;
+}
 
 .slop-chip-wrap {
   position: relative;
   display: inline-flex;
 }
 .slop-chip {
-  color: #c98a3a;
+  color: var(--slop-amber);
   cursor: default;
   gap: 3px;
 }
@@ -2221,6 +2235,7 @@ browser-action-list {
   color: var(--ink);
 }
 .slop-meter {
+  position: relative;
   height: 4px;
   border-radius: 2px;
   background: var(--hover);
@@ -2230,11 +2245,21 @@ browser-action-list {
   display: block;
   height: 100%;
   border-radius: 2px;
-  background: #c98a3a;
+  background: var(--slop-amber);
   transition: width 300ms var(--ease-out);
 }
 .slop-meter.heavy i {
   background: var(--danger);
+}
+/* the two thresholds (flag, heavy), read against the fill — no labels */
+.slop-meter i.slop-meter-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  border-radius: 0;
+  background: var(--ink-faint);
+  transition: none;
 }
 .slop-verdict {
   font-size: 12px;
@@ -2264,6 +2289,12 @@ browser-action-list {
   margin-left: 4px;
   color: var(--ink-faint);
 }
+.slop-sections {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  padding: 0 2px;
+}
 .slop-fine {
   font-size: 10.5px;
   line-height: 1.45;
@@ -2285,16 +2316,7 @@ browser-action-list {
 .slop-action:hover {
   background: var(--hover);
 }
-.slop-action.primary {
-  background: var(--accent);
-  color: #fff;
-  font-weight: 600;
-}
-.slop-action.primary:hover {
-  filter: brightness(1.08);
-  background: var(--accent);
-}
-.slop-allowed-row {
+.slop-quiet-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2318,109 +2340,16 @@ browser-action-list {
   background: var(--hover);
 }
 .si-slop {
-  color: #c98a3a;
+  color: var(--slop-amber);
 }
 
-/* ---------- Page Cleaner chip + panel ---------- */
+/* ---------- Focus chip ---------- */
 
-.modes-chip-wrap {
-  position: relative;
-  display: inline-flex;
-}
-.modes-chip.active,
-.modes-chip.open {
+.focus-chip.active {
   color: var(--accent-strong);
   background: var(--glass-strong);
 }
-.modes-panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  width: 300px;
-  padding: 6px;
-  z-index: 96;
-  animation: omni-in 140ms var(--ease-spring);
-}
-/* the sidebar pill is 200px with the chip inside it — the panel stands on the
-   page instead, aligned to the column, the way the slop report does */
-.mode-vertical .modes-panel {
-  position: fixed;
-  left: var(--chrome-pad);
-  top: calc(var(--toolbar-row) + var(--btn-h) + 12px);
-  right: auto;
-  width: calc(var(--sidebar-w) - var(--chrome-pad) * 2);
-}
-.mp-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 8px 12px 6px;
-  border-bottom: 0.5px solid var(--hairline);
-  margin-bottom: 4px;
-  font-weight: 600;
-  color: var(--ink);
-  font-size: var(--font-chrome);
-}
-.mp-host {
-  font-weight: 400;
-  color: var(--ink-soft);
-  font-size: var(--text-xs);
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mp-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 8px 12px;
-}
-.mp-meta {
-  flex: 1;
-  min-width: 0;
-}
-.mp-title {
-  color: var(--ink);
-  font-size: var(--font-chrome);
-}
-.mp-sub {
-  color: var(--ink-soft);
-  font-size: var(--text-xs);
-  line-height: 1.35;
-}
-.mp-fine {
-  padding: 4px 12px 8px;
-  color: var(--ink-faint);
-  font-size: var(--text-xs);
-}
-.si-action:disabled {
-  opacity: 0.45;
-}
-
-/* ---------- page-edit chip ---------- */
-
-.edit-chip {
-  position: relative;
-}
-.edit-chip.active {
-  color: var(--accent-strong);
-  background: var(--glass-strong);
-}
-/* the site holds saved edits — a quiet mark, not an alarm */
-.edit-dot {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--accent-strong);
-}
-.edit-dot.off {
-  background: var(--ink-faint);
-}
-.si-pencil {
+.si-focus {
   color: var(--accent-strong);
 }
 
@@ -2563,8 +2492,6 @@ browser-action-list {
   text-overflow: ellipsis;
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
   opacity: 0.6;
 }
 
@@ -2582,7 +2509,7 @@ browser-action-list {
   top: calc(100% + 6px);
   right: 0;
   z-index: 96;
-  animation: omni-in 120ms var(--ease-out);
+  animation: omni-in var(--dur-glide) var(--ease-water);
 }
 .cr-menu {
   /* wide enough for "DevTools open in" and its three choices on one line */
@@ -2688,7 +2615,7 @@ browser-action-list {
 .cr-segmented button.on {
   background: var(--surface);
   color: var(--accent-strong);
-  box-shadow: 0 1px 2px rgba(14, 92, 122, 0.14);
+  box-shadow: var(--shadow-rest);
 }
 
 /* ---------- profile card (a space is the profile) ---------- */
@@ -2716,7 +2643,7 @@ browser-action-list {
   font-size: 16px;
   font-weight: 600;
   flex-shrink: 0;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  box-shadow: inset 0 1px 0 var(--accent-sheen);
 }
 .pm-id {
   min-width: 0;
@@ -2743,13 +2670,13 @@ browser-action-list {
   border: none;
   border-radius: 50%;
   background: var(--swatch, var(--accent));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  box-shadow: inset 0 1px 0 var(--accent-sheen);
   cursor: default;
   flex-shrink: 0;
 }
 .pm-swatch.on {
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    inset 0 1px 0 var(--accent-sheen),
     0 0 0 1.5px var(--surface),
     0 0 0 3px var(--swatch, var(--ink-faint));
 }

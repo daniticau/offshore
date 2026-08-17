@@ -15,22 +15,23 @@ import {
   ACTION_DEFS,
   HOME_WIDGETS,
   SEARCH_ENGINES,
-  SLOP_VEIL_MIN,
   type AccentId,
   type ActionId,
   type DevToolsDock,
   type Insets,
   type PasswordOffer,
   type Settings,
-  type SlopReport,
+  type SiteReport,
   type SlopSignal,
   type SpaceProfile,
   type Suggestion
 } from '@shared/types'
 import { adblock } from './adblock'
 import { fetchWeather, geocode } from './brief'
+import { morningBrief } from './morningbrief'
 import { listExtensions, uninstallExtension } from './extensions'
-import { pageEditsStore } from './pageedits'
+import { focusStore } from './focus'
+import { harbor, registrableDomain } from './harbor'
 import { passwordVault } from './passwords'
 import {
   allowPopupsForSite,
@@ -41,8 +42,8 @@ import {
 } from './popups'
 import { openDownload, preparedSessions, revealDownload } from './sessions'
 import { searchSuggestions } from './suggest'
-import { bookmarksStore, downloadsStore, historyStore, settingsStore } from './stores'
-import { devRendererUrl, internalPageUrl, prettyHost, resolveOmniboxInput } from './util'
+import { bookmarksStore, downloadsStore, historyStore, settingsStore, shieldStatsStore } from './stores'
+import { devRendererUrl, internalPageUrl, isInternalUrl, prettyHost, resolveOmniboxInput } from './util'
 import { windowForChromeContents, windowForTab, windows, type OffshoreWindow } from './windows'
 
 function chromeWindow(e: IpcMainInvokeEvent | IpcMainEvent): OffshoreWindow | undefined {
@@ -77,7 +78,7 @@ function isTrustedSender(e: IpcMainInvokeEvent): boolean {
   return false
 }
 
-/** Page senders (tabs + tracked popups) allowed on the password/gesture/edit channels. */
+/** Page senders (tabs + tracked popups) allowed on the password/gesture channels. */
 function validatedPageSender(e: IpcMainEvent | IpcMainInvokeEvent): {
   entry: NonNullable<ReturnType<typeof pageEntry>>
   origin: URL
@@ -244,8 +245,8 @@ function runAction(w: OffshoreWindow, id: ActionId): void {
     case 'toggle-sidebar':
       w.sendToChrome('chrome:toggle-hidden')
       break
-    case 'edit-page':
-      w.tabs.toggleEditMode()
+    case 'focus-page':
+      w.tabs.toggleFocus()
       break
     case 'open-settings':
       w.tabs.createTab(internalPageUrl('settings'))
@@ -261,6 +262,11 @@ function runAction(w: OffshoreWindow, id: ActionId): void {
       const order = ['system', 'light', 'dark'] as const
       const next = order[(order.indexOf(s.appearance.theme) + 1) % order.length]
       settingsStore.set({ appearance: { ...s.appearance, theme: next } })
+      break
+    }
+    case 'toggle-muted': {
+      const s = settingsStore.get()
+      settingsStore.set({ appearance: { ...s.appearance, muted: !s.appearance.muted } })
       break
     }
   }
@@ -360,32 +366,20 @@ export function setupIpc(): void {
 
   // ---- slop detector ----
   //
-  // The heuristics run in the page preload; main holds the verdict and owns
-  // the policy: whether this page earns the veil, and which sites never do.
-  // The preload only ever hears "raise it" or "drop it".
+  // The heuristics run in the page preload; main holds the verdict. Presentation
+  // policy is two booleans per tab (mark at all, bar the marks), recomputed from
+  // the settings and the quiet list whenever either changes.
 
-  /** Drop any standing veils the current settings no longer justify. */
   const reapplySlopPolicy = (): void => {
     const s = settingsStore.get()
     for (const w of windows) {
       let changed = false
       for (const tab of w.tabs.tabs) {
         // the wash follows the switches live, verdict or no verdict yet
-        tab.wc.send('slop:style', { mark: s.slop.detector, tint: s.slop.detector && s.slop.highlight })
-        if (!tab.slop) continue
-        if (!s.slop.detector) {
+        w.tabs.sendSlopStyle(tab)
+        if (!s.slop.detector && tab.slop) {
           tab.slop = undefined
-          tab.wc.send('slop:veil', false)
           changed = true
-          continue
-        }
-        if (tab.slop.veil === 'up') {
-          const host = prettyHost(tab.wc.getURL())
-          if (!s.slop.veil || (host && s.slop.allowlist.includes(host))) {
-            tab.slop.veil = undefined
-            tab.wc.send('slop:veil', false)
-            changed = true
-          }
         }
       }
       if (changed) w.tabs.pushState()
@@ -393,27 +387,18 @@ export function setupIpc(): void {
   }
   settingsStore.on('changed', (next: Settings, prev: Settings) => {
     if (JSON.stringify(next.slop) !== JSON.stringify(prev.slop)) reapplySlopPolicy()
-    // the Page Cleaner's master switch acts on pages already open
-    if (next.cleaner.enabled !== prev.cleaner.enabled) {
+    // the Focus master switch acts on pages already open
+    if (next.focus.enabled !== prev.focus.enabled) {
       for (const w of windows) {
-        for (const tab of w.tabs.tabs) w.tabs.sendPageModes(tab)
+        for (const tab of w.tabs.tabs) w.tabs.sendFocus(tab)
         w.tabs.pushState()
       }
     }
   })
 
-  // ---- the Page Cleaner's switches ----
-  ipcMain.handle('pagemode:set', (e, mode: string, on: boolean) => {
-    if (mode !== 'clean' && mode !== 'focus') return
-    const t = activeEditHost(e)
-    if (!t || !settingsStore.get().cleaner.enabled) return
-    pageEditsStore.setMode(t.host, mode, !!on)
-    for (const w of windows) w.tabs.refreshPageEdits(t.host)
-  })
-
   ipcMain.on(
     'slop:report',
-    (e, payload: { score: number; words: number; signals: SlopSignal[] }) => {
+    (e, payload: { score: number; words: number; signals: SlopSignal[]; blocks?: unknown }) => {
       const s = settingsStore.get()
       if (!s.slop.detector) return
       const v = validatedPageSender(e)
@@ -421,88 +406,41 @@ export function setupIpc(): void {
       const w = v.entry.ownerWindow
       const tab = w.tabs.byId(e.sender.id)
       if (!tab) return
-      const report: SlopReport = {
-        score: Math.max(0, Math.min(100, Math.round(Number(payload?.score) || 0))),
-        words: Math.max(0, Math.min(1_000_000, Math.round(Number(payload?.words) || 0))),
+      const clamp = (n: unknown, hi: number): number =>
+        Math.max(0, Math.min(hi, Math.round(Number(n) || 0)))
+      const b = (payload?.blocks ?? {}) as { total?: unknown; marked?: unknown; heavy?: unknown }
+      const total = clamp(b.total, 5000)
+      const marked = Math.min(total, clamp(b.marked, 5000))
+      tab.slop = {
+        score: clamp(payload?.score, 100),
+        words: clamp(payload?.words, 1_000_000),
         signals: (Array.isArray(payload?.signals) ? payload.signals : [])
           .slice(0, 8)
           .map((sig) => ({
             label: String(sig?.label ?? '').slice(0, 80),
             count: Math.max(1, Math.min(99, Math.round(Number(sig?.count) || 1)))
           }))
-          .filter((sig) => sig.label)
+          .filter((sig) => sig.label),
+        blocks: { total, marked, heavy: Math.min(marked, clamp(b.heavy, 5000)) }
       }
-      // A rescan of the same document never re-argues a veil the reader already
-      // answered — 'lifted' stands until a real navigation clears the slate.
-      const prior = tab.slop?.veil
-      if (prior) {
-        report.veil = prior
-      } else {
-        const host = v.origin.hostname.replace(/^www\./, '')
-        if (s.slop.veil && report.score >= SLOP_VEIL_MIN && !s.slop.allowlist.includes(host)) {
-          report.veil = 'up'
-          e.sender.send('slop:veil', true, report.score)
-        }
-      }
-      tab.slop = report
       w.tabs.pushState()
     }
   )
 
-  // the veil's own buttons (page side, sender-validated)
-  ipcMain.on('slop:veil-lifted', (e) => {
-    const v = validatedPageSender(e)
-    if (!v || v.entry.kind !== 'tab') return
-    const w = v.entry.ownerWindow
-    const tab = w.tabs.byId(e.sender.id)
-    if (tab?.slop?.veil === 'up') {
-      tab.slop.veil = 'lifted'
-      w.tabs.pushState()
-    }
-  })
-  ipcMain.on('slop:allow-site', (e) => {
-    const v = validatedPageSender(e)
-    if (!v || v.entry.kind !== 'tab') return
-    const w = v.entry.ownerWindow
-    const tab = w.tabs.byId(e.sender.id)
-    if (!tab) return
-    // lift first: the settings write below re-runs the policy pass, and a veil
-    // already answered by the reader is not that pass's to touch
-    if (tab.slop?.veil === 'up') tab.slop.veil = 'lifted'
-    const s = settingsStore.get()
-    const host = v.origin.hostname.replace(/^www\./, '')
-    if (host && !s.slop.allowlist.includes(host)) {
-      settingsStore.set({ slop: { ...s.slop, allowlist: [...s.slop.allowlist, host] } })
-    }
-    w.tabs.pushState()
-  })
-
-  // the chrome's report panel
-  ipcMain.handle('slop:read-anyway', (e, tabId: number) => {
-    const w = chromeWindow(e)
-    const tab = w?.tabs.byId(tabId)
-    if (!w || !tab?.slop) return
-    if (tab.slop.veil === 'up') {
-      tab.slop.veil = 'lifted'
-      tab.wc.send('slop:veil', false)
-    }
-    w.tabs.pushState()
-  })
-  ipcMain.handle('slop:set-allowed', (e, tabId: number, allowed: boolean) => {
+  // The quiet list keeps the report: a quieted host still scores so SiteInfo
+  // can say what the chip would have. Suppression is presentation-side — the
+  // preload gets mark:false, the chip checks the list itself.
+  ipcMain.handle('slop:set-quiet', (e, tabId: number, quiet: boolean) => {
     const w = chromeWindow(e)
     const tab = w?.tabs.byId(tabId)
     if (!w || !tab) return
     const host = prettyHost(tab.wc.getURL())
     if (!host) return
-    if (allowed && tab.slop?.veil === 'up') {
-      tab.slop.veil = 'lifted'
-      tab.wc.send('slop:veil', false)
-      w.tabs.pushState()
-    }
     const s = settingsStore.get()
-    const list = s.slop.allowlist.filter((h) => h !== host)
-    if (allowed) list.push(host)
-    settingsStore.set({ slop: { ...s.slop, allowlist: list } })
+    const list = s.slop.quiet.filter((h) => h !== host)
+    if (quiet) list.push(host)
+    settingsStore.set({ slop: { ...s.slop, quiet: list } })
+    // the settings listener re-styles every open tab on this host
   })
 
   // The three-dots menu: everything Helium keeps behind its kebab
@@ -794,75 +732,154 @@ export function setupIpc(): void {
     if (!isTrustedSender(e)) return false
     return adblock.toggleSite(prettyHost(url))
   })
+  ipcMain.handle('shield:stats', (e) => (isTrustedSender(e) ? shieldStatsStore.get() : null))
 
-  // ---- page edits ----
-  /** The host a chrome-side ask is about: wherever the active tab is. */
-  const activeEditHost = (e: IpcMainInvokeEvent): { w: OffshoreWindow; host: string } | null => {
-    const w = chromeWindow(e)
-    const url = w?.tabs.activeTab?.wc.getURL() ?? ''
-    if (!w || !/^https?:/.test(url)) return null
-    return { w, host: prettyHost(url) }
-  }
-
-  ipcMain.handle('pageedit:toggle', (e) => chromeWindow(e)?.tabs.toggleEditMode())
-  ipcMain.handle('pageedit:clear-site', (e) => {
-    const t = activeEditHost(e)
-    if (!t) return
-    pageEditsStore.clear(t.host)
-    for (const w of windows) w.tabs.refreshPageEdits(t.host)
-  })
-  ipcMain.handle('pageedit:set-site-enabled', (e, on: boolean) => {
-    const t = activeEditHost(e)
-    if (!t) return
-    pageEditsStore.setEnabled(t.host, !!on)
-    for (const w of windows) w.tabs.refreshPageEdits(t.host)
+  // ---- Focus ----
+  ipcMain.handle('focus:toggle', (e) => chromeWindow(e)?.tabs.toggleFocus())
+  ipcMain.handle('focus:sites', (e) => (isTrustedSender(e) ? focusStore.sites() : []))
+  ipcMain.handle('focus:forget-all', (e) => {
+    if (!isTrustedSender(e)) return
+    const hosts = focusStore.sites()
+    focusStore.clearAll()
+    for (const host of hosts) for (const w of windows) w.tabs.refreshFocus(host)
   })
 
-  /*
-   * Records come from the page preload, and the page is the least trusted
-   * thing in the building — so the host an edit lands under is derived from
-   * the sender frame's real origin, never from the payload. A page can only
-   * ever shape how it itself renders on this machine.
-   */
-  ipcMain.handle('pageedit:record', (e, payload: Record<string, unknown>) => {
+  // ---- Harbor (consent auto-answer + per-site privacy) ----
+
+  // The full rules payload rides one structured clone per page load; the
+  // handler logs its serve time once so a slow machine shows its receipt.
+  let consentRulesTimed = false
+  ipcMain.handle('consent:rules', (e) => {
     const v = validatedPageSender(e)
-    if (!v || v.entry.kind !== 'tab') return null
-    const edit = pageEditsStore.record(prettyHost(v.origin.href), {
-      op: payload?.op,
-      selector: payload?.selector,
-      value: payload?.value,
-      path: payload?.path,
-      label: payload?.label
-    })
-    if (edit) v.entry.ownerWindow.tabs.pushState()
-    return edit
+    if (!v) return null
+    const t0 = Date.now()
+    const payload = harbor.consentRulesFor(v.origin.hostname)
+    if (payload && !consentRulesTimed) {
+      consentRulesTimed = true
+      console.log(`[harbor] consent rules served in ${Date.now() - t0}ms`)
+    }
+    return payload
   })
-  ipcMain.handle('pageedit:remove', (e, id: string) => {
-    const v = validatedPageSender(e)
-    if (!v || v.entry.kind !== 'tab' || typeof id !== 'string') return
-    pageEditsStore.remove(prettyHost(v.origin.href), id)
-    v.entry.ownerWindow.tabs.pushState()
-  })
-  /** The page's own Done button — mode state lives in main, so main is told. */
-  ipcMain.handle('pageedit:exit', (e) => {
+
+  const CONSENT_STATUS_TYPES = [
+    'cmpDetected',
+    'popupFound',
+    'optOutResult',
+    'autoconsentDone',
+    'autoconsentError'
+  ]
+  ipcMain.on('consent:status', (e, payload: { type?: unknown; cmp?: unknown; result?: unknown }) => {
     const v = validatedPageSender(e)
     if (!v || v.entry.kind !== 'tab') return
+    const type = String(payload?.type ?? '')
+    if (!CONSENT_STATUS_TYPES.includes(type)) return
+    const cmp = typeof payload?.cmp === 'string' ? payload.cmp.slice(0, 64) : undefined
+    harbor.noteConsent(e.sender.id, type, cmp, payload?.result === true)
     const w = v.entry.ownerWindow
-    const tab = w.tabs.byId(e.sender.id)
-    if (tab) w.tabs.setEditMode(tab, false)
+    if (w.tabs.byId(e.sender.id)) w.tabs.pushState()
   })
 
-  // the settings page's ledger view
-  ipcMain.handle('pageedit:list', (e) => (isTrustedSender(e) ? pageEditsStore.list() : []))
-  ipcMain.handle('pageedit:clear-host', (e, host: string) => {
-    if (!isTrustedSender(e) || typeof host !== 'string') return
-    pageEditsStore.clear(host)
-    for (const w of windows) w.tabs.refreshPageEdits(host)
+  // Fallback eval path for sandboxed preloads whose webFrame can't evaluate:
+  // the code runs in the sender's own frame with the sender's own privileges
+  // (no escalation), originates only from the bundled consent rules, and is
+  // capped anyway.
+  ipcMain.handle('consent:eval', async (e, code: unknown) => {
+    const v = validatedPageSender(e)
+    if (!v || typeof code !== 'string' || code.length > 4096) return null
+    const frame = e.senderFrame
+    if (!frame) return null
+    harbor.consentEvalFallbacks += 1
+    try {
+      return await frame.executeJavaScript(code)
+    } catch {
+      return null
+    }
   })
-  ipcMain.handle('pageedit:set-host-enabled', (e, host: string, on: boolean) => {
-    if (!isTrustedSender(e) || typeof host !== 'string') return
-    pageEditsStore.setEnabled(host, !!on)
-    for (const w of windows) w.tabs.refreshPageEdits(host)
+
+  ipcMain.handle('privacy:site-report', async (e): Promise<SiteReport | null> => {
+    const w = chromeWindow(e)
+    const tab = w?.tabs.activeTab
+    if (!tab) return null
+    let u: URL
+    try {
+      u = new URL(tab.wc.getURL())
+    } catch {
+      return null
+    }
+    if (!/^https?:$/.test(u.protocol)) return null
+    const host = u.hostname
+    const domain = registrableDomain(host)
+    let cookieCount = 0
+    try {
+      for (const c of await tab.wc.session.cookies.get({})) {
+        if (registrableDomain((c.domain ?? '').replace(/^\./, '')) === domain) cookieCount += 1
+      }
+    } catch {
+      /* count stays 0 */
+    }
+    const storageBytes = (await Promise.race([
+      tab.wc
+        .executeJavaScript(
+          `navigator.storage.estimate().then((e) => e.usage ?? null).catch(() => null)`,
+          true
+        )
+        .catch(() => null),
+      new Promise((r) => setTimeout(() => r(null), 300))
+    ])) as unknown
+    const p = harbor.tabPrivacy(tab.id)
+    const s = settingsStore.get().privacy
+    return {
+      host,
+      domain,
+      cookieCount,
+      storageBytes: typeof storageBytes === 'number' ? storageBytes : null,
+      trackersBlocked: adblock.counts.get(tab.id) ?? 0,
+      cookiesStripped: p?.cookiesStripped ?? 0,
+      consent: p?.consent ?? 'none',
+      cmp: p?.cmp,
+      lastVisit: harbor.lastVisit(domain),
+      keep: s.keepSites.includes(domain),
+      blocked: s.blockSites.includes(domain),
+      off: s.disabledSites.includes(domain)
+    }
+  })
+
+  ipcMain.handle('privacy:set-site', async (e, list: unknown, on: unknown) => {
+    const w = chromeWindow(e)
+    const tab = w?.tabs.activeTab
+    if (!w || !tab || !['off', 'keep', 'block'].includes(String(list))) return
+    let host: string
+    try {
+      host = new URL(tab.wc.getURL()).hostname
+    } catch {
+      return
+    }
+    if (!host) return
+    const domain = registrableDomain(host)
+    const s = settingsStore.get().privacy
+    const want = on === true
+    const without = (arr: string[]): string[] => arr.filter((d) => d !== domain)
+    const withD = (arr: string[]): string[] => (want ? [...without(arr), domain] : without(arr))
+    const next = { ...s }
+    // keep and block are mutually exclusive; setting one clears the other
+    if (list === 'off') next.disabledSites = withD(s.disabledSites)
+    if (list === 'keep') {
+      next.keepSites = withD(s.keepSites)
+      if (want) next.blockSites = without(s.blockSites)
+    }
+    if (list === 'block') {
+      next.blockSites = withD(s.blockSites)
+      if (want) next.keepSites = without(s.keepSites)
+    }
+    settingsStore.set({ privacy: next })
+    // blocking a site expires it now — stash first, so it lands in the undo list
+    if (list === 'block' && want) await harbor.expireDomain(domain)
+  })
+
+  ipcMain.handle('privacy:expired', (e) => (isTrustedSender(e) ? harbor.expiredList() : []))
+  ipcMain.handle('privacy:restore', (e, domain: unknown) => {
+    if (!isTrustedSender(e) || typeof domain !== 'string') return false
+    return harbor.restore(domain)
   })
 
   // ---- popups ----
@@ -947,6 +964,15 @@ export function setupIpc(): void {
   ipcMain.handle('brief:weather', (e) => (isTrustedSender(e) ? fetchWeather() : null))
   ipcMain.handle('brief:geocode', (e, q: string) => (isTrustedSender(e) ? geocode(q) : []))
 
+  // ---- morning brief ----
+  ipcMain.handle('morning:get', (e) =>
+    isTrustedSender(e) ? morningBrief.get(e.sender.id) : { kind: 'none' }
+  )
+  ipcMain.handle('morning:dismiss', (e) => {
+    if (isTrustedSender(e)) morningBrief.dismiss(e.sender.id)
+  })
+  ipcMain.handle('morning:status', (e) => (isTrustedSender(e) ? morningBrief.status() : null))
+
   // ---- extensions ----
   ipcMain.handle('extensions:list', (e) => (isTrustedSender(e) ? listExtensions() : []))
   ipcMain.handle('extensions:uninstall', async (e, id: string) => {
@@ -989,7 +1015,16 @@ export function setupIpc(): void {
   // ---- misc ----
   ipcMain.handle('app:info', (e) => (isTrustedSender(e) ? { version: app.getVersion() } : null))
   ipcMain.handle('history:clear', (e) => {
-    if (isTrustedSender(e)) historyStore.clear()
+    if (isTrustedSender(e)) {
+      historyStore.clear()
+      // the brief is distilled history — it goes with the history
+      morningBrief.wipe()
+      // so are Harbor's records of where you've been: the tide's site-name map
+      // (a fresh map earns a fresh grace period, so logins stay safe) and the
+      // expired-cookie stash, which names domains and holds their tokens
+      harbor.clearEngagement()
+      harbor.clearStash()
+    }
   })
   // Site-info popover: wipe one origin's cookies/storage in the active tab's jar
   ipcMain.handle('privacy:clear-site', async (e) => {
@@ -1009,6 +1044,11 @@ export function setupIpc(): void {
       for (const c of cookies) {
         await tab.wc.session.cookies.remove(origin, c.name).catch(() => {})
       }
+      // "Clear cookies & data for this site" must not leave the site's tokens
+      // in the undo stash (one Restore away) or its name in the tide's map
+      const domain = registrableDomain(new URL(origin).hostname)
+      harbor.stashDelete(domain)
+      harbor.engagementDelete(domain)
       tab.wc.reload()
       return true
     } catch (err) {
@@ -1026,6 +1066,9 @@ export function setupIpc(): void {
         console.warn('[privacy] clear failed for a session:', err)
       }
     }
+    // the tide's site-name map and the recently-expired list go with the data
+    harbor.clearEngagement()
+    harbor.clearStash()
   })
   ipcMain.handle('internal:open', (e, url: string) => {
     if (!isTrustedSender(e)) return
@@ -1042,16 +1085,37 @@ export function setupIpc(): void {
   // ---- store change broadcasting ----
   settingsStore.on('changed', (next: Settings) => {
     broadcast('settings:changed', next)
+    /*
+     * Internal tab pages (start/settings/welcome/error) hear it too, so a Muted
+     * or accent flip lands on a visible start page live rather than on the next
+     * refocus. Security invariant: only internal documents — the full Settings
+     * object must never be sent toward a web page's WebContents. isInternalUrl
+     * is offshore:// in prod and the exact dev-server origin in dev, the same
+     * trust boundary the internal preload gates its bridge by.
+     */
+    for (const w of windows) {
+      for (const t of w.tabs.tabs) {
+        if (isInternalUrl(t.wc.getURL())) t.wc.send('settings:changed', next)
+      }
+    }
   })
   bookmarksStore.on('changed', () => {
     broadcast('bookmarks:changed', bookmarksStore.list())
     for (const w of windows) w.tabs.pushState()
   })
-  // edit counts ride TabInfo, so every window re-reads them on any change
-  pageEditsStore.on('changed', () => {
-    for (const w of windows) w.tabs.pushState()
+  // focusOn rides TabInfo; a flip with a host also reaches the pages live
+  focusStore.on('changed', (host?: string) => {
+    for (const w of windows) {
+      if (typeof host === 'string') w.tabs.refreshFocus(host)
+      else w.tabs.pushState()
+    }
   })
   adblock.onCountChanged = (tabId) => {
+    for (const w of windows) {
+      if (w.tabs.byId(tabId)) w.tabs.pushState()
+    }
+  }
+  harbor.onCountChanged = (tabId) => {
     for (const w of windows) {
       if (w.tabs.byId(tabId)) w.tabs.pushState()
     }

@@ -5,13 +5,17 @@ import type {
   BriefWeather,
   DevToolsDock,
   DownloadEntry,
+  ExpiredSite,
   ExtensionInfo,
   GeocodeResult,
   Insets,
+  MorningAnswer,
+  MorningStatus,
   PasswordMeta,
   PasswordsStatus,
   Settings,
-  SiteEdits,
+  ShieldStats,
+  SiteReport,
   SpaceProfile,
   Suggestion,
   TabsState
@@ -95,7 +99,13 @@ export interface OffshoreApi {
     focusPage(): Promise<void>
     copyText(text: string): Promise<void>
   }
-  privacy: { clearSite(): Promise<boolean> }
+  privacy: {
+    clearSite(): Promise<boolean>
+    /** Harbor's deep per-site report for the panel; null off http(s). */
+    siteReport(): Promise<SiteReport | null>
+    /** Flip the active tab's site on/off one of Harbor's three lists. */
+    setSite(list: 'off' | 'keep' | 'block', on: boolean): Promise<void>
+  }
   brief: { weather(): Promise<BriefWeather | null> }
   find: {
     start(text: string, opts: { findNext: boolean; forward: boolean }): Promise<void>
@@ -119,10 +129,8 @@ export interface OffshoreApi {
     allowSite(tabId: number): Promise<void>
   }
   slop: {
-    /** Lift a standing veil on this tab — the reader wants the page anyway. */
-    readAnyway(tabId: number): Promise<void>
-    /** Put this tab's site on (or take it off) the never-veil list. */
-    setAllowed(tabId: number, allowed: boolean): Promise<void>
+    /** Keep (or stop keeping) the detector quiet on this tab's site. */
+    setQuiet(tabId: number, quiet: boolean): Promise<void>
   }
   extensions: { has(): Promise<boolean> }
   downloads: {
@@ -136,15 +144,9 @@ export interface OffshoreApi {
     set(patch: Partial<Settings>): Promise<Settings>
   }
   adblock: { toggleSite(url: string): Promise<boolean> }
-  pageEdits: {
-    /** Flip page-edit mode on the active tab. */
+  focus: {
+    /** Flip Focus for the active tab's site — strip + compact on, restore off. */
     toggle(): Promise<void>
-    /** Forget every edit saved for the active tab's site. */
-    clearSite(): Promise<void>
-    /** Keep the active tab's site edits but stop (or resume) applying them. */
-    setSiteEnabled(on: boolean): Promise<void>
-    /** Flip a Page Cleaner switch (Clean / Focus) for the active tab's site. */
-    setMode(mode: 'clean' | 'focus', on: boolean): Promise<void>
   }
   window: {
     zoom(): Promise<void>
@@ -160,6 +162,12 @@ export interface OffshoreInternalApi {
   settings: {
     get(): Promise<Settings | null>
     set(patch: Partial<Settings>): Promise<Settings>
+    /**
+     * Fires whenever settings change anywhere in the app — main pushes to
+     * internal pages only (offshore:// / the dev origin), so a visible start
+     * page hears a Muted or accent flip live instead of on the next refocus.
+     */
+    onChanged(cb: (s: Settings) => void): void
   }
   bookmarks: {
     list(): Promise<BookmarkNode[]>
@@ -184,13 +192,28 @@ export interface OffshoreInternalApi {
     weather(): Promise<BriefWeather | null>
     geocode(q: string): Promise<GeocodeResult[]>
   }
-  history: { clear(): Promise<void> }
-  pageEdits: {
-    list(): Promise<SiteEdits[]>
-    clear(host: string): Promise<void>
-    setEnabled(host: string, on: boolean): Promise<void>
+  morning: {
+    /** Is today's brief this page's to show? Claim-on-ask, once per day. */
+    get(): Promise<MorningAnswer>
+    /** Put today's brief away — it will not come back until tomorrow. */
+    dismiss(): Promise<void>
+    /** For the settings page's status line. */
+    status(): Promise<MorningStatus>
   }
-  privacy: { clearSiteData(): Promise<void> }
+  history: { clear(): Promise<void> }
+  /** The built-in Shield's lifetime ledger; per-tab counts ride TabInfo. */
+  shield: { stats(): Promise<ShieldStats | null> }
+  focus: {
+    /** Hosts Focus is currently on for, sorted. */
+    sites(): Promise<string[]>
+    forgetAll(): Promise<void>
+  }
+  privacy: {
+    clearSiteData(): Promise<void>
+    /** The tide's recently-expired list — domains and counts, never contents. */
+    expired(): Promise<ExpiredSite[]>
+    restore(domain: string): Promise<boolean>
+  }
   app: { info(): Promise<{ version: string } | null> }
   open(url: string): Promise<void>
   /** Fires when the chrome asks the new-tab page to enter widget edit mode. */

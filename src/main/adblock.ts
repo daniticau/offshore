@@ -1,13 +1,14 @@
 import { app, ipcMain, type Session } from 'electron'
+import { createHash } from 'crypto'
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import { ElectronBlocker } from '@ghostery/adblocker-electron'
 import { ADBLOCK_LIST_URLS, type Settings } from '@shared/types'
-import { settingsStore } from './stores'
+import { settingsStore, shieldStatsStore } from './stores'
 
 /**
- * Customizable ad/tracker blocking built on the Ghostery engine
- * (uBlock Origin / EasyList filter syntax compatible).
+ * The built-in Shield: ad/tracker/malware blocking on the Ghostery engine,
+ * running the full uBlock Origin default list set (uBO filter syntax).
  *
  * - Enabled lists come from settings.adblock.lists (changing them = full rebuild)
  * - customRules/allowlist changes apply incrementally via engine.update —
@@ -15,6 +16,9 @@ import { settingsStore } from './stores'
  * - Blocking is enabled in every prepared session partition (shared profile
  *   plus each separate-login space)
  */
+
+/** Bump when the engine config changes, so old disk caches stop matching. */
+const ENGINE_SCHEMA = 1
 class AdblockManager {
   private blocker: ElectronBlocker | null = null
   private sessions = new Set<Session>()
@@ -60,12 +64,6 @@ class AdblockManager {
     if (this.blocker && !this.blocker.isBlockingEnabled(ses)) {
       this.safeEnable(this.blocker, ses)
     }
-  }
-
-  private listUrls(s: Settings): string[] {
-    return Object.entries(s.adblock.lists)
-      .filter(([, on]) => on)
-      .flatMap(([id]) => ADBLOCK_LIST_URLS[id] ?? [])
   }
 
   private extraRules(s: Settings): string {
@@ -119,21 +117,60 @@ class AdblockManager {
         return
       }
 
-      const cachePath = join(app.getPath('userData'), 'adblock-engine.bin')
-      const urls = this.listUrls(s)
+      // The cache is keyed on the enabled list set (plus a schema counter), so
+      // toggling lists can never serve a stale engine, and a set change busts
+      // the old key instead of overwriting in place.
+      const ids = Object.entries(s.adblock.lists)
+        .filter(([, on]) => on)
+        .map(([id]) => id)
+        .sort()
+      const urls = ids.flatMap((id) => ADBLOCK_LIST_URLS[id] ?? [])
+      const key = createHash('sha1').update(`${ENGINE_SCHEMA}:${ids.join(',')}`).digest('hex').slice(0, 12)
+      const userData = app.getPath('userData')
+      const cachePath = join(userData, `adblock-engine-${key}.bin`)
+
       let blocker: ElectronBlocker
-      try {
-        blocker = await ElectronBlocker.fromLists(fetch, urls, { enableCompression: true }, {
-          path: cachePath,
-          read: fs.readFile,
-          write: fs.writeFile
+      let fetched = 0
+      if (urls.length === 0) {
+        // no lists at all — an empty engine still carries custom rules + allowlist
+        blocker = ElectronBlocker.parse('', { enableCompression: true })
+      } else {
+        // Per-list tolerance: one dead URL costs that list, never the engine.
+        const settled = await Promise.allSettled(
+          urls.map((u) =>
+            fetch(u, { signal: AbortSignal.timeout(20_000) }).then((r) => {
+              if (!r.ok) throw new Error(`HTTP ${r.status}`)
+              return r.text()
+            })
+          )
+        )
+        const texts: string[] = []
+        settled.forEach((res, i) => {
+          if (res.status === 'fulfilled') texts.push(res.value)
+          else console.warn('[adblock] list fetch failed:', urls[i], res.reason)
         })
-      } catch (err) {
-        console.warn('[adblock] list fetch failed, falling back to cache/none:', err)
-        try {
-          blocker = ElectronBlocker.deserialize(await fs.readFile(cachePath)) as ElectronBlocker
-        } catch {
-          return
+        fetched = texts.length
+        if (texts.length > 0) {
+          blocker = ElectronBlocker.parse(texts.join('\n'), { enableCompression: true })
+          try {
+            await fs.writeFile(cachePath, blocker.serialize())
+            // stale keys (and the legacy unkeyed cache) go with the build
+            for (const f of await fs.readdir(userData)) {
+              if (/^adblock-engine.*\.bin$/.test(f) && join(userData, f) !== cachePath) {
+                await fs.rm(join(userData, f), { force: true })
+              }
+            }
+          } catch (err) {
+            console.warn('[adblock] engine cache write failed:', err)
+          }
+        } else {
+          try {
+            blocker = ElectronBlocker.deserialize(await fs.readFile(cachePath)) as ElectronBlocker
+          } catch {
+            // do NOT null this.blocker — the old engine keeps working
+            console.warn('[adblock] offline and no cache for this list set — keeping current engine')
+            return
+          }
         }
       }
 
@@ -150,6 +187,9 @@ class AdblockManager {
           const next = (this.counts.get(tabId) ?? 0) + 1
           this.counts.set(tabId, next)
           this.onCountChanged?.(tabId, next)
+          // inside the guard: the lifetime number matches what users can
+          // attribute to tabs — tabless blocks (service workers) go uncounted
+          shieldStatsStore.add(1)
         }
       })
 
@@ -160,7 +200,7 @@ class AdblockManager {
         if (old && old !== blocker && old.isBlockingEnabled(ses)) old.disableBlockingInSession(ses)
         if (!blocker.isBlockingEnabled(ses)) this.safeEnable(blocker, ses)
       }
-      console.log(`[adblock] engine active with ${urls.length} lists in ${this.sessions.size} session(s)`)
+      console.log(`[adblock] engine active: ${ids.length} lists, ${fetched} fetched, key ${key}`)
     } finally {
       this.rebuilding = false
       if (this.pendingRebuild) {

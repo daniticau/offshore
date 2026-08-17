@@ -4,9 +4,11 @@ import { app, dialog, nativeTheme, protocol } from 'electron'
 import { adblock } from './adblock'
 import { setupDevshot } from './devshot'
 import { initExtensions } from './extensions'
+import { harbor } from './harbor'
 import { setupIpc } from './ipc'
 import { installMenu } from './menu'
-import { pageEditsStore } from './pageedits'
+import { focusStore } from './focus'
+import { morningBrief } from './morningbrief'
 import { passwordVault } from './passwords'
 import { flushAllStores, historyStore, sessionStore, settingsStore } from './stores'
 import { initSessions, prepareTabSession, TAB_PARTITION } from './sessions'
@@ -145,12 +147,23 @@ void app.whenReady().then(async () => {
   void adblock.init()
   boot('adblock kicked off')
 
+  void harbor.init()
+  boot('harbor kicked off')
+
   settingsStore.on('changed', (next: Settings, prev: Settings) => {
     if (next.appearance.theme !== prev.appearance.theme) {
       applyTheme(next.appearance.theme)
     }
-    // Turning history off should also forget what we already kept
-    if (prev.keepHistory && !next.keepHistory) historyStore.clear()
+    // Turning history off should also forget what we already kept — and the
+    // morning brief, which is distilled from it
+    if (prev.keepHistory && !next.keepHistory) {
+      historyStore.clear()
+      morningBrief.wipe()
+    }
+    // Turning the brief itself off forgets everything it kept
+    if (prev.morning.enabled && !next.morning.enabled) morningBrief.wipe()
+    // cookieGuard back on mid-session: its classifier shouldn't wait 6 hours
+    if (!prev.privacy.cookieGuard && next.privacy.cookieGuard) harbor.ensureClassifier()
     // First-run onboarding finished: open anything that arrived while it ran
     if (!prev.onboarded && next.onboarded) flushPendingUrls()
   })
@@ -173,6 +186,11 @@ void app.whenReady().then(async () => {
     }
   }
 
+  // Warm-compose the morning brief off the startup path: Ollama's cold model
+  // load is absorbed here so the first ⌘T answers from cache instantly. A
+  // no-op unless keepHistory is on and today is still unseen.
+  setTimeout(() => void morningBrief.warm(), 5000)
+
   app.on('activate', () => {
     if (windows.size === 0) createWindow()
   })
@@ -186,8 +204,9 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   markQuitting()
   flushAllStores()
-  // The vault and the edit ledger debounce their writes like the stores do,
-  // but live apart from them
+  // The vault, the Focus ledger and Harbor's two files debounce their writes
+  // like the stores do, but live apart from them
   passwordVault.flush()
-  pageEditsStore.flush()
+  focusStore.flush()
+  harbor.flush()
 })

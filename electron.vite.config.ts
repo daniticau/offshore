@@ -15,7 +15,9 @@ export default defineConfig({
     build: minify
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    // autoconsent must ride inside the bundle: the tab preload is sandboxed,
+    // and a sandboxed preload cannot require() node_modules at runtime
+    plugins: [externalizeDepsPlugin({ exclude: ['@duckduckgo/autoconsent'] })],
     resolve: {
       alias: { '@shared': resolve('src/shared') }
     },

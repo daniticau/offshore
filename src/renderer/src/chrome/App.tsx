@@ -11,8 +11,9 @@ import type {
   TabsState
 } from '@shared/types'
 import { DEFAULT_SETTINGS, accentColors, resolveAccentColors } from '@shared/types'
+import { muteAccentColors, muteColor } from '@shared/mute'
 import { HomeCanvas } from '../start/HomeCanvas'
-import { accentVars, useIsDark } from '../theme/useTheme'
+import { accentVars, applyMuted, useIsDark } from '../theme/useTheme'
 import { offshore, prettyHost } from './api'
 import { PasswordDialog } from './PasswordDialog'
 import { playSound, setSoundsEnabled } from './sounds'
@@ -171,6 +172,13 @@ function ContentFrame({
  * address bar on a new tab. There is no need for one: the chrome can draw that
  * page itself, live, waves and all. So it does, and the water keeps moving while
  * you type. It is a stand-in, though, not a page — it takes no clicks.
+ *
+ * Neither home passes `morning` to HomeCanvas: the once-a-day brief belongs to
+ * the offshore://start tab alone (start/main.tsx), which claims it over the
+ * internal bridge. Known seam, accepted for v1: while the omnibox overlay is up
+ * over a brief-bearing start tab, the stand-in shows the home without the
+ * brief, dimmed and briefly. If that ever grates, the fix is a read-only
+ * `morning:peek` for the chrome — not a second claim.
  */
 function ChromeHome({
   settings,
@@ -222,7 +230,6 @@ export function App(): React.JSX.Element {
   const [hasExtensions, setHasExtensions] = useState(false)
   const [popupPanelOpen, setPopupPanelOpen] = useState(false)
   const [slopPanelOpen, setSlopPanelOpen] = useState(false)
-  const [modesPanelOpen, setModesPanelOpen] = useState(false)
   const [siteInfoOpen, setSiteInfoOpen] = useState(false)
   const [appMenuOpen, setAppMenuOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
@@ -303,7 +310,6 @@ export function App(): React.JSX.Element {
     downloadsPanelOpen ||
     popupPanelOpen ||
     slopPanelOpen ||
-    modesPanelOpen ||
     siteInfoOpen ||
     appMenuOpen ||
     profileMenuOpen
@@ -572,7 +578,7 @@ export function App(): React.JSX.Element {
      * the views until they step aside. Overhanging the page is what earns the
      * dance, and only the topbar's panel does.
      */
-    (mode === 'horizontal' && (bookmarkEdit !== null || popupPanelOpen || slopPanelOpen || modesPanelOpen || downloadsPanelOpen))
+    (mode === 'horizontal' && (bookmarkEdit !== null || popupPanelOpen || slopPanelOpen || downloadsPanelOpen))
   useEffect(() => {
     void offshore.chrome.setOverlay(overlayOpen)
   }, [overlayOpen])
@@ -584,7 +590,6 @@ export function App(): React.JSX.Element {
       !bookmarkEdit &&
       !popupPanelOpen &&
       !slopPanelOpen &&
-      !modesPanelOpen &&
       !siteInfoOpen &&
       !appMenuOpen &&
       !profileMenuOpen
@@ -597,7 +602,6 @@ export function App(): React.JSX.Element {
         setBookmarkEdit(null)
         setPopupPanelOpen(false)
         setSlopPanelOpen(false)
-        setModesPanelOpen(false)
         setSiteInfoOpen(false)
         setAppMenuOpen(false)
         setProfileMenuOpen(false)
@@ -605,7 +609,7 @@ export function App(): React.JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [downloadsPanelOpen, bookmarkEdit, popupPanelOpen, slopPanelOpen, modesPanelOpen, siteInfoOpen, appMenuOpen, profileMenuOpen])
+  }, [downloadsPanelOpen, bookmarkEdit, popupPanelOpen, slopPanelOpen, siteInfoOpen, appMenuOpen, profileMenuOpen])
 
   // devshot composite render completion
   useEffect(() => {
@@ -678,14 +682,26 @@ export function App(): React.JSX.Element {
     ? settings.adblock.allowlist.includes(prettyHost(activeTab.url))
     : false
 
-  // ---- accent (space accent wins over the global one) ----
+  // ---- accent (space accent wins over the global one; Muted grays either) ----
+  const muted = settings.appearance?.muted === true
+  /*
+   * The muted class and the accent vars must land in the same frame — both
+   * derive from the same `settings` state, and the class goes on before paint
+   * (layout effect) so a flip never shows a half-muted chrome.
+   */
+  useLayoutEffect(() => applyMuted(muted), [muted])
   const activeSpace = tabsState.spaces.find((s) => s.id === tabsState.activeSpaceId)
-  const acc = activeSpace?.accent
+  const rawAcc = activeSpace?.accent
     ? accentColors(activeSpace.accent, isDark)
     : resolveAccentColors(settings.appearance ?? DEFAULT_SETTINGS.appearance, isDark)
+  // the space path bypasses the resolver, so it mutes here; the global path
+  // already came back muted from resolveAccentColors
+  const acc = muted && activeSpace?.accent ? muteAccentColors(rawAcc) : rawAcc
   const accentFor = useCallback(
-    (space: SpaceInfo): string =>
-      accentColors(space.accent ?? stateRef.current.settings.appearance.accent, isDark).accent,
+    (space: SpaceInfo): string => {
+      const c = accentColors(space.accent ?? stateRef.current.settings.appearance.accent, isDark).accent
+      return stateRef.current.settings.appearance.muted ? muteColor(c) : c
+    },
     [isDark]
   )
 
@@ -757,8 +773,6 @@ export function App(): React.JSX.Element {
     onTogglePopupPanel: setPopupPanelOpen,
     slopPanelOpen,
     onToggleSlopPanel: setSlopPanelOpen,
-    modesPanelOpen,
-    onToggleModesPanel: setModesPanelOpen,
     siteInfoOpen,
     onToggleSiteInfo: setSiteInfoOpen,
     appMenuOpen,
@@ -796,9 +810,6 @@ export function App(): React.JSX.Element {
         if (!t.closest('.bm-edit, .popup-list, .popup-chip')) {
           if (bookmarkEdit) setBookmarkEdit(null)
           if (popupPanelOpen) setPopupPanelOpen(false)
-        }
-        if (!t.closest('.modes-panel, .modes-chip')) {
-          if (modesPanelOpen) setModesPanelOpen(false)
         }
         if (!t.closest('.slop-panel, .slop-chip')) {
           if (slopPanelOpen) setSlopPanelOpen(false)

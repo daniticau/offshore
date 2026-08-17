@@ -162,7 +162,10 @@ body,
   padding: 0 22px;
   border: 0.5px solid var(--glass-border);
   border-radius: 28px;
-  background: var(--surface);
+  /* e2 glass standing on the water — the frost samples the waves behind it */
+  background: var(--sheen), var(--surface);
+  -webkit-backdrop-filter: var(--frost);
+  backdrop-filter: var(--frost);
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
     var(--shadow-soft);
@@ -186,7 +189,7 @@ body,
   transform: translate(-50%, -50%) scale(1);
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
-    0 18px 48px rgba(10, 70, 96, 0.2);
+    var(--shadow-pop);
 }
 /*
  * The type-ahead, hanging off the bottom of the pill rather than sitting inside
@@ -204,10 +207,12 @@ body,
   flex-direction: column;
   border: 0.5px solid var(--glass-border);
   border-radius: 18px;
-  background: var(--surface);
+  background: var(--sheen), var(--surface);
+  -webkit-backdrop-filter: var(--frost);
+  backdrop-filter: var(--frost);
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
-    0 18px 48px rgba(10, 70, 96, 0.2);
+    var(--shadow-pop);
 }
 .start-sug {
   display: flex;
@@ -259,18 +264,13 @@ body,
   position: absolute;
   inset: 0;
   z-index: 2;
-  background: rgba(8, 42, 58, 0.1);
+  background: var(--dim);
   opacity: 0;
   pointer-events: none;
   transition: opacity 160ms var(--ease-out);
 }
 .start-dim.on {
   opacity: 1;
-}
-@media (prefers-color-scheme: dark) {
-  .start-dim {
-    background: rgba(0, 0, 0, 0.22);
-  }
 }
 .start-search input {
   flex: 1;
@@ -492,8 +492,9 @@ body,
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
     0 0 0 0.5px var(--frame-ring),
-    0 6px 22px rgba(14, 92, 122, 0.1);
-  backdrop-filter: blur(18px) saturate(1.08);
+    var(--shadow-soft);
+  -webkit-backdrop-filter: var(--frost);
+  backdrop-filter: var(--frost);
 }
 /* the widgets carry their own stacking margins — the stack's gap spaces them now */
 .widget-inner > * {
@@ -514,7 +515,7 @@ body,
   box-shadow:
     inset 0 1px 0 var(--glass-inset-hi),
     0 0 0 1.5px var(--accent),
-    0 6px 22px rgba(14, 92, 122, 0.12);
+    var(--shadow-soft);
 }
 .jiggle {
   animation: widget-jiggle 0.52s ease-in-out infinite alternate;
@@ -579,7 +580,7 @@ body,
   background: var(--surface);
   border: 0.5px solid var(--glass-border);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.16);
-  animation: strip-in 160ms var(--ease-spring);
+  animation: strip-in var(--dur-glide) var(--ease-water);
   transform: translateX(-50%);
 }
 /* a widget on the bottom row opens its strip upward instead of off the page */
@@ -771,4 +772,262 @@ body,
 }
 .widget-slot.narrow .brief-hilo {
   display: none;
+}
+
+/* ---------- morning brief ---------- */
+
+/*
+ * The once-a-day card, standing just below the search band on the same glass
+ * the widgets wear. It sits under the search's dim (z 1 vs 2), so while the
+ * pill is up the brief reads as part of the screen the search stands on.
+ */
+.morning-card {
+  position: absolute;
+  left: 50%;
+  z-index: 1;
+  transform: translateX(-50%);
+  width: min(720px, 86%);
+  padding: 20px 24px;
+  border: 0.5px solid var(--glass-border);
+  border-radius: 28px;
+  background: var(--glass);
+  box-shadow:
+    inset 0 1px 0 var(--glass-inset-hi),
+    var(--shadow-soft);
+  -webkit-backdrop-filter: var(--frost);
+  backdrop-filter: var(--frost);
+  overflow: hidden;
+  animation: morning-in var(--dur-glide) var(--ease-water);
+}
+@supports (corner-shape: squircle) {
+  .morning-card {
+    corner-shape: squircle;
+    border-radius: 34px;
+  }
+}
+.morning-card.enable {
+  width: min(460px, 86%);
+}
+.morning-card.single {
+  width: min(420px, 86%);
+}
+@keyframes morning-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+.morning-card.leaving {
+  opacity: 0;
+  transition: opacity 150ms var(--ease-out);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  @keyframes morning-in {
+    from {
+      opacity: 0;
+      transform: translateX(-50%);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(-50%);
+    }
+  }
+}
+
+.morning-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.morning-greeting {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 450;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.morning-card.enable .morning-greeting {
+  font-size: 19px;
+}
+
+.morning-dismiss {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin: -3px -6px 0 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: default;
+  transition:
+    background var(--dur) var(--ease-out),
+    color var(--dur) var(--ease-out);
+}
+.morning-dismiss:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.morning-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 18px;
+  margin-top: 14px;
+}
+
+.morning-group {
+  min-width: 0;
+}
+.morning-group h3 {
+  margin: 0 0 6px;
+  padding: 0 10px;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.morning-site,
+.morning-topic,
+.morning-video {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+  transition:
+    background var(--dur) var(--ease-out),
+    transform var(--dur-fast) ease;
+}
+.morning-site:hover,
+.morning-topic:hover,
+.morning-video:hover {
+  background: var(--hover);
+}
+.morning-site:active,
+.morning-topic:active,
+.morning-video:active {
+  transform: scale(0.985);
+}
+.morning-site:focus-visible,
+.morning-topic:focus-visible,
+.morning-video:focus-visible {
+  outline: 1.5px solid var(--accent);
+}
+
+/* the icon slot: a monogram square, a quiet dot, or a play square — never a
+   fetched favicon (a favicon fetch would announce the suggestion to the site) */
+.morning-mono {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.morning-slot {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.morning-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.55;
+}
+.morning-slot.play {
+  border-radius: 8px;
+  background: var(--glass-strong);
+  color: var(--accent-strong);
+}
+
+.morning-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.morning-main {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* A long hostname identifies itself by its tail (the registrable domain), so
+   the ellipsis eats the subdomain head instead — the popup list's own trick. */
+.morning-site .morning-main {
+  direction: rtl;
+  text-align: left;
+}
+.morning-video .morning-main {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.morning-sub {
+  font-size: 12px;
+  color: var(--ink-faint);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* the enable-history card's two lines and its one button */
+.morning-enable-body {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.morning-enable-done {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.morning-enable-btn {
+  margin-top: 12px;
+  border: none;
+  border-radius: 16px;
+  padding: 7px 16px;
+  background: var(--accent);
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: default;
+}
+.morning-enable-btn:hover {
+  filter: brightness(1.06);
 }

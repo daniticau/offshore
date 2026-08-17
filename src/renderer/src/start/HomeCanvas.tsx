@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { BriefWeather, NewTabWidgets, Settings, WidgetLayout } from '@shared/types'
+import type { BriefWeather, MorningAnswer, NewTabWidgets, Settings, WidgetLayout } from '@shared/types'
 import { DEFAULT_SETTINGS, HOME_WIDGETS, resolveAccentColors, weatherCondition } from '@shared/types'
 import { ClassicWaves } from '../theme/ClassicWaves'
 import { moonPhase } from '../theme/moon'
 import { DitheredWaves } from '../theme/DitheredWaves'
+import { MorningBrief } from './MorningBrief'
 import { Weather } from '../theme/WeatherIcons'
 import { useIsDark } from '../theme/useTheme'
 import '../theme/theme.css'
@@ -333,6 +334,13 @@ interface HomeCanvasProps {
   onContextMenu?(): void
   autoFocus?: boolean
   className?: string
+  /**
+   * The once-a-day morning brief, when this surface owns it. Only the
+   * offshore://start tab passes it; the chrome's zero-tab home and the
+   * stand-in pass nothing, so they never double-claim or double-render it.
+   */
+  morning?: MorningAnswer | null
+  onMorningDismiss?(): void
 }
 
 /**
@@ -358,7 +366,9 @@ export function HomeCanvas({
   editSignal = 0,
   onContextMenu,
   autoFocus = false,
-  className = ''
+  className = '',
+  morning = null,
+  onMorningDismiss
 }: HomeCanvasProps): React.JSX.Element {
   const [now, setNow] = useState(new Date())
   const [editing, setEditing] = useState(false)
@@ -962,6 +972,22 @@ export function HomeCanvas({
 
           {HOME_WIDGETS && <div className="grid-band" style={bandStyle} />}
 
+          {/* The once-a-day brief, just below the search band and clear of the
+              waves. It sits UNDER the dim (z 1 vs 2) and the pill + its
+              suggestion list (z 3), so the search stays plainly the thing in
+              front while it is up. */}
+          {morning && morning.kind !== 'none' && board.h > 0 && (
+            <MorningBrief
+              answer={morning}
+              tiles={acc.tiles}
+              top={padTop + BAND_END * cellH + 18}
+              maxHeight={Math.max(0, board.h - (padTop + BAND_END * cellH + 18) - 120)}
+              onOpen={(input) => onSubmit(input)}
+              onDismiss={() => onMorningDismiss?.()}
+              onEnableHistory={() => patch({ keepHistory: true })}
+            />
+          )}
+
           {/* half a step back while the search is in front of it */}
           {searchPill && <div className={`start-dim ${showSearch ? 'on' : ''}`} />}
 
@@ -1012,7 +1038,7 @@ export function HomeCanvas({
                     −
                   </button>
                   <div
-                    className={`widget-inner ${editing && !dragging ? 'jiggle' : ''}`}
+                    className={`widget-inner ${editing && !dragging ? 'jiggle ambient' : ''}`}
                     style={editing && !dragging ? { animationDelay: `${(i % 3) * -0.14}s` } : undefined}
                   >
                     {inner}
@@ -1165,9 +1191,17 @@ export function HomeCanvas({
 
       {settings.appearance?.waves !== false &&
         (settings.appearance?.waveStyle === 'classic' ? (
-          <ClassicWaves colors={[acc.waveA, acc.waveB, acc.waveC]} height={200} />
+          <ClassicWaves
+            colors={[acc.waveA, acc.waveB, acc.waveC]}
+            height={200}
+            still={settings.appearance?.muted === true}
+          />
         ) : (
-          <DitheredWaves colors={[acc.waveA, acc.waveB, acc.waveC]} height={190} />
+          <DitheredWaves
+            colors={[acc.waveA, acc.waveB, acc.waveC]}
+            height={190}
+            still={settings.appearance?.muted === true}
+          />
         ))}
     </div>
   )

@@ -5,13 +5,15 @@ import type {
   AccentId,
   BookmarkNode,
   DevToolsDock,
+  ExpiredSite,
   NewTabWidgets,
   ExtensionInfo,
   GeocodeResult,
+  MorningStatus,
   PasswordMeta,
   PasswordsStatus,
   Settings,
-  SiteEdits,
+  ShieldStats,
   ThemePref,
   ToolbarDensity
 } from '@shared/types'
@@ -26,7 +28,7 @@ import {
 } from '@shared/types'
 import { Favicon } from '../theme/Favicon'
 import { moonPhase, timezoneCity } from '../theme/moon'
-import { useIsDark } from '../theme/useTheme'
+import { applyMuted, useIsDark } from '../theme/useTheme'
 import '../theme/theme.css'
 import './settings.css'
 
@@ -191,6 +193,211 @@ function PasswordsSection({ settings, patch }: { settings: Settings; patch: (p: 
   )
 }
 
+// ---------------- Privacy section ----------------
+
+function PrivacySection({ settings, patch }: { settings: Settings; patch: (p: Partial<Settings>) => void }): React.JSX.Element {
+  const [expired, setExpired] = useState<ExpiredSite[]>([])
+  const [historyFlash, flashHistory] = useFlash()
+  const [siteDataFlash, flashSiteData] = useFlash()
+
+  const refreshExpired = (): void => {
+    void internal?.privacy.expired().then((l) => l && setExpired(l))
+  }
+  useEffect(refreshExpired, [])
+
+  const p = settings.privacy
+  const patchPrivacy = (pp: Partial<Settings['privacy']>): void => patch({ privacy: { ...p, ...pp } })
+  const fmtDay = (ms: number): string =>
+    new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' })
+
+  const exceptions: { title: string; key: 'keepSites' | 'blockSites' | 'disabledSites' }[] = [
+    { title: 'Always allowed', key: 'keepSites' },
+    { title: 'Blocked', key: 'blockSites' },
+    { title: 'Protections off', key: 'disabledSites' }
+  ]
+  const noExceptions = exceptions.every(({ key }) => p[key].length === 0)
+
+  return (
+    <section>
+      <h2>Privacy</h2>
+      <div className="card">
+        <div className="row">
+          <div className="row-title">
+            Answer cookie prompts for you
+            <div className="row-sub">
+              Always the most private choice — reject everything rejectable. Runs entirely on
+              this Mac; leftover banners are hidden by the EasyList Cookie filter.
+            </div>
+          </div>
+          <Toggle on={p.consentAuto} onChange={(v) => patchPrivacy({ consentAuto: v })} />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="row">
+          <div className="row-title">
+            Keep tracker cookies out
+            <div className="row-sub">
+              Strips cookies from requests already known to be tracking. Sign-ins, checkouts
+              and the site you&apos;re on are never touched.
+            </div>
+          </div>
+          <Toggle on={p.cookieGuard} onChange={(v) => patchPrivacy({ cookieGuard: v })} />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="row">
+          <div className="row-title">
+            Let the tide take old cookies
+            <div className="row-sub">
+              Cookies and site data from sites you haven&apos;t visited in a while wash out.
+              Sites you keep open, bookmark, save a password for, or always-allow are never
+              touched. To know when you last visited, Offshore keeps one line per site — the
+              site&apos;s name and the day — and nothing else.
+            </div>
+          </div>
+          <Toggle on={p.tide} onChange={(v) => patchPrivacy({ tide: v })} />
+        </div>
+        {p.tide && (
+          <div className="row">
+            <div className="row-title">Wash out after</div>
+            <Segmented
+              value={String(p.tideDays)}
+              options={[
+                ['14', '2 weeks'],
+                ['30', 'Month'],
+                ['60', '2 months'],
+                ['90', '3 months']
+              ]}
+              onChange={(v) => patchPrivacy({ tideDays: Number(v) })}
+            />
+          </div>
+        )}
+        {expired.length > 0 && (
+          <>
+            <div className="row">
+              <div className="row-title">Recently expired</div>
+            </div>
+            {expired.map((e) => (
+              <div className="row" key={e.domain}>
+                <div className="row-title clamp">
+                  {e.domain}
+                  <div className="row-sub">
+                    {e.cookieCount} cookie{e.cookieCount === 1 ? '' : 's'} · {fmtDay(e.expiredAt)}
+                  </div>
+                </div>
+                <button
+                  className="ghost"
+                  onClick={() => void internal?.privacy.restore(e.domain).then(refreshExpired)}
+                >
+                  Restore
+                </button>
+              </div>
+            ))}
+            <div className="row">
+              <div className="row-sub">
+                Restoring brings cookies back; anything the site stored is gone.
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="card">
+        {noExceptions ? (
+          <div className="row">
+            <div className="row-sub">
+              Nothing yet — set these from the site button in the address bar.
+            </div>
+          </div>
+        ) : (
+          exceptions.map(
+            ({ title, key }) =>
+              p[key].length > 0 && (
+                <div className="row column" key={key}>
+                  <div className="row-title">{title}</div>
+                  <div className="chips">
+                    {p[key].map((domain) => (
+                      <span className="chip" key={domain}>
+                        {domain}
+                        <button
+                          onClick={() => patchPrivacy({ [key]: p[key].filter((d) => d !== domain) })}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )
+          )
+        )}
+      </div>
+
+      <div className="card">
+        <div className="row">
+          <div className="row-title">
+            Remember pages you visit
+            <div className="row-sub">
+              Off by default. When off, nothing is written down and the address bar never suggests
+              somewhere you&apos;ve been.
+            </div>
+          </div>
+          <Toggle on={settings.keepHistory} onChange={(v) => patch({ keepHistory: v })} />
+        </div>
+        <div className="row">
+          <div className="row-title">
+            Suggestions from {SEARCH_ENGINES[settings.searchEngine].name}
+            <div className="row-sub">
+              Finishes what you type in the address bar. It is the one thing here that
+              sends a half-typed word anywhere: the query goes out from Offshore itself,
+              with no cookies and nothing that says who asked. Turn it off and the address
+              bar only ever offers your own tabs, bookmarks and history.
+            </div>
+          </div>
+          <Toggle
+            on={settings.searchSuggestions}
+            onChange={(v) => patch({ searchSuggestions: v })}
+          />
+        </div>
+        <div className="row">
+          <div className="row-title">Clear browsing history</div>
+          <button
+            className="danger"
+            onClick={() => {
+              void internal?.history.clear()
+              flashHistory('Cleared ✓')
+            }}
+          >
+            {historyFlash ?? 'Clear history'}
+          </button>
+        </div>
+        <div className="row">
+          <div className="row-title">
+            Clear cookies &amp; site data
+            <div className="row-sub">
+              Signs you out of every site, in every space. Also clears the tide&apos;s
+              site-name map and the recently-expired list.
+            </div>
+          </div>
+          <button
+            className="danger"
+            onClick={() => {
+              void internal?.privacy.clearSiteData().then(() => {
+                flashSiteData('Cleared ✓')
+                refreshExpired()
+              })
+            }}
+          >
+            {siteDataFlash ?? 'Clear site data'}
+          </button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 // ---------------- Bookmarks manager ----------------
 
 function BookmarksSection(): React.JSX.Element {
@@ -324,6 +531,36 @@ function BookmarksSection(): React.JSX.Element {
 
 // ---------------- New Tab (widgets) section ----------------
 
+/** One status sentence for the Morning brief card, from morning:status. */
+function MorningStatusRow({ settings, patch }: { settings: Settings; patch: (p: Partial<Settings>) => void }): React.JSX.Element {
+  const [status, setStatus] = useState<MorningStatus | null>(null)
+
+  useEffect(() => {
+    void internal?.morning.status().then((s) => s && setStatus(s))
+  }, [])
+
+  if (!settings.keepHistory) {
+    return (
+      <div className="row">
+        <div className="row-sub">Needs local history.</div>
+        <button className="ghost" onClick={() => patch({ keepHistory: true })}>
+          Turn on
+        </button>
+      </div>
+    )
+  }
+  if (!status) return <div className="row"><div className="row-sub">Checking for a local model…</div></div>
+  return (
+    <div className="row">
+      <div className="row-sub">
+        {status.ollama.reachable && status.ollama.model
+          ? `Composed by ${status.ollama.model} — Ollama on this machine.`
+          : `Ollama not found at ${status.ollama.host} — using Offshore's built-in heuristics. Composing stays on this Mac; only the cookie-less YouTube check for new videos goes out.`}
+      </div>
+    </div>
+  )
+}
+
 function NewTabSection({ settings, patch }: { settings: Settings; patch: (p: Partial<Settings>) => void }): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<GeocodeResult[]>([])
@@ -454,6 +691,24 @@ function NewTabSection({ settings, patch }: { settings: Settings; patch: (p: Par
             </div>
           </div>
         </div>
+
+        <div className="card">
+          <div className="row">
+            <div className="row-title">
+              Morning brief
+              <div className="row-sub">
+                The first new tab of the day can greet you with sites to revisit, topics to
+                learn, and new videos from channels you watch. Built from your local history,
+                entirely on this Mac.
+              </div>
+            </div>
+            <Toggle
+              on={settings.morning.enabled}
+              onChange={(v) => patch({ morning: { enabled: v } })}
+            />
+          </div>
+          {settings.morning.enabled && <MorningStatusRow settings={settings} patch={patch} />}
+        </div>
       </section>
     )
   }
@@ -541,77 +796,6 @@ function NewTabSection({ settings, patch }: { settings: Settings; patch: (p: Par
   )
 }
 
-// ---------------- Page edits section ----------------
-
-/**
- * The ledger of reshaped sites: every host with remembered page edits, each
- * one pausable (keep the edits, stop applying them) or forgettable outright.
- * The edits themselves are made on the pages, never here — this is where you
- * take them back.
- */
-function PageEditsSection(): React.JSX.Element {
-  const [sites, setSites] = useState<SiteEdits[]>([])
-  const refresh = (): void => {
-    void internal?.pageEdits.list().then((s) => s && setSites(s))
-  }
-  useEffect(refresh, [])
-
-  return (
-    <section>
-      <h2>Page Edits</h2>
-      <div className="card">
-        <div className="row">
-          <div className="row-title">
-            Pages you have reshaped
-            <div className="row-sub">
-              Edit any page from its right-click menu or ⇧⌘E — hide things, rewrite text, focus on
-              one element. Changes are remembered per site and replayed on every visit, on this Mac
-              only.
-            </div>
-          </div>
-        </div>
-        {sites.length === 0 && (
-          <div className="row">
-            <div className="row-sub">Nothing yet. Press ⇧⌘E on a busy page and take something off it.</div>
-          </div>
-        )}
-        {sites.map((s) => (
-          <div className="row" key={s.host}>
-            <div className="pw-meta">
-              <div className="row-title clamp">{s.host}</div>
-              <div className="row-sub clamp">
-                {s.edits.length === 1 ? '1 edit' : `${s.edits.length} edits`}
-                {s.enabled ? '' : ' — off'}
-                {s.modes?.clean ? ' · Clean on' : ''}
-                {s.modes?.focus ? ' · Focus on' : ''}
-                {s.edits[s.edits.length - 1]?.label ? ` · latest: ${s.edits[s.edits.length - 1].label}` : ''}
-              </div>
-            </div>
-            <div className="row-actions">
-              <button
-                className="ghost"
-                onClick={() => {
-                  void internal?.pageEdits.setEnabled(s.host, !s.enabled).then(refresh)
-                }}
-              >
-                {s.enabled ? 'Turn off' : 'Turn on'}
-              </button>
-              <button
-                className="danger"
-                onClick={() => {
-                  void internal?.pageEdits.clear(s.host).then(refresh)
-                }}
-              >
-                Forget
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  )
-}
-
 // ---------------- App ----------------
 
 type SectionId =
@@ -619,7 +803,6 @@ type SectionId =
   | 'appearance'
   | 'newtab'
   | 'shield'
-  | 'pageedits'
   | 'passwords'
   | 'extensions'
   | 'bookmarks'
@@ -631,7 +814,6 @@ const NAV: { id: SectionId; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'newtab', label: 'New Tab' },
   { id: 'shield', label: 'Shield' },
-  { id: 'pageedits', label: 'Page Edits' },
   { id: 'passwords', label: 'Passwords' },
   { id: 'extensions', label: 'Extensions' },
   { id: 'bookmarks', label: 'Bookmarks' },
@@ -646,10 +828,10 @@ const CORE_LISTS = ADBLOCK_LISTS.filter((l) => l.defaultOn).map((l) => l.id)
 function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([])
+  const [shieldStats, setShieldStats] = useState<ShieldStats | null>(null)
+  const [focusSites, setFocusSites] = useState<string[]>([])
   const [rulesDraft, setRulesDraft] = useState('')
   const [rulesFlash, flashRules] = useFlash()
-  const [historyFlash, flashHistory] = useFlash()
-  const [siteDataFlash, flashSiteData] = useFlash()
   const [version, setVersion] = useState('')
   const [active, setActive] = useState<SectionId>(() => {
     const h = window.location.hash.slice(1) as SectionId
@@ -662,11 +844,30 @@ function App(): React.JSX.Element {
       if (s) {
         setSettings(s)
         setRulesDraft(s.adblock.customRules)
+        applyMuted(s.appearance?.muted === true)
       }
     })
+    // stay live: a Muted/accent/theme flip from the chrome lands here too
+    internal?.settings.onChanged((s) => {
+      setSettings(s)
+      applyMuted(s.appearance?.muted === true)
+    })
     void internal?.extensions.list().then((e) => e && setExtensions(e))
+    void internal?.focus.sites().then((s) => s && setFocusSites(s))
     void internal?.app.info().then((i) => i && setVersion(i.version))
   }, [])
+
+  // The lifetime blocked count is ambient, not live-critical: fetch it while a
+  // section that shows it is open, on a lazy interval, and let it rest otherwise.
+  useEffect(() => {
+    if (active !== 'extensions' && active !== 'shield') return
+    const load = (): void => {
+      void internal?.shield.stats().then((s) => s && setShieldStats(s))
+    }
+    load()
+    const timer = setInterval(load, 5000)
+    return () => clearInterval(timer)
+  }, [active])
 
   const patch = (p: Partial<Settings>): void => {
     const next = {
@@ -675,6 +876,7 @@ function App(): React.JSX.Element {
       adblock: { ...settings.adblock, ...(p.adblock ?? {}) },
       appearance: { ...settings.appearance, ...(p.appearance ?? {}) },
       popups: { ...settings.popups, ...(p.popups ?? {}) },
+      privacy: { ...settings.privacy, ...(p.privacy ?? {}) },
       passwords: { ...settings.passwords, ...(p.passwords ?? {}) },
       brief: { ...settings.brief, ...(p.brief ?? {}) },
       newTabWidgets: { ...(settings.newTabWidgets ?? DEFAULT_SETTINGS.newTabWidgets), ...(p.newTabWidgets ?? {}) }
@@ -686,6 +888,22 @@ function App(): React.JSX.Element {
   const patchAdblock = (p: Partial<Settings['adblock']>): void => {
     patch({ adblock: { ...settings.adblock, ...p } })
   }
+
+  /** The one Shield switch — the Shield section row and the Extensions row both flip this. */
+  const patchShieldEnabled = (v: boolean): void => {
+    patchAdblock({
+      enabled: v,
+      // flipping the big switch restores the standard bundle
+      lists: v
+        ? { ...settings.adblock.lists, ...Object.fromEntries(CORE_LISTS.map((l) => [l, true])) }
+        : settings.adblock.lists
+    })
+  }
+
+  /** "N requests blocked so far." — or nothing while the number is still loading. */
+  const blockedSoFar = shieldStats
+    ? ` ${shieldStats.blockedTotal.toLocaleString()} requests blocked so far.`
+    : ''
 
   const annoyancesOn = settings.adblock.lists['annoyances'] ?? false
 
@@ -813,6 +1031,22 @@ function App(): React.JSX.Element {
                 </div>
                 <div className="row">
                   <div className="row-title">
+                    Mood
+                    <div className="row-sub">Muted grays the whole chrome and stills the water.</div>
+                  </div>
+                  <Segmented<'water' | 'muted'>
+                    value={settings.appearance.muted ? 'muted' : 'water'}
+                    options={[
+                      ['water', 'Water'],
+                      ['muted', 'Muted']
+                    ]}
+                    onChange={(v) =>
+                      patch({ appearance: { ...settings.appearance, muted: v === 'muted' } })
+                    }
+                  />
+                </div>
+                <div className="row">
+                  <div className="row-title">
                     Accent
                     <div className="row-sub">Tints the chrome, the waves, and the new-tab page.</div>
                   </div>
@@ -886,22 +1120,11 @@ function App(): React.JSX.Element {
                   <div className="row-title">
                     Block ads &amp; trackers
                     <div className="row-sub">
-                      Removes ads and stops trackers from following you around, using the same community
-                      filter lists as uBlock Origin. Pages load faster and sites learn less about you.
+                      Removes ads and stops trackers with the full uBlock Origin filter set.
+                      Pages load faster and sites learn less about you.{blockedSoFar}
                     </div>
                   </div>
-                  <Toggle
-                    on={settings.adblock.enabled}
-                    onChange={(v) =>
-                      patchAdblock({
-                        enabled: v,
-                        // flipping the big switch restores the standard bundle
-                        lists: v
-                          ? { ...settings.adblock.lists, ...Object.fromEntries(CORE_LISTS.map((l) => [l, true])) }
-                          : settings.adblock.lists
-                      })
-                    }
-                  />
+                  <Toggle on={settings.adblock.enabled} onChange={patchShieldEnabled} />
                 </div>
                 <div className="row">
                   <div className="row-title">
@@ -939,30 +1162,16 @@ function App(): React.JSX.Element {
                 </div>
                 <div className="row">
                   <div className="row-title">
-                    Highlight flagged prose
+                    Bar the flagged prose
                     <div className="row-sub">
-                      Wash the blocks that carry the tells, right in the page — yellow for a
-                      lean, orange for a habit, red for the worst of it.
+                      A slim colored bar at the edge of each block that carries the tells —
+                      amber for a lean, red for the worst of it.
                     </div>
                   </div>
                   <Toggle
                     on={settings.slop.highlight}
                     disabled={!settings.slop.detector}
                     onChange={(v) => patch({ slop: { ...settings.slop, highlight: v } })}
-                  />
-                </div>
-                <div className="row">
-                  <div className="row-title">
-                    Veil heavy slop
-                    <div className="row-sub">
-                      A page scoring 55 or worse gets a veil before you sink time into it — one
-                      click reads it anyway, one click spares the site forever.
-                    </div>
-                  </div>
-                  <Toggle
-                    on={settings.slop.veil}
-                    disabled={!settings.slop.detector}
-                    onChange={(v) => patch({ slop: { ...settings.slop, veil: v } })}
                   />
                 </div>
               </div>
@@ -1035,11 +1244,11 @@ function App(): React.JSX.Element {
                     </div>
                   </div>
                 )}
-                {settings.slop.allowlist.length > 0 && (
+                {settings.slop.quiet.length > 0 && (
                   <div className="row column">
-                    <div className="row-title">Sites never veiled</div>
+                    <div className="row-title">Sites where the detector is quiet</div>
                     <div className="chips">
-                      {settings.slop.allowlist.map((host) => (
+                      {settings.slop.quiet.map((host) => (
                         <span className="chip" key={host}>
                           {host}
                           <button
@@ -1047,7 +1256,7 @@ function App(): React.JSX.Element {
                               patch({
                                 slop: {
                                   ...settings.slop,
-                                  allowlist: settings.slop.allowlist.filter((h) => h !== host)
+                                  quiet: settings.slop.quiet.filter((h) => h !== host)
                                 }
                               })
                             }
@@ -1063,7 +1272,6 @@ function App(): React.JSX.Element {
             </section>
           )}
 
-          {active === 'pageedits' && <PageEditsSection />}
           {active === 'passwords' && <PasswordsSection settings={settings} patch={patch} />}
 
           {active === 'extensions' && (
@@ -1074,10 +1282,24 @@ function App(): React.JSX.Element {
                   <div className="row-title">
                     Built into Offshore
                     <div className="row-sub">
-                      Two extensions that ship with the browser — no store, no install, nothing
+                      Extensions that ship with the browser — no store, no install, nothing
                       leaves your Mac.
                     </div>
                   </div>
+                </div>
+                <div className="row">
+                  <div className="ext-info">
+                    <span className="ext-icon builtin">🛡</span>
+                    <div className="row-title">
+                      Shield
+                      <div className="row-sub">
+                        The full uBlock Origin filter set on the Ghostery engine — ads, trackers,
+                        and malware domains never load.{blockedSoFar} Tuning lives in
+                        Settings → Shield.
+                      </div>
+                    </div>
+                  </div>
+                  <Toggle on={settings.adblock.enabled} onChange={patchShieldEnabled} />
                 </div>
                 <div className="row">
                   <div className="ext-info">
@@ -1085,8 +1307,8 @@ function App(): React.JSX.Element {
                     <div className="row-title">
                       Slop Detector
                       <div className="row-sub">
-                        Scores every page for machine-generated filler and washes the guilty prose
-                        yellow → orange → red. Tuning lives in Settings → Shield.
+                        Scores every page for machine-generated filler and bars the guilty prose
+                        at its edge, amber to red. Tuning lives in Settings → Shield.
                       </div>
                     </div>
                   </div>
@@ -1097,18 +1319,30 @@ function App(): React.JSX.Element {
                 </div>
                 <div className="row">
                   <div className="ext-info">
-                    <span className="ext-icon builtin">✨</span>
+                    <span className="ext-icon builtin">◉</span>
                     <div className="row-title">
-                      Page Cleaner
+                      Focus
                       <div className="row-sub">
-                        Clean and Focus modes for any page, from the sparkle beside the address —
-                        Clean hides flagged slop, Focus hides the clutter around the content.
+                        One switch on any page: ads, cookie nags, sticky bars, comments and
+                        recommendation rails come off, and the layout closes up around what&apos;s
+                        left. Remembered per site
+                        {focusSites.length > 0
+                          ? ` — on for ${focusSites.length} site${focusSites.length === 1 ? '' : 's'}.`
+                          : '.'}
                       </div>
                     </div>
                   </div>
+                  {focusSites.length > 0 && (
+                    <button
+                      className="ghost"
+                      onClick={() => void internal?.focus.forgetAll().then(() => setFocusSites([]))}
+                    >
+                      Forget sites
+                    </button>
+                  )}
                   <Toggle
-                    on={settings.cleaner.enabled}
-                    onChange={(v) => patch({ cleaner: { enabled: v } })}
+                    on={settings.focus.enabled}
+                    onChange={(v) => patch({ focus: { enabled: v } })}
                   />
                 </div>
                 {extensions.map((ext) => (
@@ -1146,64 +1380,7 @@ function App(): React.JSX.Element {
 
           {active === 'bookmarks' && <BookmarksSection />}
 
-          {active === 'privacy' && (
-            <section>
-              <h2>Privacy</h2>
-              <div className="card">
-                <div className="row">
-                  <div className="row-title">
-                    Remember pages you visit
-                    <div className="row-sub">
-                      Off by default. When off, nothing is written down and the address bar never suggests
-                      somewhere you&apos;ve been.
-                    </div>
-                  </div>
-                  <Toggle on={settings.keepHistory} onChange={(v) => patch({ keepHistory: v })} />
-                </div>
-                <div className="row">
-                  <div className="row-title">
-                    Suggestions from {SEARCH_ENGINES[settings.searchEngine].name}
-                    <div className="row-sub">
-                      Finishes what you type in the address bar. It is the one thing here that
-                      sends a half-typed word anywhere: the query goes out from Offshore itself,
-                      with no cookies and nothing that says who asked. Turn it off and the address
-                      bar only ever offers your own tabs, bookmarks and history.
-                    </div>
-                  </div>
-                  <Toggle
-                    on={settings.searchSuggestions}
-                    onChange={(v) => patch({ searchSuggestions: v })}
-                  />
-                </div>
-                <div className="row">
-                  <div className="row-title">Clear browsing history</div>
-                  <button
-                    className="danger"
-                    onClick={() => {
-                      void internal?.history.clear()
-                      flashHistory('Cleared ✓')
-                    }}
-                  >
-                    {historyFlash ?? 'Clear history'}
-                  </button>
-                </div>
-                <div className="row">
-                  <div className="row-title">
-                    Clear cookies &amp; site data
-                    <div className="row-sub">Signs you out of every site, in every space.</div>
-                  </div>
-                  <button
-                    className="danger"
-                    onClick={() => {
-                      void internal?.privacy.clearSiteData().then(() => flashSiteData('Cleared ✓'))
-                    }}
-                  >
-                    {siteDataFlash ?? 'Clear site data'}
-                  </button>
-                </div>
-              </div>
-            </section>
-          )}
+          {active === 'privacy' && <PrivacySection settings={settings} patch={patch} />}
 
           {active === 'about' && (
             <section>

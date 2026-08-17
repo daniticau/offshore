@@ -3,6 +3,7 @@ import { existsSync } from 'fs'
 import { basename, join } from 'path'
 import type { DownloadItemInfo } from '@shared/types'
 import { adblock } from './adblock'
+import { harbor } from './harbor'
 import { downloadsStore } from './stores'
 import { clientHintHeaders, handleOffshoreProtocol, normalizeUserAgent } from './util'
 
@@ -35,6 +36,11 @@ export function preparedSessions(): Session[] {
   return [...prepared.values()]
 }
 
+/** Partition name + session, for callers that must record which jar is which. */
+export function preparedEntries(): Array<[string, Session]> {
+  return [...prepared.entries()]
+}
+
 export function tabSession(): Session {
   return prepareTabSession(TAB_PARTITION)
 }
@@ -45,7 +51,7 @@ export function prepareTabSession(partition: string): Session {
   const ses = session.fromPartition(partition)
   prepared.set(partition, ses)
   ses.setUserAgent(normalizeUserAgent(ses.getUserAgent()), 'en-US,en')
-  setupClientHints(ses)
+  setupBeforeSendHeaders(ses)
   try {
     ses.protocol.handle('offshore', handleOffshoreProtocol)
   } catch {
@@ -54,19 +60,29 @@ export function prepareTabSession(partition: string): Session {
   setupPermissions(ses)
   setupDownloads(ses)
   adblock.attachSession(ses)
+  harbor.attachSession(ses)
   return ses
 }
 
-/** Re-attach the client hints Electron drops when the UA is overridden. Safe to own
- * onBeforeSendHeaders here: the adblocker uses onBeforeRequest/onHeadersReceived and
- * the extensions layer uses onHeadersReceived, so nothing else claims this event. */
-function setupClientHints(ses: Session): void {
+/** The one onBeforeSendHeaders owner (Electron replaces, not stacks, listeners;
+ * the adblocker holds onBeforeRequest/onHeadersReceived). Two jobs share the
+ * callback, hints first, strip second: re-attach the client hints Electron
+ * drops when the UA is overridden, then keep the Cookie header out of requests
+ * Harbor has classified as tracking. The decision is synchronous — no await
+ * may enter this callback. */
+function setupBeforeSendHeaders(ses: Session): void {
   const hints = clientHintHeaders()
   ses.webRequest.onBeforeSendHeaders((details, cb) => {
     if (details.url.startsWith('https://') || details.url.startsWith('http://')) {
       const present = new Set(Object.keys(details.requestHeaders).map((k) => k.toLowerCase()))
       for (const [name, value] of Object.entries(hints)) {
         if (!present.has(name)) details.requestHeaders[name] = value
+      }
+      if (harbor.shouldStripRequest(details)) {
+        for (const k of Object.keys(details.requestHeaders)) {
+          if (k.toLowerCase() === 'cookie') delete details.requestHeaders[k]
+        }
+        harbor.countStripped(details.webContentsId, details.url)
       }
     }
     cb({ requestHeaders: details.requestHeaders })

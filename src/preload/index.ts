@@ -71,7 +71,9 @@ const api: OffshoreApi = {
     copyText: (text: string) => invoke('chrome:copy-text', text)
   },
   privacy: {
-    clearSite: () => invoke('privacy:clear-site')
+    clearSite: () => invoke('privacy:clear-site'),
+    siteReport: () => invoke('privacy:site-report'),
+    setSite: (list: 'off' | 'keep' | 'block', on: boolean) => invoke('privacy:set-site', list, on)
   },
   brief: {
     weather: () => invoke('brief:weather')
@@ -104,8 +106,7 @@ const api: OffshoreApi = {
     allowSite: (tabId: number) => invoke('popups:allow-site', tabId)
   },
   slop: {
-    readAnyway: (tabId: number) => invoke('slop:read-anyway', tabId),
-    setAllowed: (tabId: number, allowed: boolean) => invoke('slop:set-allowed', tabId, allowed)
+    setQuiet: (tabId: number, quiet: boolean) => invoke('slop:set-quiet', tabId, quiet)
   },
   downloads: {
     list: () => invoke('downloads:list'),
@@ -120,11 +121,8 @@ const api: OffshoreApi = {
   adblock: {
     toggleSite: (url: string) => invoke('adblock:toggle-site', url)
   },
-  pageEdits: {
-    toggle: () => invoke('pageedit:toggle'),
-    clearSite: () => invoke('pageedit:clear-site'),
-    setSiteEnabled: (on: boolean) => invoke('pageedit:set-site-enabled', on),
-    setMode: (mode: 'clean' | 'focus', on: boolean) => invoke('pagemode:set', mode, on)
+  focus: {
+    toggle: () => invoke('focus:toggle')
   },
   window: {
     zoom: () => invoke('window:zoom'),

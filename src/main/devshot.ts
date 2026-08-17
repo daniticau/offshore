@@ -1,10 +1,10 @@
-import { BrowserWindow, app, ipcMain, session } from 'electron'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { BrowserWindow, app, ipcMain, safeStorage, screen, session } from 'electron'
+import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import * as nodeHttp from 'http'
-import { HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_VEIL_MIN, type SlopReport } from '@shared/types'
+import { ADBLOCK_LISTS, HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_HEAVY_MIN, type AppearanceSettings, type SiteReport, type SlopReport } from '@shared/types'
 import { TAB_PARTITION } from './sessions'
-import { windows, type OffshoreWindow } from './windows'
+import { quietShow, windows, type OffshoreWindow } from './windows'
 
 /**
  * Headless design-verification harness (dev only).
@@ -16,6 +16,9 @@ export function setupDevshot(): void {
   setupTestFlows()
   const dir = process.env['OFFSHORE_SHOT']
   if (!dir) return
+  // with both armed the flow owns the run (and writes its own eyeball shots) —
+  // two exits racing over one app is nobody's screenshot
+  if (process.env['OFFSHORE_TEST_FLOW']) return
   const wait = Number(process.env['OFFSHORE_SHOT_WAIT'] || 3500)
   /** Quiet is the default: parked off-screen, the window needs a beat longer to settle. */
   const quiet = !process.env['OFFSHORE_TEST_FOREGROUND']
@@ -72,27 +75,6 @@ export function setupDevshot(): void {
         )
         .catch(() => false)
       await delay(500)
-    }
-    /**
-     * OFFSHORE_SHOT_EDITPAGE=1: flip page-edit mode on and select something,
-     * so the capture shows the pill, the selection box and the toolbar.
-     */
-    if (process.env['OFFSHORE_SHOT_EDITPAGE']) {
-      w.tabs.toggleEditMode()
-      await delay(500)
-      await w.tabs.activeTab?.wc
-        .executeJavaScript(
-          `(() => { const el = document.querySelector('main h1, main p, h1, p, div')
-             if (!el) return false
-             const r = el.getBoundingClientRect()
-             el.dispatchEvent(new PointerEvent('pointerdown', {
-               bubbles: true, composed: true, button: 0,
-               clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
-             }))
-             return true })()`
-        )
-        .catch(() => false)
-      await delay(400)
     }
     if (process.env['OFFSHORE_TEST_BOOKMARK']) {
       const { bookmarksStore } = await import('./stores')
@@ -250,10 +232,18 @@ export function setupDevshot(): void {
       w.win.webContents.focus()
       w.sendToChrome('omnibox:focus')
       await delay(600)
+      /*
+       * Quiet windows never get OS focus, and an unfocused renderer will not
+       * hand focus to an input — so drive the component through the events
+       * React actually listens to (focusin → onFocus, input → onChange), the
+       * same dance the chrome flow's dropdown checks do.
+       */
       await w.win.webContents
         .executeJavaScript(
           `(() => { const el = document.querySelector('.omni-input')
              if (!el) return false
+             el.focus()
+             el.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
              Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(typed)})
              el.dispatchEvent(new Event('input', { bubbles: true }))
              return true })()`
@@ -279,13 +269,21 @@ function delay(ms: number): Promise<void> {
 /**
  * Get the window painting with a live surface for captures and checks — without
  * ever taking the keyboard or covering what the human is doing. Quiet (the
- * default) parks it off the side of the display, shown but inactive: it keeps
- * rendering out there, and capturePage still has a real surface to read.
- * OFFSHORE_TEST_FOREGROUND=1 brings back the old grab-everything behavior for
- * the rare check that needs genuine OS focus.
+ * default) parks it off the side of the display, shown but inactive.
+ *
+ * Quiet runs ride quietShow (see windows.ts): an edge-sliver park set before a
+ * focusless show(), which is the only show that marks page renderers visible on
+ * macOS — showInactive leaves them `hidden` and capturePage hands back empty
+ * stills. Boot already quiet-shows harness windows; calling again is a cheap
+ * re-park for windows the flow has since moved. OFFSHORE_TEST_FOREGROUND=1
+ * brings back the old grab-everything behavior for the rare check that needs
+ * genuine OS focus.
  */
 function surface(w: OffshoreWindow): void {
   if (process.env['OFFSHORE_TEST_FOREGROUND']) {
+    w.win.setOpacity(1)
+    w.win.setHasShadow(true)
+    w.win.setIgnoreMouseEvents(false)
     w.win.setAlwaysOnTop(true)
     w.win.show()
     app.focus({ steal: true })
@@ -293,9 +291,21 @@ function surface(w: OffshoreWindow): void {
     w.win.moveTop()
     return
   }
-  const [, wy] = w.win.getPosition()
-  w.win.setPosition(-9000, wy)
-  w.win.showInactive()
+  quietShow(w.win)
+}
+
+/** Width of the window actually on a screen — the harness promises ≤10px. */
+function visibleSliverPx(win: Electron.BrowserWindow): number {
+  const b = win.getBounds()
+  let worst = 0
+  for (const d of screen.getAllDisplays()) {
+    const w =
+      Math.min(b.x + b.width, d.bounds.x + d.bounds.width) - Math.max(b.x, d.bounds.x)
+    const h =
+      Math.min(b.y + b.height, d.bounds.y + d.bounds.height) - Math.max(b.y, d.bounds.y)
+    if (w > 0 && h > 0) worst = Math.max(worst, w)
+  }
+  return worst
 }
 
 /**
@@ -327,7 +337,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|pageedits|cleaner
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor|shield|morning|appearance
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -368,7 +378,18 @@ function setupTestFlows(): void {
     }, 4000)
   })
 
+  const KNOWN_FLOWS = [
+    'chrome', 'passwords', 'popups', 'spaces', 'headers', 'privacy',
+    'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus', 'harbor', 'shield', 'morning',
+    'appearance'
+  ]
+
   async function runFlow(): Promise<void> {
+    if (!KNOWN_FLOWS.includes(flow ?? '')) {
+      say(`[flowtest] unknown flow: ${flow}`)
+      app.exit(1)
+      return
+    }
     const w = await waitForWindow(20_000)
     if (!w) {
       say('[flowtest] no window appeared within 20s')
@@ -530,36 +551,424 @@ function setupTestFlows(): void {
       return
     }
 
+    if (flow === 'morning') {
+      /**
+       * The morning brief end to end, offline: the keepHistory-off enable card
+       * and its one-click round-trip, an Ollama-composed brief against a
+       * fixture server (digest hygiene asserted on the wire: hosts + titles,
+       * never a URL, never a cookie), YouTube RSS picks with the watched video
+       * excluded, the day gate (second tab plain, reload keeps the claim,
+       * per-day cache never recomposes), dismiss, the heuristic tier when
+       * Ollama is genuinely unreachable, and the thin-history gate.
+       */
+      if (!process.env['OFFSHORE_CLEAN_PROFILE']) {
+        // seeds and clears history, flips keepHistory — never against a
+        // lived-in profile
+        say('[flowtest] morning flow requires OFFSHORE_CLEAN_PROFILE')
+        app.exit(1)
+        return
+      }
+      const { settingsStore, historyStore } = await import('./stores')
+      const { morningBrief } = await import('./morningbrief')
+      const D = 86_400_000
+
+      // ---- fixture server: YouTube handle page + RSS, and a fake Ollama ----
+      interface Logged {
+        method: string
+        url: string
+        cookie: string | null
+        body: string
+      }
+      const reqLog: Logged[] = []
+      const iso = (msAgo: number): string => new Date(Date.now() - msAgo).toISOString()
+      const feedXml = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns="http://www.w3.org/2005/Atom">
+ <title>Fixture Channel</title>
+ <author><name>Fixture Channel</name></author>
+ <entry>
+  <yt:videoId>fixvid00001</yt:videoId>
+  <title>Fixture video one</title>
+  <published>${iso(1 * D)}</published>
+ </entry>
+ <entry>
+  <yt:videoId>fixvid00002</yt:videoId>
+  <title>Fixture video two</title>
+  <published>${iso(2 * D)}</published>
+ </entry>
+</feed>`
+      const chatReply = JSON.stringify({
+        message: {
+          content: JSON.stringify({
+            greeting: 'Fixture morning.',
+            topics: [
+              { label: 'sourdough starter', query: 'sourdough starter', why: 'three guides this week' }
+            ],
+            siteNotes: [{ host: 'news.ycombinator.com', why: 'your quiet regular' }]
+          })
+        },
+        done: true
+      })
+      const server = nodeHttp.createServer((req, res) => {
+        let body = ''
+        req.on('data', (c) => (body += c))
+        req.on('end', () => {
+          reqLog.push({
+            method: req.method ?? '',
+            url: req.url ?? '',
+            cookie: req.headers.cookie ?? null,
+            body
+          })
+          const path = (req.url ?? '/').split('?')[0]
+          if (path === '/@fixturechannel') {
+            res.setHeader('content-type', 'text/html')
+            res.end('<html><head><script>var d={"channelId":"UCabcdefghijklmnopqrstuv"}</script></head><body>fixture channel</body></html>')
+          } else if (path === '/feeds/videos.xml') {
+            res.setHeader('content-type', 'application/atom+xml')
+            res.end(feedXml)
+          } else if (path === '/api/tags') {
+            res.setHeader('content-type', 'application/json')
+            res.end('{"models":[{"name":"llama3.2:3b","details":{"parameter_size":"3.2B"}}]}')
+          } else if (path === '/api/chat') {
+            res.setHeader('content-type', 'application/json')
+            res.end(chatReply)
+          } else {
+            res.statusCode = 404
+            res.end('')
+          }
+        })
+      })
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+      const port = (server.address() as { port: number }).port
+      // a port that answers nothing — bound once, closed, then used as the
+      // "Ollama is gone" address (connection refused, instantly)
+      const deadServer = nodeHttp.createServer()
+      await new Promise<void>((r) => deadServer.listen(0, '127.0.0.1', r))
+      const deadPort = (deadServer.address() as { port: number }).port
+      await new Promise<void>((r) => deadServer.close(() => r()))
+
+      const shotDir = process.env['OFFSHORE_SHOT']
+      const shoot = async (tab: NonNullable<typeof w.tabs.activeTab>, name: string): Promise<void> => {
+        if (!shotDir) return
+        mkdirSync(shotDir, { recursive: true })
+        surface(w)
+        w.tabs.setActiveVisible(true)
+        await delay(900)
+        const img = await tab.wc.capturePage()
+        writeFileSync(join(shotDir, name), img.toPNG())
+        say(`[flowtest] wrote ${join(shotDir, name)}`)
+      }
+
+      // a clean profile opens on the welcome page; the brief belongs to real
+      // new tabs, so step past onboarding first
+      settingsStore.set({ onboarded: true })
+
+      // The window must be up and painting before any start tab is probed —
+      // a never-shown window starves the page of frames and the card checks
+      // with it (the chrome flow surfaces early for the same reason).
+      surface(w)
+      w.tabs.setActiveVisible(true)
+
+      // Warm the renderer: the first start-page request of a dev run compiles
+      // the page, which can take longer than any sane settle. Absorb it on a
+      // throwaway tab (its enable-card claim is wiped right after).
+      const tWarm = w.tabs.createTab()
+      await settle(
+        async () =>
+          ((await tWarm.wc.executeJavaScript(`!!document.querySelector('.start-grid')`)) === true
+            ? true
+            : undefined),
+        60_000
+      )
+      w.tabs.closeTab(tWarm.id)
+      await delay(400)
+
+      // ---- 1. keepHistory off: the enable card, once, on the first tab ----
+      morningBrief.wipe()
+      const t1 = w.tabs.createTab()
+      const card1 = await settle(
+        async () =>
+          ((await t1.wc.executeJavaScript(`!!document.querySelector('.morning-card.enable')`)) === true
+            ? true
+            : undefined),
+        15_000
+      )
+      check('enable card shows when history is off', card1 === true)
+      await shoot(t1, 'enable-card.png')
+
+      // ---- 2. its one button flips the setting, and no brief materializes ----
+      await t1.wc.executeJavaScript(`(document.querySelector('.morning-enable-btn')?.click(), true)`)
+      const flipped = await settle(
+        async () => (settingsStore.get().keepHistory === true ? true : undefined),
+        6000
+      )
+      check("the card's button flips keepHistory on", flipped === true)
+      const confirm1 = JSON.parse(
+        (await t1.wc.executeJavaScript(
+          `JSON.stringify({done: (document.querySelector('.morning-enable-done')?.textContent ?? ''),
+                           sites: document.querySelectorAll('.morning-site').length})`
+        )) as string
+      ) as { done: string; sites: number }
+      check(
+        'confirmation line shows, no brief from an empty history',
+        confirm1.done.includes('History is on') && confirm1.sites === 0,
+        JSON.stringify(confirm1)
+      )
+
+      // ---- 3. fixture history + fake Ollama: the composed brief ----
+      historyStore.clear()
+      const now = Date.now()
+      historyStore.inject([
+        // revisit bait: frecent but 5 days adrift
+        { url: 'https://news.ycombinator.com/item?id=1', title: 'An engine that runs on tides', visitCount: 3, lastVisit: now - 5 * D },
+        { url: 'https://news.ycombinator.com/item?id=2', title: 'The forgotten harbor light', visitCount: 3, lastVisit: now - 5 * D },
+        { url: 'https://news.ycombinator.com/item?id=3', title: 'On small boats', visitCount: 3, lastVisit: now - 5 * D },
+        { url: 'https://news.ycombinator.com/', title: 'Hacker News', visitCount: 3, lastVisit: now - 5 * D },
+        // same-day control: heavily visited today must NOT read as "revisit"
+        { url: 'https://example.org/', title: 'Example Domain', visitCount: 9, lastVisit: now },
+        // topic cluster: 3 entries, 2 hosts
+        { url: 'https://bread.example/guide', title: 'Sourdough starter guide', visitCount: 2, lastVisit: now - 2 * D },
+        { url: 'https://loaves.example/feeding', title: 'Feeding a sourdough starter', visitCount: 2, lastVisit: now - 2 * D },
+        { url: 'https://bread.example/hydration', title: 'Sourdough starter hydration', visitCount: 2, lastVisit: now - 2 * D },
+        // channel page (handle) + watched control
+        { url: 'https://www.youtube.com/@fixturechannel', title: 'Fixture Channel - YouTube', visitCount: 4, lastVisit: now - 2 * D },
+        { url: 'https://www.youtube.com/watch?v=fixvid00002', title: 'Fixture video two - YouTube', visitCount: 1, lastVisit: now - 2 * D },
+        // padding to clear the 4-host / 8-entry thin gate
+        { url: 'https://tides.example/', title: 'Tide almanac', visitCount: 1, lastVisit: now - 3 * D },
+        { url: 'https://charts.example/', title: 'Coastal charts', visitCount: 1, lastVisit: now - 3 * D }
+      ])
+      morningBrief.wipe()
+      process.env['OLLAMA_HOST'] = `http://127.0.0.1:${port}`
+      process.env['OFFSHORE_TEST_YT_ORIGIN'] = `http://127.0.0.1:${port}`
+      const composed = await morningBrief.composeForTest()
+      say(`[flowtest] composed: ${JSON.stringify(composed && { source: composed.source, sites: composed.sites.length, topics: composed.topics.length, videos: composed.videos.length })}`)
+      const countAfterCompose = morningBrief.composeCountForTest()
+
+      const t2 = w.tabs.createTab()
+      say(`[flowtest] tabs: t1=${t1.id} t2=${t2.id} all=${JSON.stringify(w.tabs.tabs.map((t) => t.id))}`)
+      const probeBrief = async (tab: typeof t2): Promise<{
+        card: boolean
+        greeting: string
+        sites: string[]
+        topics: string[]
+        videos: string[]
+      } | undefined> => {
+        const raw = (await tab.wc.executeJavaScript(
+          `JSON.stringify({
+             card: !!document.querySelector('.morning-card'),
+             greeting: document.querySelector('.morning-greeting')?.textContent ?? '',
+             sites: [...document.querySelectorAll('.morning-site')].map((r) => r.textContent),
+             topics: [...document.querySelectorAll('.morning-topic')].map((r) => r.textContent),
+             videos: [...document.querySelectorAll('.morning-video .morning-main')].map((r) => r.textContent)
+           })`
+        )) as string
+        const p = JSON.parse(raw) as { card: boolean; greeting: string; sites: string[]; topics: string[]; videos: string[] }
+        return p.card ? p : undefined
+      }
+      const brief = await settle(async () => probeBrief(t2), 12_000)
+      say(`[flowtest] brief DOM: ${JSON.stringify(brief)}`)
+      check('the brief renders on the first start tab', !!brief)
+      check('Ollama composed the greeting', brief?.greeting === 'Fixture morning.', brief?.greeting)
+      const hnRow = (brief?.sites ?? []).find((s) => s.includes('news.ycombinator.com'))
+      check('revisit row surfaces the drifted site', !!hnRow)
+      check('siteNote merged onto the heuristic row', (hnRow ?? '').includes('your quiet regular'), hnRow)
+      const allRows = [...(brief?.sites ?? []), ...(brief?.topics ?? []), ...(brief?.videos ?? [])]
+      check('a same-day site is not "revisit" bait', !allRows.some((r) => r.includes('example.org')))
+      check(
+        'topic cluster surfaced',
+        (brief?.topics ?? []).some((t) => t.toLowerCase().includes('sourdough'))
+      )
+      check(
+        'one RSS pick, the watched video excluded',
+        brief?.videos.length === 1 && brief?.videos[0] === 'Fixture video one',
+        JSON.stringify(brief?.videos)
+      )
+      check(
+        'handle resolved over the fixture',
+        reqLog.some((l) => l.url.startsWith('/@fixturechannel'))
+      )
+      check(
+        'channel feed fetched over the fixture',
+        reqLog.some((l) => l.url.startsWith('/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv'))
+      )
+      check(
+        'no fetch carries a cookie',
+        reqLog.every((l) => l.cookie === null),
+        JSON.stringify(reqLog.filter((l) => l.cookie !== null).map((l) => l.url))
+      )
+      await shoot(t2, 'brief.png')
+
+      // ---- 4. digest hygiene: hosts and titles reach the model, URLs never ----
+      say(`[flowtest] fixture requests: ${JSON.stringify(reqLog.map((l) => `${l.method} ${l.url}`))}`)
+      const chat = reqLog.find((l) => l.method === 'POST' && l.url === '/api/chat')
+      check('the model was asked once', !!chat && reqLog.filter((l) => l.url === '/api/chat').length === 1)
+      check('digest names the top host', (chat?.body ?? '').includes('news.ycombinator.com'))
+      check(
+        'no URL reaches the model',
+        !!chat && !/https?:\/\//.test(chat.body) && !chat.body.includes('watch?v='),
+        (chat?.body ?? '').slice(0, 160)
+      )
+      let digestShape = ''
+      try {
+        const req = JSON.parse(chat?.body ?? '{}') as { messages?: { role: string; content: string }[] }
+        const digest = JSON.parse(req.messages?.find((m) => m.role === 'user')?.content ?? '{}') as Record<string, unknown>
+        const hostRows = (digest.topHosts as Record<string, unknown>[]) ?? []
+        digestShape = JSON.stringify({
+          keys: Object.keys(digest).sort(),
+          hostKeys: [...new Set(hostRows.flatMap((h) => Object.keys(h)))].sort(),
+          titles: Array.isArray(digest.recentTitles) && (digest.recentTitles as unknown[]).every((t) => typeof t === 'string')
+        })
+      } catch {
+        digestShape = 'unparseable'
+      }
+      check(
+        'digest shape is exactly hosts+titles+day+part',
+        digestShape ===
+          JSON.stringify({
+            keys: ['dayOfWeek', 'partOfDay', 'recentTitles', 'topHosts'],
+            hostKeys: ['daysSinceLast', 'host', 'visits'],
+            titles: true
+          }),
+        digestShape
+      )
+
+      // ---- 5. the day gate: a second tab is plain; a reload keeps the claim ----
+      const t3 = w.tabs.createTab()
+      await settle(
+        async () => ((await t3.wc.executeJavaScript(`!!document.querySelector('.start-grid')`)) === true ? true : undefined),
+        10_000
+      )
+      await delay(1200)
+      const t3card = await t3.wc.executeJavaScript(`!!document.querySelector('.morning-card')`)
+      check('second tab of the day is plain', t3card === false)
+      t2.wc.reload()
+      const briefBack = await settle(async () => probeBrief(t2), 12_000)
+      check("a reload keeps the claimant's brief", briefBack?.greeting === 'Fixture morning.')
+      check(
+        'the day is served from cache, never recomposed',
+        morningBrief.composeCountForTest() === countAfterCompose,
+        `composes=${morningBrief.composeCountForTest()} vs ${countAfterCompose}`
+      )
+
+      // ---- 6. dismiss consumes the day ----
+      await t2.wc.executeJavaScript(`(document.querySelector('.morning-dismiss')?.click(), true)`)
+      const dismissed = await settle(
+        async () => ((await morningBrief.status()).todayState === 'dismissed' ? true : undefined),
+        6000
+      )
+      check('dismiss lands in the stamp', dismissed === true)
+      const t4 = w.tabs.createTab()
+      await settle(
+        async () => ((await t4.wc.executeJavaScript(`!!document.querySelector('.start-grid')`)) === true ? true : undefined),
+        10_000
+      )
+      await delay(1200)
+      check(
+        'dismiss consumes the day',
+        (await t4.wc.executeJavaScript(`!!document.querySelector('.morning-card')`)) === false
+      )
+
+      // ---- 7. stamp rollover + Ollama genuinely gone: heuristics carry it ----
+      morningBrief.resetDayForTest()
+      process.env['OLLAMA_HOST'] = `http://127.0.0.1:${deadPort}`
+      const t5 = w.tabs.createTab()
+      const fallback = await settle(async () => probeBrief(t5), 15_000)
+      say(`[flowtest] fallback DOM: ${JSON.stringify(fallback)}`)
+      check('stamp rollover shows the brief again', !!fallback)
+      check(
+        'heuristic greeting, a plain sentence',
+        !!fallback && fallback.greeting !== 'Fixture morning.' && fallback.greeting.endsWith('.'),
+        fallback?.greeting
+      )
+      check(
+        'topics survive without the model',
+        (fallback?.topics ?? []).some((t) => t.toLowerCase().includes('sourdough'))
+      )
+      check('the cache says heuristics', morningBrief.cacheForTest()?.source === 'heuristics')
+
+      // ---- 8. thin history stays quiet and does not burn the day ----
+      morningBrief.resetDayForTest()
+      historyStore.clear()
+      const t6 = w.tabs.createTab()
+      await settle(
+        async () => ((await t6.wc.executeJavaScript(`!!document.querySelector('.start-grid')`)) === true ? true : undefined),
+        10_000
+      )
+      await delay(1500)
+      const t6card = await t6.wc.executeJavaScript(`!!document.querySelector('.morning-card')`)
+      const thinState = (await morningBrief.status()).todayState
+      check('a thin history shows nothing', t6card === false)
+      check('…and the day is not stamped', thinState === 'unseen', thinState)
+
+      // ---- 9. cleanup: nothing leaks into the next flow ----
+      settingsStore.set({ keepHistory: false }) // auto-clears history + wipes morning
+      morningBrief.wipe()
+      delete process.env['OLLAMA_HOST']
+      delete process.env['OFFSHORE_TEST_YT_ORIGIN']
+      server.close()
+      settingsStore.flush()
+      historyStore.flush()
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
     if (flow === 'slop') {
       const { settingsStore } = await import('./stores')
-      // the "Always show" click below lands in the shared profile's allowlist —
-      // strip it on the way in so the flow can run twice, and again on the way out
-      const stripAllow = (): void => {
+      // this flow flips the slop keys live — reset them on the way in so the
+      // flow can run twice, and again on the way out (a crashed run must not
+      // leave the shared profile with the detector off or the host quieted)
+      const resetSlop = (): void => {
         const s = settingsStore.get()
-        if (s.slop.allowlist.includes('127.0.0.1')) {
+        if (!s.slop.detector || !s.slop.highlight || s.slop.quiet.includes('127.0.0.1')) {
           settingsStore.set({
-            slop: { ...s.slop, allowlist: s.slop.allowlist.filter((h) => h !== '127.0.0.1') }
+            slop: { detector: true, highlight: true, quiet: s.slop.quiet.filter((h) => h !== '127.0.0.1') }
           })
         }
       }
-      stripAllow()
-      const sloppy = `<html><body><article>${Array.from({ length: 14 }, () => `
-        <p>In today's fast-paced digital landscape, it's important to note that businesses must
+      resetSlop()
+      const heavyPara = `In today's fast-paced digital landscape, it's important to note that businesses must
         delve into the ever-evolving landscape of technology. Moreover, this comprehensive guide
         will help you unlock the potential of your workflow. Furthermore, when it comes to
         navigating the complexities of modern tools, a holistic approach stands as a testament
         to innovation. Additionally, let's explore the rich tapestry of options — a treasure
         trove of possibilities. Ultimately, this game-changer will revolutionize the way you
         work, and not only saves time but also elevates your results. In conclusion, embark on
-        a journey to seamlessly integrate these solutions.</p>`).join('')}</article></body></html>`
-      const clean = `<html><body><article>${Array.from({ length: 14 }, (_, i) => `
-        <p>The tide came in around four. We hauled the skiff past the wrack line and Tom
+        a journey to seamlessly integrate these solutions.`
+      const honestPara = (i: number): string => `The tide came in around four. We hauled the skiff past the wrack line and Tom
         checked the traps while I sorted bait, cold to the wrist. Gulls worked the shallows
         where the creek cuts the flat. Paragraph ${i} of an ordinary account, written the way
-        a person writes when they are just saying what happened that afternoon.</p>`).join('')}</article></body></html>`
+        a person writes when they are just saying what happened that afternoon.`
+      const sloppy = `<html><body><article>${Array.from({ length: 14 }, () => `
+        <p>${heavyPara}</p>`).join('')}</article></body></html>`
+      const clean = `<html><body><article>${Array.from({ length: 14 }, (_, i) => `
+        <p>${honestPara(i)}</p>`).join('')}</article></body></html>`
+      // ~94 honest words carrying exactly two non-overlapping phrasebook hits
+      // (block score 2·25·(100/94) ≈ 53 → orange), and ~92 with exactly one
+      // (25·(100/92) ≈ 27 → yellow) — see scoreBlock in preload/internal.ts
+      const midPara = `The market opened at seven and the stalls went up in the usual order, fish first,
+        then bread. We found a plethora of small things worth carrying home: netting needles,
+        a brass cleat, two jars of beach plum jam. The old chandlery table was a treasure
+        trove for anyone patient enough to dig, and Tom dug until the vendor laughed at him.
+        We paid, argued about coffee, and walked back along the seawall while the fog burned
+        off the water. The gulls had opinions about all of it and said so from the rail.`
+      const lowPara = `Low tide left the flats bare past the second marker and we went out with rakes and
+        a bucket apiece. There were a myriad of small crabs working the weed line, and the
+        clams showed themselves the way they always do, two holes and a squirt. Tom kept
+        count out loud until he lost the number and started over. By noon we had enough for
+        chowder and a little extra for the neighbor who lends us her truck, so we called it
+        a day and hosed off the gear at the spigot.`
+      const mixed = `<html><body><article>
+        ${Array.from({ length: 4 }, (_, i) => `<p id="slop${i}">${heavyPara}</p>`).join('\n')}
+        <p id="mid0">${midPara}</p>
+        <p id="low0">${lowPara}</p>
+        ${Array.from({ length: 4 }, (_, i) => `<p id="honest${i}">${honestPara(i)}</p>`).join('\n')}
+        <ul><li id="nest0">${heavyPara}<p id="nest1">${heavyPara}</p></li></ul>
+        <p id="bg0" style="background-image:url(data:image/gif;base64,R0lGODlhAQABAAAAACw=)">${heavyPara}</p>
+        <p id="stub0">We delve into old maps.</p>
+      </article></body></html>`
       const server = nodeHttp.createServer((req, res) => {
         res.setHeader('content-type', 'text/html')
-        res.end(req.url === '/slop' ? sloppy : clean)
+        res.end(req.url === '/slop' ? sloppy : req.url?.startsWith('/mixed') ? mixed : clean)
       })
       await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
       const port = (server.address() as { port: number }).port
@@ -573,7 +982,7 @@ function setupTestFlows(): void {
         return settle(async () => tab()?.slop, 12_000)
       }
 
-      // -- a heavy page gets scored, veiled, and worn on the chrome --
+      // -- a heavy page gets scored and worn on the chrome --
       w.tabs.navigate(null, `http://127.0.0.1:${port}/slop`)
       const report = await freshReport()
       say(
@@ -583,13 +992,16 @@ function setupTestFlows(): void {
           .join(', ')}`
       )
       check('slop page flagged', (report?.score ?? 0) >= SLOP_FLAG_MIN, `score=${report?.score}`)
-      check('slop page scores veil-heavy', (report?.score ?? 0) >= SLOP_VEIL_MIN, `score=${report?.score}`)
+      check('slop page scores heavy', (report?.score ?? 0) >= SLOP_HEAVY_MIN, `score=${report?.score}`)
       check('report carries its receipts', (report?.signals.length ?? 0) > 0)
-      const veiled = await settle(
-        async () => ((await inPage(`!!document.getElementById('offshore-slop-veil')`)) ? true : undefined),
-        4000
+      const census = report?.blocks
+      check(
+        'report counts its blocks',
+        (census?.total ?? 0) >= 14 && (census?.marked ?? 0) >= 14 && (census?.heavy ?? 0) >= 14,
+        JSON.stringify(census)
       )
-      check('veil raised over the page', tab()?.slop?.veil === 'up' && veiled === true)
+      const noVeil = await inPage(`!document.getElementById('offshore-slop-veil')`)
+      check('no veil ever again', !('veil' in ((report ?? {}) as object)) && noVeil === true)
 
       const chip = await settle(async () => {
         const raw = (await inChrome(
@@ -618,45 +1030,205 @@ function setupTestFlows(): void {
         const raw = (await inChrome(
           `JSON.stringify({panel: !!document.querySelector('.slop-panel'),
                            signals: document.querySelectorAll('.slop-signal').length,
-                           read: !!document.querySelector('.slop-action.primary')})`
+                           sections: document.querySelector('.slop-sections')?.textContent ?? '',
+                           primary: !!document.querySelector('.slop-action.primary'),
+                           ticks: document.querySelectorAll('.slop-meter-tick').length})`
         )) as string
-        const p = JSON.parse(raw) as { panel: boolean; signals: number; read: boolean }
+        const p = JSON.parse(raw) as {
+          panel: boolean
+          signals: number
+          sections: string
+          primary: boolean
+          ticks: number
+        }
         return p.panel ? p : undefined
       }, 4000)
       check('chip opens the slop report', !!panel)
       check('report lists the tells it counted', (panel?.signals ?? 0) > 0, `signals=${panel?.signals}`)
-      check('report offers Read anyway while veiled', panel?.read === true)
+      check(
+        'report tallies the barred sections',
+        /\d+ of \d+ prose sections/.test(panel?.sections ?? ''),
+        JSON.stringify(panel?.sections)
+      )
+      check('no Read anyway, no primary action', panel?.primary === false)
+      check('meter wears its two threshold ticks', panel?.ticks === 2, `ticks=${panel?.ticks}`)
       await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
-
-      // -- Read anyway lifts the veil for this visit --
-      await inPage(
-        `document.getElementById('offshore-slop-veil').shadowRoot.querySelector('.read').click()`
-      )
-      const lifted = await settle(async () => (tab()?.slop?.veil === 'lifted' ? true : undefined), 4000)
-      const overlayGone = await inPage(`!document.getElementById('offshore-slop-veil')`)
-      check('Read anyway lifts the veil', lifted === true && overlayGone === true)
-
-      // -- a fresh load is a fresh offer --
-      tab()!.wc.reload()
-      const reVeiled = await settle(async () => (tab()?.slop?.veil === 'up' ? true : undefined), 12_000)
-      check('a fresh load veils again', reVeiled === true)
-
-      // -- Always show this site spares it from then on --
-      await inPage(
-        `document.getElementById('offshore-slop-veil').shadowRoot.querySelector('.allow').click()`
-      )
-      const allowed = await settle(
-        async () => (settingsStore.get().slop.allowlist.includes('127.0.0.1') ? true : undefined),
+      const panelGone = await settle(
+        async () => ((await inChrome(`!document.querySelector('.slop-panel')`)) ? true : undefined),
         4000
       )
-      check('Always show adds the site to the never-veil list', allowed === true)
-      w.tabs.navigate(null, `http://127.0.0.1:${port}/slop`)
-      const spared = await freshReport()
+      check('Escape closes the report', panelGone === true)
+
+      // -- the engineered mix: tiers, geometry, dedup, page art, stubs --
+      w.tabs.navigate(null, `http://127.0.0.1:${port}/mixed`)
+      const mixedReport = await freshReport()
       check(
-        'allowed site keeps the chip, loses the veil',
-        (spared?.score ?? 0) >= SLOP_VEIL_MIN && spared?.veil === undefined,
-        `score=${spared?.score} veil=${spared?.veil}`
+        'mixed census: 8 of 13 marked, 6 heavy',
+        mixedReport?.blocks.total === 13 && mixedReport?.blocks.marked === 8 && mixedReport?.blocks.heavy === 6,
+        JSON.stringify(mixedReport?.blocks)
       )
+      const geoRaw = (await inPage(
+        `JSON.stringify({
+           redTier:   document.getElementById('slop0').getAttribute('data-offshore-slop'),
+           midTier:   document.getElementById('mid0').getAttribute('data-offshore-slop'),
+           lowTier:   document.getElementById('low0').getAttribute('data-offshore-slop'),
+           img:       document.getElementById('slop0').style.backgroundImage,
+           size:      document.getElementById('slop0').style.backgroundSize,
+           rep:       document.getElementById('slop0').style.backgroundRepeat,
+           pos:       document.getElementById('slop0').style.backgroundPosition,
+           midColor:  document.getElementById('mid0').style.backgroundImage,
+           honest:    document.getElementById('honest0').hasAttribute('data-offshore-slop'),
+           honestImg: document.getElementById('honest0').style.backgroundImage,
+           nestOuter: document.getElementById('nest0').hasAttribute('data-offshore-slop'),
+           nestInner: document.getElementById('nest1').hasAttribute('data-offshore-slop'),
+           bgKept:    document.getElementById('bg0').style.backgroundImage.includes('url('),
+           bgMarked:  document.getElementById('bg0').hasAttribute('data-offshore-slop'),
+           stub:      document.getElementById('stub0').hasAttribute('data-offshore-slop')
+         })`
+      )) as string
+      say(`[flowtest] mixed geometry: ${geoRaw}`)
+      const geo = JSON.parse(geoRaw) as {
+        redTier: string | null
+        midTier: string | null
+        lowTier: string | null
+        img: string
+        size: string
+        rep: string
+        pos: string
+        midColor: string
+        honest: boolean
+        honestImg: string
+        nestOuter: boolean
+        nestInner: boolean
+        bgKept: boolean
+        bgMarked: boolean
+        stub: boolean
+      }
+      check('tiers graded per block', geo.redTier === 'red' && geo.midTier === 'orange' && geo.lowTier === 'yellow')
+      check(
+        'bar painted as an edge stripe',
+        geo.img.includes('linear-gradient') && geo.size === '3px 100%' && geo.rep === 'no-repeat' && geo.pos === 'left top'
+      )
+      check(
+        'tier carries its color',
+        geo.img.includes('rgba(219, 68, 55') && geo.midColor.includes('rgba(224, 122, 51')
+      )
+      check('honest prose wears nothing', geo.honest === false && geo.honestImg === '')
+      check('nested prose wears one bar', geo.nestOuter === true && geo.nestInner === false)
+      check('page art never clobbered', geo.bgKept === true && geo.bgMarked === true)
+      check('stubs stay uncollected', geo.stub === false)
+
+      // eyeball artifact: the bars, photographed on the engineered mix
+      const shotDir = process.env['OFFSHORE_SHOT']
+      if (shotDir) {
+        mkdirSync(shotDir, { recursive: true })
+        surface(w)
+        w.tabs.setActiveVisible(true)
+        await delay(900)
+        const img = await tab()!.wc.capturePage()
+        writeFileSync(join(shotDir, 'mixed-bars.png'), img.toPNG())
+        say(`[flowtest] wrote ${join(shotDir, 'mixed-bars.png')}`)
+      }
+
+      // -- an SPA re-render sheds every scored element; the rescan re-owns it --
+      const preMarks = (await inPage(
+        `(() => {
+           const a = document.querySelector('article')
+           const before = document.querySelectorAll('[data-offshore-slop]').length
+           a.replaceChildren(...[...a.children].map((c) => c.cloneNode(true)))
+           const p = document.createElement('p')
+           p.id = 'spa0'
+           p.textContent = ${JSON.stringify(heavyPara)}
+           a.appendChild(p)
+           history.pushState({}, '', '/mixed2')
+           return before
+         })()`
+      )) as number
+      const spa = await settle(async () => {
+        const raw = (await inPage(
+          `JSON.stringify({
+             marks: document.querySelectorAll('[data-offshore-slop]').length,
+             spaTier: document.getElementById('spa0')?.getAttribute('data-offshore-slop') ?? '',
+             spaImg: document.getElementById('spa0')?.style.backgroundImage ?? ''})`
+        )) as string
+        const p = JSON.parse(raw) as { marks: number; spaTier: string; spaImg: string }
+        return p.spaTier === 'red' ? p : undefined
+      }, 12_000)
+      check(
+        'bars survive an SPA re-render',
+        spa?.marks === preMarks + 1 && spa?.spaTier === 'red' && (spa?.spaImg ?? '').includes('linear-gradient'),
+        `pre=${preMarks} ${JSON.stringify(spa)}`
+      )
+
+      // -- the switches act on the page you're looking at --
+      const s1 = settingsStore.get()
+      settingsStore.set({ slop: { ...s1.slop, highlight: false } })
+      const barsOff = await settle(async () => {
+        const raw = (await inPage(
+          `JSON.stringify({img: document.getElementById('slop0').style.backgroundImage,
+                           tier: document.getElementById('slop0').getAttribute('data-offshore-slop') ?? ''})`
+        )) as string
+        const p = JSON.parse(raw) as { img: string; tier: string }
+        return p.img === '' ? p : undefined
+      }, 8000)
+      check('bars off, marks stay', barsOff?.img === '' && barsOff?.tier === 'red', JSON.stringify(barsOff))
+      settingsStore.set({ slop: { ...settingsStore.get().slop, highlight: true } })
+      const barsBack = await settle(
+        async () =>
+          ((await inPage(
+            `document.getElementById('slop0').style.backgroundImage.includes('linear-gradient')`
+          )) === true
+            ? true
+            : undefined),
+        8000
+      )
+      check('bars return with the switch', barsBack === true)
+      settingsStore.set({ slop: { ...settingsStore.get().slop, detector: false } })
+      const stripped = await settle(async () => {
+        const marks = (await inPage(`document.querySelectorAll('[data-offshore-slop]').length`)) as number
+        const chipGone = (await inChrome(`!document.querySelector('.slop-chip')`)) as boolean
+        return marks === 0 && tab()?.slop === undefined && chipGone ? true : undefined
+      }, 8000)
+      check('detector off strips everything', stripped === true)
+      settingsStore.set({ slop: { ...settingsStore.get().slop, detector: true } })
+      const rescored = await settle(async () => tab()?.slop, 12_000)
+      check('detector back on re-scores', (rescored?.score ?? 0) >= SLOP_HEAVY_MIN, `score=${rescored?.score}`)
+
+      // -- a quieted host: no chip, no bars, the verdict stands for SiteInfo --
+      const sq = settingsStore.get().slop
+      settingsStore.set({
+        slop: { ...sq, quiet: [...sq.quiet.filter((h) => h !== '127.0.0.1'), '127.0.0.1'] }
+      })
+      const quieted = await settle(async () => {
+        const marks = (await inPage(`document.querySelectorAll('[data-offshore-slop]').length`)) as number
+        const chipGone = (await inChrome(`!document.querySelector('.slop-chip')`)) as boolean
+        return marks === 0 && chipGone && (tab()?.slop?.score ?? 0) >= SLOP_FLAG_MIN ? true : undefined
+      }, 8000)
+      check('quiet host: no chip, no bars, verdict kept', quieted === true, `score=${tab()?.slop?.score}`)
+      await inChrome(`document.querySelector('.omni-tune')?.click()`)
+      const si = await settle(async () => {
+        const raw = (await inChrome(
+          `JSON.stringify({panel: !!document.querySelector('.site-info'),
+                           text: [...document.querySelectorAll('.site-info .si-text')].map((t) => t.textContent).join('|'),
+                           wake: [...document.querySelectorAll('.site-info .si-action')].some((b) => b.textContent === 'Wake')})`
+        )) as string
+        const p = JSON.parse(raw) as { panel: boolean; text: string; wake: boolean }
+        return p.panel ? p : undefined
+      }, 4000)
+      check(
+        'SiteInfo keeps the score and offers Wake',
+        (si?.text ?? '').includes('Detector quiet here — would score') && si?.wake === true,
+        JSON.stringify(si)
+      )
+      await inChrome(
+        `[...document.querySelectorAll('.site-info .si-action')].find((b) => b.textContent === 'Wake')?.click()`
+      )
+      const woken = await settle(async () => {
+        const chipBack = (await inChrome(`!!document.querySelector('.slop-chip')`)) as boolean
+        return !settingsStore.get().slop.quiet.includes('127.0.0.1') && chipBack ? true : undefined
+      }, 8000)
+      check('Wake un-quiets and the chip returns', woken === true)
+      await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
 
       // -- honest prose stays untouched --
       w.tabs.navigate(null, `http://127.0.0.1:${port}/clean`)
@@ -665,8 +1237,10 @@ function setupTestFlows(): void {
       check('honest prose not flagged', (cleanReport?.score ?? 0) < SLOP_FLAG_MIN, `score=${cleanReport?.score}`)
       const cleanChip = await inChrome(`!document.querySelector('.slop-chip')`)
       check('no chip on honest prose', cleanChip === true)
+      const cleanMarks = await inPage(`document.querySelectorAll('[data-offshore-slop]').length`)
+      check('no marks on honest pages', cleanMarks === 0, `marks=${cleanMarks}`)
 
-      stripAllow()
+      resetSlop()
       // flows leave over app.exit, which skips the debounced save — write now
       settingsStore.flush()
       server.close()
@@ -675,314 +1249,1044 @@ function setupTestFlows(): void {
       return
     }
 
-    if (flow === 'cleaner') {
+    if (flow === 'shield') {
       /**
-       * The two built-ins working together: the slop scan washes flagged
-       * paragraphs by tier, Clean mode hides exactly what the wash marked,
-       * Focus mode hides the furniture — and both survive a reload.
+       * The built-in Shield end to end, offline: an empty list set plus
+       * fixture custom rules ride the same engine paths the real lists do —
+       * network block, wire silence, per-tab and lifetime counts, cosmetic
+       * hide, per-site allow, and the row in Settings → Extensions flipping
+       * the whole engine live. No assertion depends on a live list fetch.
        */
-      const slopPara = `In today's fast-paced digital landscape, it's important to note that you must
-        delve into the ever-evolving landscape of tools. Moreover, this comprehensive guide will
-        unlock the potential of your workflow — a game-changer that will revolutionize the way you
-        work. Furthermore, when it comes to navigating the complexities of modern software, a
-        holistic approach stands as a testament to seamless integration. Ultimately, embark on a
-        journey to elevate your results with this treasure trove of actionable insights.`
-      const honestPara = `The tide came in around four and we hauled the skiff past the wrack line.
-        Tom checked the traps while I sorted bait, cold to the wrist, and the gulls worked the
-        shallows where the creek cuts the flat. Nothing about the afternoon asked to be improved.
-        We tied off at the pilings, hosed the deck, and walked up the hill before the light went.`
-      const page = `<html><body>
-        <div id="sticky" style="position:fixed;top:0;left:0;right:0;height:48px;background:#333;color:#fff">subscribe to our newsletter</div>
-        <main>
-          <article>
-            ${Array.from({ length: 3 }, (_, i) => `<p id="slop${i}">${slopPara}</p>`).join('')}
-            <p id="honest">${honestPara}</p>
-          </article>
-        </main>
-        <aside id="rail" class="sidebar-related"><p>You may also like: ten weird tricks.</p></aside>
-      </body></html>`
-      const server = nodeHttp.createServer((_req, res) => {
-        res.setHeader('content-type', 'text/html')
-        res.end(page)
+      const { settingsStore, shieldStatsStore } = await import('./stores')
+      const { adblock } = await import('./adblock')
+
+      const hits = new Map<string, number>()
+      const hit = (p: string): number => hits.get(p) ?? 0
+      const page = `<html><body><div class="ad-banner">AD</div><p id="content">hello</p>
+        <script src="/ads/ad.js"></script><img src="/track/pixel.gif"></body></html>`
+      const server = nodeHttp.createServer((req, res) => {
+        const path = (req.url ?? '/').split('?')[0]
+        hits.set(path, (hits.get(path) ?? 0) + 1)
+        if (path === '/ads/ad.js') {
+          res.setHeader('content-type', 'text/javascript')
+          res.end('window.adLoaded = true')
+        } else if (path === '/track/pixel.gif') {
+          res.setHeader('content-type', 'image/gif')
+          res.end(Buffer.from('R0lGODlhAQABAAAAACw=', 'base64'))
+        } else {
+          res.setHeader('content-type', 'text/html')
+          res.end(page)
+        }
       })
       await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
       const port = (server.address() as { port: number }).port
-      const { pageEditsStore } = await import('./pageedits')
-      const { settingsStore } = await import('./stores')
-      pageEditsStore.clear('127.0.0.1')
+      const tab = (): typeof w.tabs.activeTab => w.tabs.activeTab
+      const inPage = (js: string): Promise<unknown> => tab()!.wc.executeJavaScript(js)
 
-      w.tabs.navigate(null, `http://127.0.0.1:${port}/`)
-      const tab = w.tabs.activeTab!
+      // proof the deep-merge delivered the full default set to this profile —
+      // logged before the flow touches the lists, so a pre-seeded old-shape
+      // settings.json shows its migration here
+      say(`[flowtest] lists at boot: ${JSON.stringify(settingsStore.get().adblock.lists)}`)
 
-      // 1. the wash: slop paragraphs wear marks and tints, honest prose doesn't
-      const washed = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          marked: document.querySelectorAll('[data-offshore-slop]').length,
-          red: document.getElementById('slop0').getAttribute('data-offshore-slop'),
-          tint: document.getElementById('slop0').style.backgroundColor !== '',
-          honest: document.getElementById('honest').hasAttribute('data-offshore-slop')
-        })`)) as string
-        return /"marked":[1-9]/.test(d) ? d : undefined
-      }, 8000)
-      say(`[flowtest] wash: ${washed}`)
-      check('slop paragraphs wear the mark', /"marked":3/.test(String(washed)), String(washed))
-      check('the heaviest tier is red', /"red":"red"/.test(String(washed)))
-      check('flagged blocks are tinted', /"tint":true/.test(String(washed)))
-      check('honest prose is left alone', /"honest":false/.test(String(washed)))
+      // -- 1. the default set is uBO's out-of-box lists (+ Harbor's cookie backstop) --
+      const defaults = ADBLOCK_LISTS.filter((l) => l.defaultOn).map((l) => l.id).sort()
+      const wanted = [
+        'easylist', 'easylist-cookie', 'easyprivacy', 'peter-lowe', 'ublock-ads', 'ublock-badware',
+        'ublock-privacy', 'ublock-quick-fixes', 'ublock-unbreak', 'urlhaus'
+      ]
+      check(
+        "defaults match uBO's out-of-box set (+ easylist-cookie)",
+        JSON.stringify(defaults) === JSON.stringify(wanted),
+        defaults.join(',')
+      )
 
-      // 2. Clean mode hides exactly what the wash marked
-      pageEditsStore.setMode('127.0.0.1', 'clean', true)
-      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
-      const cleaned = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          slop: getComputedStyle(document.getElementById('slop0')).display,
-          honest: getComputedStyle(document.getElementById('honest')).display
-        })`)) as string
-        return d.includes('"slop":"none"') ? d : undefined
-      }, 5000)
-      say(`[flowtest] clean: ${cleaned}`)
-      check('Clean hides the flagged prose', String(cleaned).includes('"slop":"none"'))
-      check('Clean spares the honest paragraph', String(cleaned).includes('"honest":"block"'))
+      // -- setup: offline-deterministic engine — no lists, fixture custom rules --
+      const before = settingsStore.get().adblock
+      const statsBefore = shieldStatsStore.get().blockedTotal
+      settingsStore.set({
+        adblock: {
+          enabled: true,
+          lists: Object.fromEntries(ADBLOCK_LISTS.map((l) => [l.id, false])),
+          customRules: '/ads/ad.js$script\n/track/pixel.gif$image\n127.0.0.1##.ad-banner',
+          allowlist: []
+        }
+      })
 
-      // 3. Focus mode hides the rail and the sticky bar, not the article
-      pageEditsStore.setMode('127.0.0.1', 'focus', true)
-      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
-      const focused = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          rail: getComputedStyle(document.getElementById('rail')).display,
-          sticky: getComputedStyle(document.getElementById('sticky')).display,
-          article: getComputedStyle(document.querySelector('article')).display
-        })`)) as string
-        return d.includes('"rail":"none"') && d.includes('"sticky":"none"') ? d : undefined
-      }, 5000)
-      say(`[flowtest] focus: ${focused}`)
-      check('Focus hides the related rail', String(focused).includes('"rail":"none"'))
-      check('Focus hides the sticky bar', String(focused).includes('"sticky":"none"'))
-      check('Focus leaves the article standing', String(focused).includes('"article":"block"'))
+      // rebuild is async with no exposed completion — navigate a tokened URL
+      // and retry until the engine answers; only the judged load counts
+      let nav = 0
+      const loadPage = async (): Promise<void> => {
+        nav += 1
+        w.tabs.navigate(null, `http://127.0.0.1:${port}/page?t=${nav}`)
+        await settle(
+          async () =>
+            ((await inPage(
+              `location.search === '?t=${nav}' && document.readyState === 'complete'`
+            )) === true
+              ? true
+              : undefined),
+          8000
+        )
+        await delay(300)
+      }
+      const adLoaded = async (): Promise<boolean> => (await inPage('window.adLoaded === true')) === true
+      const converge = async (want: boolean, tries: number): Promise<boolean> => {
+        for (let i = 0; i < tries; i++) {
+          await loadPage()
+          if ((await adLoaded()) === want) return true
+          await delay(1500)
+        }
+        return false
+      }
+      const engineUp = await converge(false, 12)
+      say(`[flowtest] engine converged: ${engineUp}`)
 
-      // 4. both switches survive a reload — Clean has to wait for the wash
-      tab.wc.reload()
-      const survived = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          slop: getComputedStyle(document.getElementById('slop0')).display,
-          rail: getComputedStyle(document.getElementById('rail')).display
-        })`).catch(() => '')) as string
-        return d.includes('"slop":"none"') && d.includes('"rail":"none"') ? d : undefined
+      // -- 2–3. the judged load: blocked in the page, silent on the wire --
+      hits.clear()
+      await loadPage()
+      check('known-bad script blocked', (await inPage('window.adLoaded === undefined')) === true)
+      check(
+        'blocked request never reached the wire',
+        hit('/page') >= 1 && hit('/ads/ad.js') === 0 && hit('/track/pixel.gif') === 0,
+        JSON.stringify([...hits])
+      )
+
+      // -- 4. the per-tab count reaches TabInfo --
+      const counted = await settle(async () => {
+        const n = adblock.counts.get(tab()!.id) ?? 0
+        return n >= 2 ? n : undefined
+      }, 4000)
+      check('blocked count increments', (counted ?? 0) >= 2, `count=${counted ?? adblock.counts.get(tab()!.id)}`)
+
+      // -- 5. the cosmetic rule hides the banner --
+      const hidden = await settle(
+        async () =>
+          ((await inPage(`getComputedStyle(document.querySelector('.ad-banner')).display`)) === 'none'
+            ? true
+            : undefined),
+        6000
+      )
+      check('cosmetic rule hides the banner', hidden === true)
+
+      // -- 6. the lifetime ledger advances --
+      const lifetime = await settle(async () => {
+        const n = shieldStatsStore.get().blockedTotal
+        return n >= statsBefore + 2 ? n : undefined
+      }, 4000)
+      check(
+        'lifetime counter advances',
+        (lifetime ?? 0) >= statsBefore + 2,
+        `total=${shieldStatsStore.get().blockedTotal} before=${statsBefore}`
+      )
+
+      // -- 7. per-site allow un-breaks the page (and the count reads honest) --
+      const allowed = adblock.toggleSite('127.0.0.1')
+      const through = await converge(true, 6)
+      const countAllowed = adblock.counts.get(tab()!.id) ?? 0
+      check(
+        'per-site allow lets the page through',
+        allowed === true && through && countAllowed === 0,
+        `allowed=${allowed} through=${through} count=${countAllowed}`
+      )
+
+      // -- 8. revoking the allow restores blocking --
+      const revoked = adblock.toggleSite('127.0.0.1')
+      const blockedAgain = await converge(false, 6)
+      check('revoking allow restores blocking', revoked === false && blockedAgain, `revoked=${revoked}`)
+
+      // -- 9. Shield worn as a built-in in Settings → Extensions --
+      const openExtensions = async (): Promise<void> => {
+        w.tabs.navigate(null, 'offshore://settings')
+        await settle(
+          async () =>
+            ((await inPage(`!!document.querySelector('.settings-nav')`).catch(() => false)) === true
+              ? true
+              : undefined),
+          10_000
+        )
+        await inPage(
+          `[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Extensions')?.click(), 0`
+        )
+      }
+      await openExtensions()
+      const row = await settle(async () => {
+        const raw = (await inPage(
+          `(() => {
+             const t = [...document.querySelectorAll('.row-title')].find((el) => el.textContent.trim().startsWith('Shield'))
+             return JSON.stringify({ title: !!t, sub: t?.querySelector('.row-sub')?.textContent ?? '' })
+           })()`
+        )) as string
+        const p = JSON.parse(raw) as { title: boolean; sub: string }
+        return p.title && p.sub.includes('blocked so far') ? p : undefined
       }, 10_000)
-      check('Clean and Focus survive a reload', survived !== undefined, String(survived))
+      check('Shield worn as a built-in', !!row, JSON.stringify(row))
 
-      // 5. the highlight switch clears the tint but keeps the verdict machinery
-      pageEditsStore.setMode('127.0.0.1', 'clean', false)
-      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
-      const s = settingsStore.get()
-      settingsStore.set({ slop: { ...s.slop, highlight: false } })
-      const untinted = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          tint: document.getElementById('slop0').style.backgroundColor,
-          marked: document.querySelectorAll('[data-offshore-slop]').length
-        })`)) as string
-        return d.includes('"tint":""') ? d : undefined
-      }, 5000)
-      say(`[flowtest] highlight off: ${untinted}`)
-      check('turning highlight off clears the wash', String(untinted).includes('"tint":""'))
-      check('the marks stay for Clean mode', /"marked":3/.test(String(untinted)))
+      // -- 10. the row's toggle is the engine's switch, both directions, live --
+      const clickShieldToggle = async (): Promise<void> => {
+        await inPage(
+          `[...document.querySelectorAll('.row-title')]
+             .find((el) => el.textContent.trim().startsWith('Shield'))
+             ?.closest('.row')?.querySelector('button.toggle')?.click(), 0`
+        )
+      }
+      await clickShieldToggle()
+      const offInStore = await settle(
+        async () => (settingsStore.get().adblock.enabled === false ? true : undefined),
+        6000
+      )
+      const engineOff = offInStore === true && (await converge(true, 6))
+      check('extension row toggles the Shield off live', engineOff, `store=${offInStore}`)
+      await openExtensions()
+      await clickShieldToggle()
+      const onInStore = await settle(
+        async () => (settingsStore.get().adblock.enabled === true ? true : undefined),
+        6000
+      )
+      // the row's on-flip restores the standard lists (a live fetch) — put the
+      // flow back on its offline fixture set; rebuilds serialize, so the last
+      // set wins no matter how slowly the list build lands
+      settingsStore.set({
+        adblock: {
+          ...settingsStore.get().adblock,
+          lists: Object.fromEntries(ADBLOCK_LISTS.map((l) => [l.id, false]))
+        }
+      })
+      const engineBack = onInStore === true && (await converge(false, 20))
+      check('extension row toggles the Shield back on live', engineBack, `store=${onInStore}`)
 
-      // 6. switches off restore the page
-      pageEditsStore.setMode('127.0.0.1', 'focus', false)
-      for (const win of windows) win.tabs.refreshPageEdits('127.0.0.1')
-      const restored = await settle(async () => {
-        const d = (await tab.wc.executeJavaScript(`JSON.stringify({
-          slop: getComputedStyle(document.getElementById('slop0')).display,
-          rail: getComputedStyle(document.getElementById('rail')).display
-        })`)) as string
-        return d.includes('"slop":"block"') && d.includes('"rail":"block"') ? d : undefined
-      }, 5000)
-      check('everything comes back when the modes go off', restored !== undefined, String(restored))
-      // scoped to this flow's host — the shared profile may hold the human's own edits
-      check('a hollow site leaves the ledger', pageEditsStore.forHost('127.0.0.1') === undefined)
+      say(`[flowtest] lifetime stats: ${JSON.stringify(shieldStatsStore.get())}`)
 
-      settingsStore.set({ slop: { ...settingsStore.get().slop, highlight: true } })
-      pageEditsStore.clear('127.0.0.1')
-      // flows leave over app.exit, which skips the debounced save — write now
-      pageEditsStore.flush()
+      // teardown: app.exit skips debounced saves, and mutated settings must
+      // not leak into the next flow — restore, then write now
+      settingsStore.set({ adblock: before })
       settingsStore.flush()
+      shieldStatsStore.flush()
       server.close()
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)
       return
     }
 
-    if (flow === 'pageedits') {
+    if (flow === 'focus') {
       /**
-       * The whole life of a page edit: made with the pointer, remembered by
-       * main, replayed onto a reload, defended against a re-render, and taken
-       * back. The page is a little SPA on purpose — its banner re-inserts
-       * itself every 700ms, which is exactly the fight LinkedIn would put up.
+       * The Focus built-in, end to end: strip (tiers, token tripwires),
+       * compaction (the emptied grid track really goes to the content, the
+       * comments hole closes), the observer against a page that fights back,
+       * per-site persistence across a reload, a full live restore, and the
+       * master switch. The grid fixture is built so naive hiding would leave
+       * an obvious hole.
        */
-      const page = `<html><body>
-        <div id="banner" style="height:60px;background:#c00">the banner</div>
-        <main>
-          <h1 id="headline">Original headline</h1>
-          <article id="story"><p>The story text.</p></article>
-          <x-widget id="widget"></x-widget>
-        </main>
+      const prose = Array.from({ length: 10 }, (_, i) =>
+        `The tide came in around four and we hauled the skiff past the wrack line. Tom checked
+         the traps while I sorted bait, cold to the wrist, and the gulls worked the shallows
+         where the creek cuts the flat. Sentence ${i} of a plain account of the afternoon.`
+      ).join(' ')
+      const gridPage = `<html><body>
+        <div id="cookie" class="cookie-banner"
+             style="position:fixed;bottom:0;left:0;right:0;height:64px;background:#222;color:#fff">
+          We value your privacy</div>
+        <div id="sticky" style="position:fixed;top:0;left:0;right:0;height:48px;background:#333;color:#fff">
+          subscribe to our newsletter</div>
+        <div id="shell" style="display:grid;grid-template-columns:220px 1fr 300px;gap:24px;padding:24px">
+          <nav id="leftnav"><a href="#a">Section A</a><a href="#b">Section B</a></nav>
+          <main id="content">
+            <article id="story">
+              <h1>An honest page</h1>
+              <p id="p1">${prose}</p>
+              <div id="inline-promo" class="promo-box" style="height:120px">Subscribe now!</div>
+              <p id="p2">${prose}</p>
+              <p class="commentary">A paragraph of commentary that must survive.</p>
+              <div class="broadcast" id="tripwire-broadcast">Broadcast schedule (must survive)</div>
+              <div class="badge" id="tripwire-badge">A badge (must survive)</div>
+            </article>
+            <section id="comments" style="min-height:400px"><h2>Comments</h2><p>hot takes</p></section>
+          </main>
+          <div id="railwrap" style="padding:24px;border-left:1px solid #ccc">
+            <aside id="rail" class="sidebar">
+              <div class="advert" id="ad1" style="height:600px">ad</div>
+              <div class="related" id="rel">You may also like</div>
+            </aside>
+          </div>
+        </div>
+        <footer id="footer">colophon</footer>
         <script>
-          customElements.define('x-widget', class extends HTMLElement {
-            constructor() {
-              super()
-              const root = this.attachShadow({ mode: 'open' })
-              const b = document.createElement('button')
-              b.id = 'inner'
-              b.textContent = 'in the shadows'
-              root.append(b)
-            }
-          })
-          setInterval(() => {
-            if (!document.getElementById('banner')) {
+          setInterval(() => {                       // the page fights back
+            if (!document.getElementById('sticky')) {
               const d = document.createElement('div')
-              d.id = 'banner'
-              d.style.cssText = 'height:60px;background:#c00'
-              d.textContent = 'the banner is back'
+              d.id = 'sticky'
+              d.style.cssText = 'position:fixed;top:0;left:0;right:0;height:48px;background:#333'
+              d.textContent = 'the bar is back'
               document.body.prepend(d)
             }
           }, 700)
         </script>
       </body></html>`
-      const server = nodeHttp.createServer((_req, res) => {
+      const flexPage = `<html><body>
+        <div id="row" style="display:flex;gap:24px">
+          <main id="main" style="width:70%"><p>${prose}</p></main>
+          <aside id="aside" class="sidebar" style="width:30%">rail</aside>
+        </div>
+      </body></html>`
+      const plainPage = `<html><body>
+        <article id="plainstory">
+          <h1>Nothing to strip</h1>
+          <p>${prose}</p>
+          <p class="commentary">A paragraph of commentary that must survive.</p>
+          <div class="broadcast">Broadcast schedule (must survive)</div>
+          <div class="badge">A badge (must survive)</div>
+        </article>
+      </body></html>`
+      const server = nodeHttp.createServer((req, res) => {
         res.setHeader('content-type', 'text/html')
-        res.end(page)
+        res.end(req.url === '/flexcase' ? flexPage : req.url === '/plain' ? plainPage : gridPage)
       })
       await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
       const port = (server.address() as { port: number }).port
-      const { pageEditsStore } = await import('./pageedits')
-      // the dev profile persists across runs; this flow owns its host's ledger
-      pageEditsStore.clear('127.0.0.1')
+      const { focusStore } = await import('./focus')
+      const { settingsStore } = await import('./stores')
+      // this flow owns its host's Focus flag, coming and going
+      focusStore.set('127.0.0.1', false)
+      const tab = (): typeof w.tabs.activeTab => w.tabs.activeTab
+      const inPage = (js: string): Promise<unknown> => tab()!.wc.executeJavaScript(js)
+      const inChrome = (js: string): Promise<unknown> => w.win.webContents.executeJavaScript(js)
 
+      // 1. the chip is on the bar, idle, and the pristine geometry is on record
       w.tabs.navigate(null, `http://127.0.0.1:${port}/`)
-      await delay(2500)
-      const tab = w.tabs.activeTab!
+      const chipIdle = await settle(async () => {
+        const raw = (await inChrome(
+          `JSON.stringify({chip: !!document.querySelector('.focus-chip'),
+                           active: !!document.querySelector('.focus-chip.active')})`
+        )) as string
+        const p = JSON.parse(raw) as { chip: boolean; active: boolean }
+        return p.chip ? p : undefined
+      }, 10_000)
+      check('chip on the address bar, idle', chipIdle?.chip === true && chipIdle?.active === false, JSON.stringify(chipIdle))
+      check('tab reports Focus off', tab()!.info().focusOn === false)
+      const before = await settle(async () => {
+        const raw = (await inPage(`(() => {
+          const c = document.getElementById('content'), s = document.getElementById('shell')
+          if (!c || !s) return ''
+          return JSON.stringify({ contentW: c.getBoundingClientRect().width,
+                                  cols: getComputedStyle(s).gridTemplateColumns })
+        })()`)) as string
+        return raw ? (JSON.parse(raw) as { contentW: number; cols: string }) : undefined
+      }, 10_000)
+      say(`[flowtest] pristine: ${JSON.stringify(before)}`)
+      check('pristine geometry read', !!before && before.cols.split(' ').length === 3, JSON.stringify(before))
 
-      // 1. edit mode goes on, and the tab says so
-      w.tabs.toggleEditMode()
-      await delay(400)
-      check('edit mode reaches the tab state', tab.info().editing === true)
-      const overlay = await tab.wc.executeJavaScript(`!!document.querySelector('offshore-page-edit')`)
-      check('the editor overlay is on the page', overlay === true)
-
-      // 2. pick the banner with the pointer and hide it with the keyboard
-      await tab.wc.executeJavaScript(`(() => {
-        const el = document.getElementById('banner')
-        const r = el.getBoundingClientRect()
-        const o = { bubbles: true, composed: true, clientX: r.left + 10, clientY: r.top + 10, button: 0 }
-        el.dispatchEvent(new PointerEvent('pointerdown', o))
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
-        return true
-      })()`)
-      const hidden = await settle(
-        () =>
-          tab.wc.executeJavaScript(
-            `getComputedStyle(document.getElementById('banner')).display === 'none'`
-          ) as Promise<boolean>,
+      // 2. the chip flips Focus on, for the site
+      await inChrome(`document.querySelector('.focus-chip')?.click()`)
+      const storeOn = await settle(async () => (focusStore.isOn('127.0.0.1') ? true : undefined), 4000)
+      check('chip toggles Focus on for the site', storeOn === true)
+      check('tab reports Focus on', tab()!.info().focusOn === true)
+      const chipLit = await settle(
+        () => inChrome(`!!document.querySelector('.focus-chip.active')`) as Promise<boolean>,
         4000
       )
-      check('picked element is hidden', hidden === true)
-      check('the edit reached the ledger', pageEditsStore.count('127.0.0.1') === 1)
+      check('chip lights up', chipLit === true)
 
-      // 2b. rewrite the headline in place: Enter opens the editor, ⌘Enter saves
-      const editable = await tab.wc.executeJavaScript(`(() => {
-        const el = document.getElementById('headline')
-        const r = el.getBoundingClientRect()
-        el.dispatchEvent(new PointerEvent('pointerdown', {
-          bubbles: true, composed: true, button: 0, clientX: r.left + 5, clientY: r.top + 5
-        }))
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-        return el.isContentEditable
-      })()`)
-      check('Enter on a selection opens the text editor', editable === true)
-      await tab.wc.executeJavaScript(`(() => {
-        const el = document.getElementById('headline')
-        el.textContent = 'Typed by hand'
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }))
-        return true
-      })()`)
-      const committed = await settle(async () => {
-        const done = (await tab.wc.executeJavaScript(
-          `!document.getElementById('headline').isContentEditable && document.getElementById('headline').hasAttribute('data-offshore-text')`
-        )) as boolean
-        return done && pageEditsStore.count('127.0.0.1') === 2 ? true : undefined
-      }, 4000)
-      check('⌘Enter commits the rewrite to the ledger', committed === true)
+      // 3. strip: every tier lands, the reading stands
+      const stripped = await settle(async () => {
+        const raw = (await inPage(`(() => {
+          const d = (id) => { const el = document.getElementById(id); return el ? getComputedStyle(el).display : 'gone' }
+          return JSON.stringify({
+            ad1: d('ad1'), rel: d('rel'), rail: d('rail'), railwrap: d('railwrap'),
+            cookie: d('cookie'), sticky: d('sticky'), promo: d('inline-promo'), comments: d('comments'),
+            p1: d('p1'), p2: d('p2'), leftnav: d('leftnav'), story: d('story'), footer: d('footer')
+          })
+        })()`)) as string
+        const p = JSON.parse(raw) as Record<string, string>
+        return p.rail === 'none' && p.railwrap === 'none' && p.comments === 'none' ? p : undefined
+      }, 8000)
+      say(`[flowtest] stripped: ${JSON.stringify(stripped)}`)
+      check('tier 2 hides the ads and the rail', stripped?.ad1 === 'none' && stripped?.rel === 'none' && stripped?.rail === 'none')
+      check('an emptied wrapper cascades away', stripped?.railwrap === 'none')
+      check('tier 3 hides the viewport riders', stripped?.cookie === 'none' && stripped?.sticky === 'none')
+      check('the in-article promo goes too', stripped?.promo === 'none')
+      check('comments are stripped', stripped?.comments === 'none')
+      check(
+        'the reading survives',
+        stripped?.p1 === 'block' && stripped?.p2 === 'block' && stripped?.story === 'block' &&
+          stripped?.leftnav === 'block' && stripped?.footer === 'block'
+      )
 
-      // 2c. a pick inside a web component takes the whole widget, not its guts
-      await tab.wc.executeJavaScript(`(() => {
-        const inner = document.getElementById('widget').shadowRoot.getElementById('inner')
-        inner.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true, button: 0 }))
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
-        return true
-      })()`)
-      const widgetGone = await settle(async () => {
-        const gone = (await tab.wc.executeJavaScript(
-          `getComputedStyle(document.getElementById('widget')).display === 'none'`
-        )) as boolean
-        return gone && pageEditsStore.count('127.0.0.1') === 3 ? true : undefined
-      }, 4000)
-      check('a shadow-DOM pick hides the whole component', widgetGone === true)
+      // 4. token verification spares near-miss names
+      const tripwires = JSON.parse(
+        (await inPage(`(() => {
+          const ok = (el) => !!el && getComputedStyle(el).display !== 'none' && !el.hasAttribute('data-offshore-focus')
+          return JSON.stringify({
+            commentary: ok(document.querySelector('.commentary')),
+            broadcast: ok(document.getElementById('tripwire-broadcast')),
+            badge: ok(document.getElementById('tripwire-badge'))
+          })
+        })()`)) as string
+      ) as Record<string, boolean>
+      check('tripwires survive token verification', tripwires.commentary && tripwires.broadcast && tripwires.badge, JSON.stringify(tripwires))
 
-      // 3. the page fights back; the observer puts it away again
-      await tab.wc.executeJavaScript(`document.getElementById('banner').remove(), 0`)
-      const rehidden = await settle(async () => {
-        const s = (await tab.wc.executeJavaScript(`(() => {
-          const el = document.getElementById('banner')
+      // 5. compaction, horizontal: the dead 300px track (and its gap) goes to the content
+      const focused = await settle(async () => {
+        const raw = (await inPage(`JSON.stringify({
+          contentW: document.getElementById('content').getBoundingClientRect().width,
+          cols: getComputedStyle(document.getElementById('shell')).gridTemplateColumns
+        })`)) as string
+        const p = JSON.parse(raw) as { contentW: number; cols: string }
+        return p.contentW - (before?.contentW ?? Infinity) >= 240 ? p : undefined
+      }, 8000)
+      say(`[flowtest] focused geometry: ${JSON.stringify(focused)}`)
+      check(
+        'the emptied track goes to the content',
+        (focused?.contentW ?? 0) - (before?.contentW ?? Infinity) >= 240,
+        `${before?.contentW} → ${focused?.contentW}`
+      )
+      check('the dead grid track is removed', (focused?.cols ?? '').split(' ').length === 2, focused?.cols)
+
+      // 6. compaction, vertical: no 400px comments hole above the footer
+      const vgap = Number(
+        await inPage(
+          `document.getElementById('footer').getBoundingClientRect().top - document.getElementById('story').getBoundingClientRect().bottom`
+        )
+      )
+      check('no comments hole above the footer', vgap <= 150, `gap=${Math.round(vgap)}`)
+
+      // 7. the page fights back; the observer puts the bar away again
+      await inPage(`document.getElementById('sticky').remove(), 0`)
+      const reasserted = await settle(async () => {
+        const s = (await inPage(`(() => {
+          const el = document.getElementById('sticky')
           return el ? getComputedStyle(el).display : 'gone'
         })()`)) as string
         return s === 'none' ? true : undefined
-      }, 5000)
-      check('a re-rendered element is re-hidden', rehidden === true)
+      }, 6000)
+      check('a re-inserted sticky is re-hidden', reasserted === true)
 
-      // 4. re-recording the same element replaces its record instead of stacking
-      pageEditsStore.record('127.0.0.1', {
-        op: 'text',
-        selector: '#headline',
-        value: 'Rewritten by Offshore',
-        path: '/'
-      })
-      check('same-selector rewrite replaces, not appends', pageEditsStore.count('127.0.0.1') === 3)
-      w.tabs.toggleEditMode()
-      await delay(300)
-      check('edit mode ends on request', tab.info().editing === false)
-      tab.wc.reload()
-      await delay(2500)
-      const applied = await tab.wc.executeJavaScript(`JSON.stringify({
-        banner: getComputedStyle(document.getElementById('banner')).display,
-        headline: document.getElementById('headline').textContent
-      })`)
-      say(`[flowtest] after reload: ${applied}`)
-      check('hide survives a reload', String(applied).includes('"banner":"none"'))
-      check('text edit survives a reload', String(applied).includes('Rewritten by Offshore'))
-      check('tab info counts every edit', tab.info().editCount === 3)
+      // 8. persistence: strip and compaction both replay on a fresh document
+      tab()!.wc.reload()
+      const replayed = await settle(async () => {
+        const raw = (await inPage(`(() => {
+          const rail = document.getElementById('rail'), c = document.getElementById('content')
+          if (!rail || !c) return ''
+          return JSON.stringify({ rail: getComputedStyle(rail).display, contentW: c.getBoundingClientRect().width })
+        })()`).catch(() => '')) as string
+        if (!raw) return undefined
+        const p = JSON.parse(raw) as { rail: string; contentW: number }
+        return p.rail === 'none' && Math.abs(p.contentW - (focused?.contentW ?? Infinity)) <= 24 ? p : undefined
+      }, 10_000)
+      check('strip and compaction replay on reload', !!replayed, JSON.stringify(replayed))
 
-      // 5. switching the site off restores the page without forgetting anything
-      pageEditsStore.setEnabled('127.0.0.1', false)
-      w.tabs.refreshPageEdits('127.0.0.1')
+      // 9. live restore: off = exactly the page as served
+      w.tabs.toggleFocus()
       const restored = await settle(async () => {
-        const s = (await tab.wc.executeJavaScript(`JSON.stringify({
-          banner: getComputedStyle(document.getElementById('banner')).display,
-          headline: document.getElementById('headline').textContent
+        const raw = (await inPage(`(() => {
+          const d = (id) => { const el = document.getElementById(id); return el ? getComputedStyle(el).display : 'gone' }
+          return JSON.stringify({
+            rail: d('rail'), railwrap: d('railwrap'), cookie: d('cookie'), sticky: d('sticky'),
+            promo: d('inline-promo'), comments: d('comments'),
+            contentW: document.getElementById('content').getBoundingClientRect().width,
+            cols: getComputedStyle(document.getElementById('shell')).gridTemplateColumns,
+            marks: document.querySelectorAll('[data-offshore-focus]').length
+          })
+        })()`)) as string
+        const p = JSON.parse(raw) as { rail: string; marks: number }
+        return p.rail === 'block' && p.marks === 0 ? (JSON.parse(raw) as Record<string, unknown>) : undefined
+      }, 8000)
+      say(`[flowtest] restored: ${JSON.stringify(restored)}`)
+      check(
+        'toggle off restores every element',
+        restored?.rail === 'block' && restored?.railwrap === 'block' && restored?.cookie === 'block' &&
+          restored?.sticky === 'block' && restored?.promo === 'block' && restored?.comments === 'block'
+      )
+      check(
+        'geometry restored',
+        Math.abs(Number(restored?.contentW) - (before?.contentW ?? Infinity)) <= 24 &&
+          String(restored?.cols).split(' ').length === 3,
+        JSON.stringify(restored)
+      )
+      check('zero marks left behind', restored?.marks === 0)
+      check('the site leaves the ledger', !focusStore.isOn('127.0.0.1') && !focusStore.sites().includes('127.0.0.1'))
+
+      // 10. flex survivor: the single survivor takes the row, and gives it back
+      w.tabs.navigate(null, `http://127.0.0.1:${port}/flexcase`)
+      await settle(async () => ((await inPage(`!!document.getElementById('row')`).catch(() => false)) ? true : undefined), 8000)
+      w.tabs.toggleFocus()
+      const flexed = await settle(async () => {
+        const raw = (await inPage(`(() => {
+          const aside = document.getElementById('aside'), main = document.getElementById('main'), row = document.getElementById('row')
+          if (!aside || !main || !row) return ''
+          return JSON.stringify({ aside: getComputedStyle(aside).display,
+                                  mainW: main.getBoundingClientRect().width, rowW: row.clientWidth })
+        })()`)) as string
+        if (!raw) return undefined
+        const p = JSON.parse(raw) as { aside: string; mainW: number; rowW: number }
+        return p.aside === 'none' && p.mainW >= 0.9 * p.rowW ? p : undefined
+      }, 8000)
+      check('the flex survivor takes the row', !!flexed, JSON.stringify(flexed))
+      w.tabs.toggleFocus()
+      const unflexed = await settle(async () => {
+        const raw = (await inPage(`JSON.stringify({
+          aside: getComputedStyle(document.getElementById('aside')).display,
+          mainW: document.getElementById('main').getBoundingClientRect().width,
+          rowW: document.getElementById('row').clientWidth
         })`)) as string
-        return s.includes('"banner":"block"') && s.includes('Original headline') ? true : undefined
-      }, 5000)
-      check('turning the site off restores the page live', restored === true)
-      check('the ledger still holds the edits', pageEditsStore.count('127.0.0.1') === 3)
+        const p = JSON.parse(raw) as { aside: string; mainW: number; rowW: number }
+        return p.aside !== 'none' && Math.abs(p.mainW - 0.7 * p.rowW) <= 24 ? p : undefined
+      }, 8000)
+      check('toggle off hands the width back', !!unflexed, JSON.stringify(unflexed))
 
-      // 6. forgetting the site really forgets
-      pageEditsStore.clear('127.0.0.1')
-      w.tabs.refreshPageEdits('127.0.0.1')
-      await delay(300)
-      check('clearing empties the ledger', pageEditsStore.count('127.0.0.1') === 0)
-      check('tab info agrees', tab.info().editCount === 0)
+      // 11. do no harm: an honest page comes through untouched
+      w.tabs.navigate(null, `http://127.0.0.1:${port}/plain`)
+      await settle(async () => ((await inPage(`!!document.getElementById('plainstory')`).catch(() => false)) ? true : undefined), 8000)
+      const plainLen = Number(await inPage(`document.body.innerText.length`))
+      w.tabs.toggleFocus()
+      await delay(2000)
+      const harm = JSON.parse(
+        (await inPage(`JSON.stringify({
+          marks: document.querySelectorAll('[data-offshore-focus]').length,
+          len: document.body.innerText.length
+        })`)) as string
+      ) as { marks: number; len: number }
+      check('an honest page is untouched', harm.marks === 0 && harm.len === plainLen, JSON.stringify({ ...harm, plainLen }))
+      w.tabs.toggleFocus()
 
+      // 12. the master switch acts on open pages; site memory survives it
+      w.tabs.navigate(null, `http://127.0.0.1:${port}/`)
+      await settle(async () => ((await inPage(`!!document.getElementById('rail')`).catch(() => false)) ? true : undefined), 8000)
+      w.tabs.toggleFocus()
+      await settle(async () => ((await inPage(`getComputedStyle(document.getElementById('rail')).display`)) === 'none' ? true : undefined), 8000)
+      settingsStore.set({ focus: { enabled: false } })
+      const masterOff = await settle(async () => {
+        const railBack = (await inPage(`getComputedStyle(document.getElementById('rail')).display`)) === 'block'
+        const chipGone = (await inChrome(`!document.querySelector('.focus-chip')`)) === true
+        return railBack && chipGone ? true : undefined
+      }, 8000)
+      check('the master switch restores pages and hides the chip', masterOff === true)
+      // every surface must agree with the page: TabInfo drops focusOn while
+      // the master is off, though the per-site memory itself survives
+      check(
+        'master off: TabInfo drops focusOn, memory intact',
+        w.tabs.activeTab!.info().focusOn === false && focusStore.isOn('127.0.0.1') === true
+      )
+      settingsStore.set({ focus: { enabled: true } })
+      const masterBack = await settle(
+        async () => ((await inPage(`getComputedStyle(document.getElementById('rail')).display`)) === 'none' ? true : undefined),
+        8000
+      )
+      check('re-enabling honors the site memory', masterBack === true)
+      check('re-enabled: TabInfo wears focusOn again', w.tabs.activeTab!.info().focusOn === true)
+
+      focusStore.set('127.0.0.1', false)
       // flows leave over app.exit, which skips the debounced save — write now
-      pageEditsStore.flush()
+      focusStore.flush()
+      settingsStore.flush()
+      server.close()
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
+    if (flow === 'harbor') {
+      /**
+       * Harbor end to end: consent auto-answer through the real autoconsent
+       * eval pipeline against a Cookiebot-shaped fixture, tracker-cookie
+       * stripping (with a guard-off control run so the header check can never
+       * pass vacuously), the never-touch and document exemptions, the tide
+       * with an injected clock, the undo stash, the engagement file's shape,
+       * and the per-site panel riding the freeze-frame contract.
+       */
+      if (!process.env['OFFSHORE_CLEAN_PROFILE']) {
+        // the tide step forces the grace period open and sweeps the real jar —
+        // never against a lived-in profile
+        say('[flowtest] harbor flow requires OFFSHORE_CLEAN_PROFILE')
+        app.exit(1)
+        return
+      }
+      const { settingsStore, bookmarksStore } = await import('./stores')
+      const { harbor } = await import('./harbor')
+      const ses = session.fromPartition(TAB_PARTITION)
+      const DAY = 86_400_000
+      const origCreatedAt = harbor.engagementCreatedAt()
+
+      const reqLog: string[] = []
+      const trackedPage = (g: string, port: number): string => `<html><body>
+        <p>An honest little page that happens to carry a third-party pixel.</p>
+        <img src="http://127.0.0.1:${port}/pixel.gif?g=${g}">
+        <script>fetch('http://127.0.0.1:${port}/beacon?g=${g}', { credentials: 'include' }).catch(() => {})</script>
+      </body></html>`
+      // Cookiebot-shaped fixture, mirrored from the pinned dynamic rule
+      // (lib/cmps/cookiebot.ts + EVAL_COOKIEBOT_1..5): detection wants
+      // window.Cookiebot with an open dialog, opt-out goes withdraw() then
+      // hide(), self-test reads declined.
+      const cmpPage = `<html><head><script>
+        window.Cookiebot = {
+          hasResponse: false, declined: false, dialog: { visible: true },
+          withdraw() { this.declined = true; this.hasResponse = true; return true },
+          hide() { document.getElementById('CybotCookiebotDialog').style.display = 'none';
+                   this.dialog.visible = false; return true }
+        }
+      </script></head><body>
+        <div id="CybotCookiebotDialog" style="position:fixed;bottom:0;left:0;right:0;height:120px;background:#123;color:#fff">
+          We value your privacy</div>
+        <p>A page with a cookie prompt on it.</p>
+      </body></html>`
+      const server = nodeHttp.createServer((req, res) => {
+        const [path, query = ''] = (req.url ?? '/').split('?')
+        if (path === '/pixel.gif' || path === '/beacon') {
+          reqLog.push(`${path}?${query} ${req.headers.cookie ?? '(none)'}`)
+          res.setHeader('set-cookie', 'track=1; Path=/')
+          if (path === '/pixel.gif') {
+            res.setHeader('content-type', 'image/gif')
+            res.end(Buffer.from('R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==', 'base64'))
+          } else {
+            // credentialed cross-origin fetch: without these the request still
+            // arrives (that's what the log reads) but the console fills with noise
+            res.setHeader('access-control-allow-origin', `http://localhost:${port}`)
+            res.setHeader('access-control-allow-credentials', 'true')
+            res.end('ok')
+          }
+          return
+        }
+        res.setHeader('content-type', 'text/html')
+        if (path === '/cmp') res.end(cmpPage)
+        else if (path === '/login') {
+          // a login-shaped response: the session cookie rides Set-Cookie
+          res.setHeader('set-cookie', 'session=alive; Path=/')
+          res.end('<html><body><p>Signed in.</p></body></html>')
+        } else if (path === '/tracked') res.end(trackedPage(query.replace(/^g=/, '') || '0', port))
+        else if (path === '/framed') res.end(`<html><body><iframe src="http://127.0.0.1:${port}/frame"></iframe></body></html>`)
+        else if (path === '/frame') {
+          res.setHeader('set-cookie', 'framecookie=1; Path=/')
+          res.end('<html><body>frame</body></html>')
+        } else res.end('<html><body>plain</body></html>')
+      })
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+      const port = (server.address() as { port: number }).port
+      const local = (p: string): string => `http://localhost:${port}${p}`
+      const third = (p: string): string => `http://127.0.0.1:${port}${p}`
+      const tab = (): typeof w.tabs.activeTab => w.tabs.activeTab
+      const inPage = (js: string): Promise<unknown> => tab()!.wc.executeJavaScript(js)
+      const inChrome = (js: string): Promise<unknown> => w.win.webContents.executeJavaScript(js)
+
+      // the Shield is deliberately no part of Harbor (separate engine, separate
+      // switch) — take it out of the fixture's way so no ad list can eat the
+      // tracker requests this flow asserts on
+      const shieldWasOn = settingsStore.get().adblock.enabled
+      settingsStore.set({ adblock: { ...settingsStore.get().adblock, enabled: false } })
+
+      const cleanup = async (): Promise<void> => {
+        const s = settingsStore.get().privacy
+        settingsStore.set({
+          adblock: { ...settingsStore.get().adblock, enabled: shieldWasOn },
+          privacy: {
+            ...s,
+            cookieGuard: true,
+            tide: true,
+            blockSites: s.blockSites.filter((d) => d !== '127.0.0.1' && d !== 'blocked.example'),
+            keepSites: s.keepSites.filter((d) => d !== 'localhost')
+          }
+        })
+        harbor.trackerSeedClear()
+        for (const d of [
+          'stale.example',
+          'fresh.example',
+          'kept.example',
+          'flagged.example',
+          'blocked.example',
+          'gone.example'
+        ]) {
+          harbor.engagementDelete(d)
+          harbor.stashDelete(d)
+          for (const c of await ses.cookies.get({ url: `https://${d}/` })) {
+            await ses.cookies.remove(`https://${d}${c.path ?? '/'}`, c.name).catch(() => {})
+          }
+        }
+        harbor.engagementSetCreatedAt(origCreatedAt)
+        settingsStore.flush()
+        harbor.flush()
+      }
+
+      // -- 1. consent: the fixture CMP gets auto-answered, most private --
+      // the page console is the only witness if the consent adapter faults
+      tab()!.wc.on('console-message', ((...args: unknown[]) => {
+        const ev = args[0] as { message?: string }
+        const msg = typeof args[2] === 'string' ? args[2] : (ev?.message ?? '')
+        if (msg) say(`[flowtest] page console: ${String(msg).slice(0, 300)}`)
+      }) as never)
+      w.tabs.navigate(null, local('/cmp'))
+      const declined = await settle(
+        async () =>
+          (await inPage(`!!(window.Cookiebot && window.Cookiebot.declined === true)`).catch(() => false)) === true
+            ? true
+            : undefined,
+        15_000
+      )
+      check('consent auto-answered most-private', declined === true)
+      const dlgGone = await settle(
+        async () =>
+          (await inPage(
+            `getComputedStyle(document.getElementById('CybotCookiebotDialog')).display === 'none'`
+          ).catch(() => false)) === true
+            ? true
+            : undefined,
+        5000
+      )
+      check('banner gone', dlgGone === true)
+      const verdict = await settle(async () => {
+        const p = tab()!.info().privacy
+        return p?.consent === 'handled' ? p : undefined
+      }, 8000)
+      check(
+        'tab wears the consent verdict',
+        verdict?.consent === 'handled' && verdict?.cmp === 'Cybotcookiebot',
+        JSON.stringify(verdict ?? tab()!.info().privacy)
+      )
+      check(
+        'easylist-cookie list is on',
+        settingsStore.get().adblock.lists['easylist-cookie'] === true
+      )
+      say(
+        `[flowtest] consent eval path: ${
+          harbor.consentEvalFallbacks === 0
+            ? 'webFrame (primary)'
+            : `consent:eval fallback ×${harbor.consentEvalFallbacks}`
+        }`
+      )
+
+      // -- 2. strip, with a control run so the check can't pass vacuously --
+      const sp = settingsStore.get().privacy
+      settingsStore.set({
+        privacy: {
+          ...sp,
+          cookieGuard: false,
+          blockSites: [...sp.blockSites.filter((d) => d !== '127.0.0.1'), '127.0.0.1']
+        }
+      })
+      // SameSite=None so a third-party subresource would genuinely carry it
+      // (localhost is a trustworthy origin, so Secure is allowed over http)
+      const plantPre = async (value: string): Promise<void> => {
+        await ses.cookies.set({
+          url: third('/'),
+          name: 'pre',
+          value,
+          secure: true,
+          sameSite: 'no_restriction'
+        })
+      }
+      await plantPre('1').catch((err) => say(`[flowtest] plant failed: ${err}`))
+      const preSticks = await settle(async () => {
+        const cs = await ses.cookies.get({ url: third('/') })
+        return cs.some((c) => c.name === 'pre') ? true : undefined
+      }, 4000)
+      check('guard off: planted tracker cookie sticks', preSticks === true)
+      w.tabs.navigate(null, local('/tracked?g=1'))
+      const g1 = await settle(async () => {
+        const hits = reqLog.filter((l) => l.includes('g=1'))
+        return hits.length >= 2 ? hits : undefined
+      }, 15_000)
+      check(
+        'control: guard off, the cookie travels',
+        (g1 ?? []).length >= 2 && (g1 ?? []).every((l) => l.includes('pre=1')),
+        JSON.stringify(g1)
+      )
+      // scrub the control run's Set-Cookie before the real run; a fresh value
+      // guarantees the re-plant emits a real 'changed' for the scrubber
+      settingsStore.set({ privacy: { ...settingsStore.get().privacy, cookieGuard: true } })
+      await plantPre('2').catch(() => {})
+      w.tabs.navigate(null, local('/tracked?g=2'))
+      const g2 = await settle(async () => {
+        const hits = reqLog.filter((l) => l.includes('g=2'))
+        return hits.length >= 2 ? hits : undefined
+      }, 15_000)
+      check(
+        'tracker request carries no cookie',
+        (g2 ?? []).length >= 2 && (g2 ?? []).every((l) => l.endsWith('(none)')),
+        JSON.stringify(g2)
+      )
+      const jarClean = await settle(async () => {
+        const cs = await ses.cookies.get({ url: third('/') })
+        return cs.some((c) => c.name === 'track' || c.name === 'pre') ? undefined : true
+      }, 8000)
+      check('set-cookie scrubbed from the jar', jarClean === true)
+      const strips = await settle(async () => {
+        const p = tab()!.info().privacy
+        return (p?.cookiesStripped ?? 0) >= 1 ? p!.cookiesStripped : undefined
+      }, 8000)
+      check('tab counts its strips', (strips ?? 0) >= 1, `stripped=${strips}`)
+      // A jar deletion is counted too — the site panel must not be silent.
+      // The write lands document.cookie-style (no request context), so the
+      // count is pinned on this page via the strip ledger the g=2 run left.
+      await plantPre('3').catch(() => {})
+      const scrubs = await settle(async () => {
+        const p = tab()!.info().privacy
+        return (p?.cookiesScrubbed ?? 0) >= 1 ? p!.cookiesScrubbed : undefined
+      }, 8000)
+      check('tab counts the scrubs', (scrubs ?? 0) >= 1, `scrubbed=${scrubs}`)
+      check(
+        'documents are never stripped',
+        harbor.shouldStripRequest({
+          url: third('/frame'),
+          resourceType: 'subFrame',
+          referrer: local('/framed'),
+          frame: { top: { url: local('/framed') } }
+        }) === false
+      )
+      check(
+        'media is never stripped',
+        harbor.shouldStripRequest({
+          url: third('/stream.mp4'),
+          resourceType: 'media',
+          frame: { top: { url: local('/tracked') } }
+        }) === false
+      )
+      check(
+        'exemptions beat classification',
+        harbor.shouldStripRequest({
+          url: 'https://accounts.google.com/x.js',
+          resourceType: 'script',
+          frame: { top: { url: 'https://example.com/' } }
+        }) === false
+      )
+      const classifierUp = await settle(async () => (harbor.classifierReady() ? true : undefined), 30_000)
+      check(
+        'live classifier knows a tracker (needs network)',
+        classifierUp === true &&
+          harbor.classifyRequest(
+            'https://www.google-analytics.com/analytics.js',
+            'https://example.com/',
+            'script'
+          ) === true
+      )
+
+      // -- 2b. first-party evidence: a flagged domain the user actually uses --
+      // The lists flag analytics vendors whose dashboards have real logins
+      // (mixpanel.com is a product with customers). Evidence that the domain is
+      // first-party — an open tab on it, or a visit within the tide horizon —
+      // must beat classification. The tide is off for this section, which also
+      // proves the engagement map records nothing while it's off.
+      const tideWas = settingsStore.get().privacy.tide
+      settingsStore.set({ privacy: { ...settingsStore.get().privacy, tide: false } })
+      harbor.trackerSeed('localhost')
+      harbor.trackerSeed('flagged.example')
+      harbor.engagementDelete('localhost')
+      w.tabs.navigate(null, local('/login'))
+      const loginSet = await settle(async () => {
+        const cs = await ses.cookies.get({ url: local('/') })
+        return cs.some((c) => c.name === 'session') ? true : undefined
+      }, 8000)
+      await delay(800) // the scrub is fire-and-forget; give a wrong removal time to land
+      const loginStays = (await ses.cookies.get({ url: local('/') })).some((c) => c.name === 'session')
+      check(
+        'flagged domain, visited top-level: login cookie survives',
+        loginSet === true && loginStays,
+        `set=${loginSet} stays=${loginStays}`
+      )
+      check('tide off: the visit was not written down', harbor.lastVisit('localhost') === null)
+      harbor.engagementSeed('flagged.example', Date.now() - 1 * DAY)
+      await ses.cookies.set({ url: 'https://flagged.example/', name: 'sess', value: 'ok' }).catch(() => {})
+      await delay(800)
+      check(
+        'flagged domain with recent engagement: cookie survives',
+        (await ses.cookies.get({ url: 'https://flagged.example/' })).some((c) => c.name === 'sess')
+      )
+      harbor.engagementDelete('flagged.example')
+      await ses.cookies.set({ url: 'https://flagged.example/', name: 'sess2', value: 'x' }).catch(() => {})
+      const controlGone = await settle(async () => {
+        const cs = await ses.cookies.get({ url: 'https://flagged.example/' })
+        return cs.some((c) => c.name === 'sess2') ? undefined : true
+      }, 8000)
+      check('no evidence, no mercy: the flagged domain is scrubbed (control)', controlGone === true)
+      harbor.trackerSeedClear()
+      settingsStore.set({ privacy: { ...settingsStore.get().privacy, tide: tideWas } })
+
+      // -- 3. the tide, on an injected clock --
+      const now = Date.now()
+      harbor.engagementSeed('stale.example', now - 40 * DAY)
+      harbor.engagementSeed('fresh.example', now - 1 * DAY)
+      harbor.engagementSetCreatedAt(now - 90 * DAY)
+      for (const d of ['stale.example', 'fresh.example', 'kept.example']) {
+        // values distinguishable from the domain, so the stash-at-rest check
+        // can tell a plaintext value from a mere domain mention
+        await ses.cookies.set({ url: `https://${d}/`, name: 'jar', value: `secret-${d}` }).catch(() => {})
+      }
+      const bm = bookmarksStore.add('https://kept.example/', 'Kept')
+      const sweep1 = await harbor.sweep(now)
+      say(`[flowtest] sweep: ${JSON.stringify(sweep1)}`)
+      check(
+        'stale site washed out',
+        sweep1.swept.includes('stale.example') &&
+          (await ses.cookies.get({ url: 'https://stale.example/' })).length === 0
+      )
+      check('fresh site kept', (await ses.cookies.get({ url: 'https://fresh.example/' })).length >= 1)
+      check('bookmark guards a site', (await ses.cookies.get({ url: 'https://kept.example/' })).length >= 1)
+      const receipts = harbor.expiredList()
+      check(
+        'undo list holds the receipt',
+        receipts.some((x) => x.domain === 'stale.example' && x.cookieCount >= 1),
+        JSON.stringify(receipts)
+      )
+      // the stash at rest: owner-only file, values never in plaintext
+      harbor.flush()
+      const stashPath = join(app.getPath('userData'), 'expired-cookies.json')
+      const rawStash = readFileSync(stashPath, 'utf-8')
+      const stashMode = statSync(stashPath).mode & 0o777
+      check('stash file is owner-only (0600)', stashMode === 0o600, stashMode.toString(8))
+      if (safeStorage.isEncryptionAvailable()) {
+        check(
+          'stash holds no plaintext cookie values',
+          rawStash.includes('stale.example') && !rawStash.includes('secret-stale.example'),
+          rawStash.slice(0, 200)
+        )
+      } else {
+        say('[flowtest] safeStorage unavailable — plaintext stash check skipped')
+      }
+      const restored = await harbor.restore('stale.example')
+      check(
+        'restore brings cookies back',
+        restored === true &&
+          (await ses.cookies.get({ url: 'https://stale.example/' })).some(
+            (c) => c.name === 'jar' && c.value === 'secret-stale.example'
+          )
+      )
+
+      // -- 3b. block, then change your mind: restore must really bring them back --
+      await ses.cookies.set({ url: 'https://blocked.example/', name: 'keepme', value: 'v1' }).catch(() => {})
+      const spb = settingsStore.get().privacy
+      settingsStore.set({ privacy: { ...spb, blockSites: [...spb.blockSites, 'blocked.example'] } })
+      await harbor.expireDomain('blocked.example')
+      check(
+        'blocking expires the jar into the undo list',
+        (await ses.cookies.get({ url: 'https://blocked.example/' })).length === 0 &&
+          harbor.expiredList().some((x) => x.domain === 'blocked.example')
+      )
+      const restoredBlocked = await harbor.restore('blocked.example')
+      await delay(800) // any wrongful scrub of the restored cookies would land here
+      const backJar = await ses.cookies.get({ url: 'https://blocked.example/' })
+      check(
+        'restore on a blocked site genuinely brings cookies back',
+        restoredBlocked === true && backJar.some((c) => c.name === 'keepme' && c.value === 'v1'),
+        JSON.stringify(backJar)
+      )
+      check(
+        'restore lifts the block',
+        !settingsStore.get().privacy.blockSites.includes('blocked.example')
+      )
+      harbor.engagementSetCreatedAt(now - 2 * DAY)
+      await ses.cookies.set({ url: 'https://stale.example/', name: 'jar2', value: '1' }).catch(() => {})
+      check('grace period holds fire', (await harbor.sweep(now)).swept.length === 0)
+      harbor.flush()
+      const rawMap = readFileSync(join(app.getPath('userData'), 'engagement.json'), 'utf-8')
+      const map = JSON.parse(rawMap) as { createdAt: number; lastSweepAt: number; hosts: Record<string, number> }
+      const mapValues = [map.createdAt, map.lastSweepAt, ...Object.values(map.hosts)]
+      check(
+        'map stores only names and days',
+        !rawMap.includes('http') && mapValues.every((v) => typeof v === 'number' && v % DAY === 0),
+        rawMap.slice(0, 160)
+      )
+      bookmarksStore.remove(bm.id)
+
+      // -- 3c. Clear history takes the tide's map and the stash with it --
+      // seed a fresh stash entry (restore consumed the earlier ones)
+      await ses.cookies.set({ url: 'https://gone.example/', name: 'jar', value: 'secret-gone' }).catch(() => {})
+      await harbor.expireDomain('gone.example')
+      check(
+        'pre-clear: map and stash are non-empty',
+        harbor.lastVisit('fresh.example') !== null && harbor.expiredList().length >= 1
+      )
+      // through the real surface: the settings page's internal bridge
+      w.tabs.navigate(null, 'offshore://settings')
+      const bridgeUp = await settle(
+        async () =>
+          (await inPage(`!!window.offshoreInternal`).catch(() => false)) === true ? true : undefined,
+        8000
+      )
+      check('settings page carries the internal bridge', bridgeUp === true)
+      await inPage(`window.offshoreInternal.history.clear()`)
+      harbor.flush()
+      check(
+        'history:clear empties the stash',
+        harbor.expiredList().length === 0,
+        JSON.stringify(harbor.expiredList())
+      )
+      const rawMapCleared = readFileSync(join(app.getPath('userData'), 'engagement.json'), 'utf-8')
+      check(
+        'history:clear empties the engagement map',
+        harbor.lastVisit('fresh.example') === null && /"hosts": \{\}/.test(rawMapCleared),
+        rawMapCleared.slice(0, 160)
+      )
+      // the wipe reset the grace clock; the panel section needs a local page again
+      w.tabs.navigate(null, local('/plain'))
+      await settle(
+        async () =>
+          ((await inPage(`document.body.innerText`).catch(() => '')) as string).trim() === 'plain'
+            ? true
+            : undefined,
+        8000
+      )
+
+      // -- 4. the per-site panel, on the freeze-frame contract --
+      const report = (await inChrome(`window.offshore.privacy.siteReport()`)) as SiteReport | null
+      say(`[flowtest] site report: ${JSON.stringify(report)}`)
+      check(
+        'report has its numbers',
+        report?.host === 'localhost' &&
+          typeof report?.cookieCount === 'number' &&
+          typeof report?.trackersBlocked === 'number' &&
+          typeof report?.cookiesStripped === 'number' &&
+          typeof report?.consent === 'string'
+      )
+      surface(w)
+      w.tabs.setActiveVisible(true)
+      await delay(900)
+      const preShot = await tab()!.wc.capturePage()
+      say(
+        `[flowtest] pre-click: vis=${await inPage('document.visibilityState')} capture=${preShot.getSize().width}x${preShot.getSize().height}`
+      )
+      await inChrome(`document.querySelector('.omni-tune')?.click()`)
+      const probePanel = async (): Promise<{ si: boolean; freeze: boolean; tide: boolean }> => {
+        const raw = (await inChrome(
+          `JSON.stringify({si: !!document.querySelector('.site-info'),
+                           freeze: !!document.querySelector('.page-freeze'),
+                           tide: !!document.querySelector('.si-tide')})`
+        )) as string
+        return JSON.parse(raw) as { si: boolean; freeze: boolean; tide: boolean }
+      }
+      const panel = await settle(async () => {
+        const p = await probePanel()
+        return p.si && p.freeze ? p : undefined
+      }, 8000)
+      check('panel stands on the freeze-frame', !!panel, JSON.stringify(panel ?? (await probePanel())))
+      check('tide row rendered', panel?.tide === true)
+      await inChrome(`document.querySelector('.si-tide .si-action')?.click()`)
+      const kept = await settle(
+        async () => (settingsStore.get().privacy.keepSites.includes('localhost') ? true : undefined),
+        6000
+      )
+      check('Always allow round-trips', kept === true)
+      await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
+
+      // back on the CMP page, the panel wears the consent verdict too
+      w.tabs.navigate(null, local('/cmp'))
+      await settle(async () => (tab()!.info().privacy?.consent === 'handled' ? true : undefined), 15_000)
+      await inChrome(`document.querySelector('.omni-tune')?.click()`)
+      const probeConsentRow = async (): Promise<{ row: boolean; handled: boolean }> => {
+        const raw = (await inChrome(
+          `JSON.stringify({row: !!document.querySelector('.si-consent'),
+                           handled: !!document.querySelector('.si-consent.handled')})`
+        )) as string
+        return JSON.parse(raw) as { row: boolean; handled: boolean }
+      }
+      // the row exists as soon as the panel opens; .handled lands with the async
+      // status fill — settle on the whole condition, not the row alone
+      const consentRow = await settle(async () => {
+        const p = await probeConsentRow()
+        return p.row && p.handled ? p : undefined
+      }, 8000)
+      check(
+        'consent row rendered as handled',
+        consentRow?.handled === true,
+        JSON.stringify(consentRow ?? (await probeConsentRow()))
+      )
+      await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
+
+      await cleanup()
       server.close()
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)
@@ -1043,6 +2347,239 @@ function setupTestFlows(): void {
      * as a panel you can put away, ⌘S as a real hide, and a page in full screen
      * getting the whole window to itself.
      */
+    if (flow === 'appearance') {
+      /*
+       * Water vs Muted: the accent desaturates through the one derivation, the
+       * token overrides ride the root class, a visible internal page hears the
+       * settings push live, and the waves stand on one deterministic frame.
+       */
+      const inChrome = <T,>(src: string): Promise<T> =>
+        w.win.webContents.executeJavaScript(src) as Promise<T>
+      const { settingsStore } = await import('./stores')
+      const baseAppearance: AppearanceSettings = {
+        theme: 'light',
+        waves: true,
+        waveStyle: 'dithered',
+        accent: 'sea',
+        accentCustom: null,
+        muted: false
+      }
+      const setApp = (patch: Partial<AppearanceSettings>): void => {
+        const s = settingsStore.get()
+        settingsStore.set({ appearance: { ...s.appearance, ...patch } })
+      }
+
+      const parseRgb = (c: string | undefined | null): [number, number, number] | null => {
+        if (!c) return null
+        const hex = /^#([0-9a-f]{6})$/i.exec(c.trim())
+        if (hex) {
+          const v = parseInt(hex[1], 16)
+          return [(v >> 16) & 255, (v >> 8) & 255, v & 255]
+        }
+        const m = /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/.exec(c)
+        return m ? [+m[1], +m[2], +m[3]] : null
+      }
+      /** max−min of the channels: 0 = pure gray, big = saturated */
+      const spread = (c: string | undefined | null): number => {
+        const rgb = parseRgb(c)
+        return rgb ? Math.max(...rgb) - Math.min(...rgb) : -1
+      }
+      const lightness = (c: string | undefined | null): number => {
+        const rgb = parseRgb(c)
+        return rgb ? (Math.max(...rgb) + Math.min(...rgb)) / 2 / 255 : -1
+      }
+      const chromeAccent = (): Promise<string> =>
+        inChrome(`document.querySelector('.chrome').style.getPropertyValue('--accent').trim()`)
+      const chromeVar = (name: string): Promise<string> =>
+        inChrome(
+          `getComputedStyle(document.documentElement).getPropertyValue(${JSON.stringify(name)}).trim()`
+        )
+
+      // 1. reset the keys this flow owns (flows share the dev profile)
+      settingsStore.set({ onboarded: true, appearance: { ...baseAppearance } })
+      surface(w)
+      await delay(600)
+
+      // a home tab to watch the water on
+      const tab = w.tabs.createTab()
+      const wavesUp = await settle(
+        () =>
+          tab.wc.executeJavaScript(`!!document.querySelector('.waves-canvas')`) as Promise<boolean>,
+        8000
+      )
+      check('the home page shows the water', wavesUp === true)
+
+      // 2. water baseline: saturated accent, and --depth resolves (R4)
+      const a0 = await chromeAccent()
+      say(`[flowtest] water accent: ${a0} (spread ${spread(a0)})`)
+      check('water: accent is saturated', spread(a0) > 40, a0)
+      const depth = await inChrome<string>(
+        `getComputedStyle(document.querySelector('.chrome')).backgroundImage`
+      )
+      check(
+        'water: --depth resolves to the gradient',
+        depth.includes('linear-gradient'),
+        depth.slice(0, 90)
+      )
+
+      // 3. baseline motion: two frames half a second apart differ
+      const sample = (): Promise<string> =>
+        tab.wc.executeJavaScript(
+          `document.querySelector('.waves-canvas').toDataURL()`
+        ) as Promise<string>
+      const m1 = await sample()
+      await delay(500)
+      const m2 = await sample()
+      check('water: the waves move', m1 !== m2)
+
+      // 4–5. muted on: the chrome grays, in one beat
+      setApp({ muted: true })
+      const mutedClass = await settle(
+        () =>
+          inChrome<boolean>(`document.documentElement.classList.contains('muted')`).then(
+            (v) => v || undefined
+          ),
+        2000
+      )
+      check('muted: the chrome wears the class', mutedClass === true)
+      const a1 = await settle(async () => {
+        const a = await chromeAccent()
+        return spread(a) < 16 ? a : undefined
+      }, 2000)
+      say(`[flowtest] muted accent: ${a1} (spread ${spread(a1)})`)
+      check('muted: chrome accent desaturates', a1 !== undefined, String(a1))
+      const ink = await chromeVar('--ink')
+      check('muted: ink token flips gray', ink !== '' && spread(ink) < 12, ink)
+
+      // 6. the push reaches a visible internal page live (§3.4 regression)
+      const pageMuted = await settle(
+        () =>
+          (tab.wc.executeJavaScript(
+            `document.documentElement.classList.contains('muted')`
+          ) as Promise<boolean>).then((v) => v || undefined),
+        2000
+      )
+      check('muted: a visible internal page hears it live', pageMuted === true)
+
+      // 7. the water stands still: three samples over 800ms, one frame
+      const s1 = await sample()
+      await delay(400)
+      const s2 = await sample()
+      await delay(400)
+      const s3 = await sample()
+      check('muted: canvas frame hash is stable', s1 === s2 && s2 === s3)
+
+      // 8. classic stills too
+      setApp({ waveStyle: 'classic' })
+      const dGet = (): Promise<string | null> =>
+        tab.wc.executeJavaScript(
+          `document.querySelector('.cw-svg path')?.getAttribute('d') ?? null`
+        ) as Promise<string | null>
+      const d1 = await settle(async () => (await dGet()) || undefined, 6000)
+      await delay(400)
+      const d2 = await dGet()
+      check('muted: classic paths freeze', !!d1 && d1 === d2)
+
+      // 9. deterministic still frame: a resize redraws the same water
+      setApp({ waveStyle: 'dithered' })
+      await settle(
+        () =>
+          (tab.wc.executeJavaScript(
+            `!!document.querySelector('.waves-canvas')`
+          ) as Promise<boolean>).then((v) => v || undefined),
+        6000
+      )
+      const [bw, bh] = w.win.getSize()
+      w.win.setSize(bw + 10, bh)
+      await delay(800)
+      const r1 = await sample()
+      await delay(400)
+      const r2 = await sample()
+      check('muted: resize redraws the same still water', r1 === r2)
+      w.win.setSize(bw, bh)
+
+      // 10. dark muted: the ink is a pale gray, not a pale blue
+      setApp({ theme: 'dark' })
+      const dInk = await settle(async () => {
+        const v = await chromeVar('--ink')
+        return v && spread(v) < 12 && lightness(v) > 0.85 ? v : undefined
+      }, 3000)
+      check('muted: dark ink is a pale gray', dInk !== undefined, String(dInk))
+
+      // 11. flip back: color returns and the water moves again
+      setApp({ theme: 'light', muted: false })
+      const aBack = await settle(async () => {
+        const a = await chromeAccent()
+        return spread(a) > 40 ? a : undefined
+      }, 3000)
+      check('water returns: color is back', aBack !== undefined, String(aBack))
+      const w1 = await sample()
+      await delay(500)
+      const w2 = await sample()
+      check('water returns: the waves move again', w1 !== w2)
+
+      // 12. semantics survive muting: danger stays red
+      setApp({ muted: true })
+      await delay(400)
+      const danger = await chromeVar('--danger')
+      check('muted: danger red is not gray', spread(danger) > 40, danger)
+
+      // 12b. a space's own accent composes with muted (R8), and with custom hex
+      const seaMuted = await chromeAccent()
+      const space = w.tabs.spaces[0]
+      w.tabs.setSpaceAccent(space.id, 'sand')
+      const spaceMuted = await settle(async () => {
+        const a = await chromeAccent()
+        return a !== seaMuted && spread(a) < 16 ? a : undefined
+      }, 3000)
+      check('muted: a space accent goes gray too', spaceMuted !== undefined, String(spaceMuted))
+      w.tabs.setSpaceAccent(space.id, null)
+      setApp({ accentCustom: '#7a4de0' })
+      // a third gray, distinct from both sea's and the space's — proof the
+      // custom-hex path went through the same derivation, not a stale read
+      const customMuted = await settle(async () => {
+        const a = await chromeAccent()
+        return a !== seaMuted && a !== spaceMuted && spread(a) < 16 ? a : undefined
+      }, 3000)
+      check('muted: a custom accent goes gray too', customMuted !== undefined, String(customMuted))
+      setApp({ accentCustom: null })
+
+      // 13. the identity matrix, photographed (only when OFFSHORE_SHOT is set)
+      const shotDir = process.env['OFFSHORE_SHOT']
+      if (shotDir) {
+        mkdirSync(shotDir, { recursive: true })
+        const combos: [string, string, boolean][] = [
+          ['light', 'water', false],
+          ['light', 'muted', true],
+          ['dark', 'water', false],
+          ['dark', 'muted', true]
+        ]
+        for (const [theme, mood, muted] of combos) {
+          settingsStore.set({
+            appearance: { ...baseAppearance, theme: theme as 'light' | 'dark', muted }
+          })
+          await delay(900)
+          const chromeImg = await w.win.webContents.capturePage()
+          writeFileSync(
+            join(shotDir, `appearance-${theme}-${mood}-chrome.png`),
+            chromeImg.toPNG()
+          )
+          const homeImg = await tab.wc.capturePage()
+          writeFileSync(join(shotDir, `appearance-${theme}-${mood}-home.png`), homeImg.toPNG())
+          say(`[flowtest] wrote appearance-${theme}-${mood}-{chrome,home}.png`)
+        }
+      }
+
+      // 14. cleanup: hand the profile back the way it was found
+      settingsStore.set({
+        appearance: { theme: 'system', waves: true, waveStyle: 'dithered', accent: 'sea', accentCustom: null, muted: false }
+      })
+      settingsStore.flush()
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
     if (flow === 'chrome') {
       const inChrome = <T,>(src: string): Promise<T> =>
         w.win.webContents.executeJavaScript(src) as Promise<T>
@@ -1066,6 +2603,12 @@ function setupTestFlows(): void {
        * same code path a keystroke takes once the cursor is there.
        */
       surface(w)
+      if (!process.env['OFFSHORE_TEST_FOREGROUND'])
+        check(
+          'the harness stays off the human\'s screen',
+          visibleSliverPx(w.win) <= 10,
+          `sliver=${visibleSliverPx(w.win)}px bounds=${JSON.stringify(w.win.getBounds())}`
+        )
       /*
        * Focusing the window hands the cursor to the page (see OffshoreWindow's
        * 'focus' handler) and that lands asynchronously — ask for the omnibox in
@@ -1345,7 +2888,17 @@ function setupTestFlows(): void {
         )) === true
       )
       const [cw, ch] = w.win.getContentSize()
-      const fs = w.tabs.activeTab!.view.getBounds()
+      /*
+       * Entering full screen is also what ends the peek above, and closing that
+       * overlay brings the live view back the way every swap goes: parked
+       * off-screen for a beat while it proves it can paint, then landed. Poll
+       * for the landed state rather than reading the bounds mid-swap.
+       */
+      const fs =
+        (await settle(async () => {
+          const b = w.tabs.activeTab!.view.getBounds()
+          return b.x === 0 && b.y === 0 && b.width === cw && b.height === ch ? b : undefined
+        }, 4000)) ?? w.tabs.activeTab!.view.getBounds()
       check(
         'the page has every pixel',
         fs.x === 0 && fs.y === 0 && fs.width === cw && fs.height === ch,
@@ -1508,7 +3061,11 @@ function setupTestFlows(): void {
     }
 
     if (flow === 'popups') {
+      const { resetGestures } = await import('./popups')
       const before = BrowserWindow.getAllWindows().length
+      // ambient input must not have gifted the page a gesture before the
+      // drive-by fires (mouse events are already ignored; this is the belt)
+      resetGestures()
       w.tabs.navigate(null, `${dev}/testpopup.html`)
       await delay(2200)
       const state = w.tabs.state()

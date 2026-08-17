@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { EventEmitter } from 'events'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import {
   DEFAULT_SETTINGS,
@@ -8,6 +8,7 @@ import {
   type SessionV2,
   type SessionWindowV2,
   type Settings,
+  type ShieldStats,
   type Suggestion
 } from '@shared/types'
 
@@ -55,6 +56,9 @@ export class JsonFile<T> {
     try {
       mkdirSync(dirname(this.path), { recursive: true })
       writeFileSync(this.path, JSON.stringify(this.data, null, 2), { mode: this.mode })
+      // writeFileSync's mode only applies at creation — tighten files that
+      // predate their mode (a stash written before it went owner-only)
+      if (this.mode !== undefined) chmodSync(this.path, this.mode)
     } catch (err) {
       console.warn('[stores] failed to save:', err)
     }
@@ -77,10 +81,16 @@ function mergeSettings(base: Settings, patch: Partial<Settings>): Settings {
     newTabWidgets: { ...base.newTabWidgets, ...(patch.newTabWidgets ?? {}) },
     newTabWidgetLayout: { ...base.newTabWidgetLayout, ...(patch.newTabWidgetLayout ?? {}) },
     popups: { ...base.popups, ...(patch.popups ?? {}) },
+    privacy: ((): Settings['privacy'] => {
+      const merged = { ...base.privacy, ...(patch.privacy ?? {}) }
+      if (![14, 30, 60, 90].includes(merged.tideDays)) merged.tideDays = 30
+      return merged
+    })(),
     passwords: { ...base.passwords, ...(patch.passwords ?? {}) },
     brief: { ...base.brief, ...(patch.brief ?? {}) },
+    morning: { ...base.morning, ...(patch.morning ?? {}) },
     slop: { ...base.slop, ...(patch.slop ?? {}) },
-    cleaner: { ...base.cleaner, ...(patch.cleaner ?? {}) }
+    focus: { ...base.focus, ...(patch.focus ?? {}) }
   }
 }
 
@@ -92,6 +102,22 @@ class SettingsStore extends EventEmitter {
       const legacy = (parsed as { slopDetector?: unknown })?.slopDetector
       if (legacy === false && (parsed as { slop?: unknown })?.slop === undefined) {
         merged.slop = { ...merged.slop, detector: false }
+      }
+      // the Page Cleaner's master switch becomes Focus's: keep an old "off"
+      const cleaner = (parsed as { cleaner?: { enabled?: unknown } })?.cleaner
+      if (cleaner?.enabled === false && (parsed as { focus?: unknown })?.focus === undefined) {
+        merged.focus = { ...merged.focus, enabled: false }
+      }
+      // veil-era shape: carry the never-veil list over as the quiet list, drop
+      // the rest (rebuilding from known keys is the scrub — `veil` and
+      // `allowlist` cannot survive it)
+      const oldSlop = (parsed as { slop?: { quiet?: unknown; allowlist?: unknown } })?.slop
+      const hosts = (list: unknown): string[] =>
+        Array.isArray(list) ? list.filter((h): h is string => typeof h === 'string') : []
+      merged.slop = {
+        detector: merged.slop.detector,
+        highlight: merged.slop.highlight,
+        quiet: Array.isArray(oldSlop?.quiet) ? hosts(oldSlop.quiet) : hosts(oldSlop?.allowlist)
       }
       return merged
     }
@@ -360,7 +386,7 @@ class BookmarksStore extends EventEmitter {
 
 // ---------------- History ----------------
 
-interface HistoryEntry {
+export interface HistoryEntry {
   url: string
   title: string
   visitCount: number
@@ -401,6 +427,24 @@ class HistoryStore {
       e.title = title
       this.file.save()
     }
+  }
+
+  /** Read-only view for the morning brief's distiller. */
+  entries(): ReadonlyArray<HistoryEntry> {
+    return this.file.data.entries
+  }
+
+  /**
+   * Test harness only: seed entries with explicit timestamps. Exists because
+   * `record()` stamps `lastVisit = Date.now()` and the morning flow needs
+   * entries that are days old.
+   */
+  inject(list: HistoryEntry[]): void {
+    for (const e of list) {
+      this.byUrl.set(e.url, e)
+      this.file.data.entries.push(e)
+    }
+    this.file.save()
   }
 
   /** Frecency-ish search over history for omnibox suggestions. */
@@ -523,6 +567,40 @@ class DownloadsStore {
 
 export const downloadsStore = new DownloadsStore()
 
+// ---------------- Shield lifetime stats ----------------
+
+/**
+ * The Shield's lifetime blocked counter. A trailing throttle, not JsonFile's
+ * debounce — save() resets its timer on every call, so a stream of blocks
+ * would postpone the write forever.
+ */
+class ShieldStatsStore {
+  private file = new JsonFile<ShieldStats>('shield-stats.json', { blockedTotal: 0, since: Date.now() })
+  private timer: NodeJS.Timeout | null = null
+
+  get(): ShieldStats {
+    return this.file.data
+  }
+
+  add(n: number): void {
+    this.file.data = { ...this.file.data, blockedTotal: this.file.data.blockedTotal + n }
+    if (!this.timer) {
+      this.timer = setTimeout(() => {
+        this.timer = null
+        this.file.saveNow()
+      }, 2000)
+    }
+  }
+
+  flush(): void {
+    if (this.timer) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
+    this.file.saveNow()
+  }
+}
+
 // ---------------- Session (open windows/spaces/tabs) ----------------
 
 type SessionFileShape = SessionV2 & { urls?: string[] }
@@ -573,10 +651,12 @@ export const settingsStore = new SettingsStore()
 export const bookmarksStore = new BookmarksStore()
 export const historyStore = new HistoryStore()
 export const sessionStore = new SessionStore()
+export const shieldStatsStore = new ShieldStatsStore()
 
 export function flushAllStores(): void {
   settingsStore.flush()
   bookmarksStore.flush()
   historyStore.flush()
   sessionStore.flush()
+  shieldStatsStore.flush()
 }

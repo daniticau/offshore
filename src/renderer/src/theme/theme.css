@@ -43,6 +43,19 @@
   /* ---- shadows & scrims ---- */
   --shadow-soft: 0 10px 30px rgba(14, 92, 122, 0.16);
   --shadow-pop: 0 24px 70px rgba(10, 70, 96, 0.28);
+  /* the small lifts: a pill at rest, an active row — one family, two weights */
+  --shadow-rest: 0 2px 8px rgba(14, 92, 122, 0.08);
+  --shadow-row: 0 3px 10px rgba(14, 92, 122, 0.12);
+  /* deep-water shadow color for one-off geometries (logo drop-shadow, CTA) */
+  --deep-shadow: rgba(10, 70, 96, 0.28);
+  /* modal scrim, and the home search's half-step page dim */
+  --scrim: rgba(9, 40, 54, 0.28);
+  --dim: rgba(8, 42, 58, 0.1);
+  /* the light riding the top edge of an accent-filled control (avatar, swatch);
+     white is neutral — it survives Muted untouched */
+  --accent-sheen: rgba(255, 255, 255, 0.28);
+  /* frost for panes standing over a freeze-frame still */
+  --frost: blur(18px) saturate(1.2);
 
   /* ---- semantic ---- */
   --danger: #c4442f;
@@ -86,8 +99,35 @@
   --dur-fast: 80ms;
   --dur: 140ms;
   --dur-slow: 200ms;
+  --dur-glide: 260ms; /* panel/menu entrances */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-spring: cubic-bezier(0.2, 0.9, 0.3, 1.15);
+  --ease-water: cubic-bezier(0.22, 0.7, 0.25, 1); /* long out-glide, no overshoot */
+}
+
+/*
+ * ---- water depth & light (derived tokens) ----
+ *
+ * A custom property resolves its inner var()s on the element it is *declared*
+ * on, and descendants inherit the finished value — so a derivation declared
+ * only at :root would bake in the root tints and never see the accent vars the
+ * chrome (and the error page) set inline on their own roots. Declaring the
+ * recipe on those elements too makes it recompute against their own palette.
+ */
+:root,
+.chrome,
+.errorpage {
+  /* the chrome wash: surface light, a mid the eye reads as depth, then the deep */
+  --depth: linear-gradient(
+    180deg,
+    var(--tint-top),
+    color-mix(in oklab, var(--tint-top), var(--tint-bottom) 62%) 52%,
+    var(--tint-bottom)
+  );
+  /* light entering the top of a lifted pane */
+  --sheen: linear-gradient(180deg, var(--glass-inset-hi), rgba(255, 255, 255, 0) 42%);
+  /* the accent as water, not paint — tints active rows without owning them */
+  --accent-wash: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -116,6 +156,8 @@
 
     --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.5);
     --shadow-pop: 0 24px 70px rgba(0, 0, 0, 0.6);
+    --scrim: rgba(0, 0, 0, 0.44);
+    --dim: rgba(0, 0, 0, 0.22);
 
     --danger: #ff8a75;
     --danger-bg: rgba(226, 109, 92, 0.2);
@@ -124,6 +166,71 @@
     --focus-ring: rgba(77, 178, 216, 0.65);
     --scroll-thumb: rgba(255, 255, 255, 0.16);
     --scroll-thumb-hover: rgba(255, 255, 255, 0.26);
+  }
+}
+
+/*
+ * ---- Muted: the same water, seen through fog ----
+ *
+ * Same lightness, ~no chroma. Every value below is muteColor() (shared/mute.ts)
+ * of its normal counterpart — do not tune by eye. The JS-set vars (accent,
+ * tints, waves, tiles) mute through resolveAccentColors; these are the static
+ * blue-tinted tokens, which cannot run JS. The accent statics are overridden
+ * too so internal pages (which never receive inline accent vars) gray with the
+ * rest; on the chrome, the inline muted values win anyway.
+ *
+ * Semantic exemptions, on purpose: --danger, --danger-bg, --star, the slop
+ * grade colors, traffic-light hovers, download states — they carry meaning,
+ * not identity. --content-bg keeps matching main's hardcoded view backgrounds.
+ * White-based glass tokens are already neutral.
+ *
+ * Each mode's overrides live inside its own media block so the light grays can
+ * never clobber dark's white/black-neutral hover, glass and shadow tokens.
+ */
+@media (prefers-color-scheme: light) {
+  :root.muted {
+    --ink: #2b2f30; /* muteColor(#0b3c50) */
+    --ink-soft: rgba(43, 47, 48, 0.55);
+    --ink-faint: rgba(43, 47, 48, 0.34);
+    --tl-idle: rgba(43, 47, 48, 0.22);
+    --press: rgba(43, 47, 48, 0.1);
+    --hairline: rgba(43, 47, 48, 0.08);
+    --frame-ring: rgba(64, 70, 72, 0.14);
+    --accent: rgba(95, 104, 107, 1); /* muteColor(#1d84ad) */
+    --accent-strong: rgba(72, 79, 82, 1); /* muteColor(#0e6b8c) */
+    --tint-top: rgba(231, 233, 234, 0.5);
+    --tint-bottom: rgba(211, 214, 216, 0.35);
+    --shadow-soft: 0 10px 30px rgba(64, 70, 72, 0.16);
+    --shadow-pop: 0 24px 70px rgba(50, 54, 56, 0.28);
+    --shadow-rest: 0 2px 8px rgba(64, 70, 72, 0.08);
+    --shadow-row: 0 3px 10px rgba(64, 70, 72, 0.12);
+    --deep-shadow: rgba(50, 54, 56, 0.28);
+    --selection: rgba(95, 104, 107, 0.25);
+    --focus-ring: rgba(95, 104, 107, 0.7); /* alpha raised .55→.7: a gray ring needs it */
+    --scroll-thumb: rgba(43, 47, 48, 0.14);
+    --scroll-thumb-hover: rgba(43, 47, 48, 0.26);
+    --scrim: rgba(30, 32, 33, 0.28);
+    --dim: rgba(31, 34, 35, 0.1);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root.muted {
+    --ink: #edeeef; /* muteColor(#e6f1f6) */
+    --ink-soft: rgba(237, 238, 239, 0.6);
+    --ink-faint: rgba(237, 238, 239, 0.36);
+    --tl-idle: rgba(237, 238, 239, 0.26);
+    --accent: rgba(140, 149, 153, 1); /* muteColor(#4db2d8) */
+    --accent-strong: rgba(186, 191, 193, 1); /* muteColor(#8fd4ec) */
+    --tint-top: rgba(30, 32, 34, 0.55);
+    --tint-bottom: rgba(19, 20, 21, 0.42);
+    --surface: rgba(31, 33, 35, 0.92);
+    --selection: rgba(140, 149, 153, 0.35);
+    --focus-ring: rgba(140, 149, 153, 0.75);
+    --shadow-rest: 0 2px 8px rgba(64, 70, 72, 0.08);
+    --shadow-row: 0 3px 10px rgba(64, 70, 72, 0.12);
+    --deep-shadow: rgba(50, 54, 56, 0.28);
+    /* dark hover/press/hairline/glass/scrim/big shadows are already neutral */
   }
 }
 
@@ -186,11 +293,18 @@ select {
 
 /* ---- shared primitives ---- */
 
+/*
+ * e2 — lifted glass. Menus, dropdowns, panels, modals: light enters the top
+ * (sheen), the pane frosts whatever stands behind it (real over freeze-frame
+ * stills, harmless elsewhere), and the pop shadow says it is in front.
+ */
 .surface-card {
-  background: var(--surface);
+  background: var(--sheen), var(--surface);
   border: 0.5px solid var(--glass-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-soft);
+  box-shadow: var(--shadow-pop);
+  -webkit-backdrop-filter: var(--frost);
+  backdrop-filter: var(--frost);
 }
 
 .chip {
@@ -242,6 +356,15 @@ select {
   left: 0;
   width: 100%;
   height: 100%;
+}
+
+/*
+ * Ambient motion — anything that loops while nothing happens — stops under
+ * Muted. The waves and the cursor-parting are JS and still themselves via the
+ * `still` prop; every CSS loop wears class "ambient" and stops here.
+ */
+:root.muted .ambient {
+  animation: none !important;
 }
 
 @media (prefers-reduced-motion: reduce) {

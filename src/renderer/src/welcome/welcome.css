@@ -14,7 +14,7 @@ body,
 .welcome {
   position: relative;
   height: 100%;
-  background: linear-gradient(180deg, var(--tint-top), var(--tint-bottom));
+  background: var(--depth);
   overflow: hidden;
 }
 
@@ -72,7 +72,7 @@ body,
 .logo img,
 .logo svg {
   border-radius: 26px;
-  filter: drop-shadow(0 12px 26px rgba(10, 70, 96, 0.28));
+  filter: drop-shadow(0 12px 26px var(--deep-shadow));
   animation: bob 6s ease-in-out infinite;
 }
 
@@ -129,14 +129,14 @@ h2 {
   font-size: 15px;
   font-weight: 600;
   cursor: default;
-  box-shadow: 0 10px 24px rgba(10, 70, 96, 0.24);
+  box-shadow: 0 10px 24px var(--deep-shadow);
   transition:
     transform var(--dur) var(--ease-out),
     box-shadow var(--dur) var(--ease-out);
 }
 .cta:hover {
   transform: translateY(-1px);
-  box-shadow: 0 14px 30px rgba(10, 70, 96, 0.3);
+  box-shadow: 0 14px 30px var(--deep-shadow);
 }
 .cta:active {
   transform: scale(0.97);
