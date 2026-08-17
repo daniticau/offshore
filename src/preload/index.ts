@@ -98,6 +98,15 @@ const api: OffshoreApi = {
     remove: (id: string) => invoke('bookmarks:remove', id),
     setLastFolder: (id: string | null) => invoke('bookmarks:set-last-folder', id)
   },
+  favorites: {
+    list: () => invoke('favorites:list'),
+    add: (url: string, title: string, favicon?: string) =>
+      invoke('favorites:add', url, title, favicon),
+    remove: (id: string) => invoke('favorites:remove', id),
+    reorder: (ids: string[]) => invoke('favorites:reorder', ids),
+    open: (id: string) => invoke('favorites:open', id),
+    toTab: (id: string, beforeTabId: number | null) => invoke('favorites:to-tab', id, beforeTabId)
+  },
   passwords: {
     resolveOffer: (offerId: string, action: 'save' | 'never' | 'dismiss') =>
       invoke('passwords:resolve-offer', offerId, action)

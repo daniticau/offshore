@@ -43,7 +43,7 @@ import {
   registerPageContents
 } from './popups'
 import { TAB_PARTITION, prepareTabSession, spacePartition } from './sessions'
-import { bookmarksStore, genId, historyStore, settingsStore } from './stores'
+import { bookmarksStore, favoritesStore, genId, historyStore, settingsStore } from './stores'
 import {
   devRendererUrl,
   errorPageTarget,
@@ -1253,8 +1253,9 @@ export class TabManager {
       // here would render as Chromium's broken-image box in the tab strip
       if (isInternalUrl(wc.getURL())) return
       tab.favicon = favicons[favicons.length - 1]
-      // keep saved bookmarks showing the site's current icon
+      // keep saved bookmarks and pinned favorites showing the site's current icon
       bookmarksStore.setFavicon(wc.getURL(), tab.favicon)
+      favoritesStore.setFavicon(wc.getURL(), tab.favicon)
       this.pushState()
     })
 

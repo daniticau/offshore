@@ -42,7 +42,7 @@ import {
 } from './popups'
 import { openDownload, preparedSessions, revealDownload } from './sessions'
 import { searchSuggestions } from './suggest'
-import { bookmarksStore, downloadsStore, historyStore, settingsStore, shieldStatsStore } from './stores'
+import { bookmarksStore, downloadsStore, favoritesStore, historyStore, settingsStore, shieldStatsStore } from './stores'
 import { devRendererUrl, internalPageUrl, isInternalUrl, prettyHost, resolveOmniboxInput } from './util'
 import { windowForChromeContents, windowForTab, windows, type OffshoreWindow } from './windows'
 
@@ -741,6 +741,66 @@ export function setupIpc(): void {
     bookmarksStore.setLastFolder(id)
   })
 
+  // ---- favorites (the sidebar's pinned-site icon row) ----
+  ipcMain.handle('favorites:list', (e) => (isTrustedSender(e) ? favoritesStore.list() : []))
+  ipcMain.handle('favorites:add', (e, url: string, title: string, favicon?: string) => {
+    if (!isTrustedSender(e)) return null
+    // only real sites get pinned — internal pages have their own doors
+    if (typeof url !== 'string' || !/^https?:/i.test(url)) return null
+    return favoritesStore.add(url, typeof title === 'string' ? title : '', favicon)
+  })
+  ipcMain.handle('favorites:remove', (e, id: string) => {
+    if (!isTrustedSender(e)) return
+    favoritesStore.remove(id)
+  })
+  ipcMain.handle('favorites:reorder', (e, ids: string[]) => {
+    if (!isTrustedSender(e) || !Array.isArray(ids)) return
+    favoritesStore.reorder(ids.filter((id): id is string => typeof id === 'string'))
+  })
+  /**
+   * Clicking a favorite: a tab for that site already open in this window gets
+   * focused — the exact address first, then any tab on the host, the active
+   * space's tabs before another space's — and failing all that, the site opens
+   * as a new tab in the active space. The favorite itself is untouched either
+   * way: it is a door, not the room behind it.
+   */
+  ipcMain.handle('favorites:open', (e, id: string) => {
+    const w = chromeWindow(e)
+    const fav = favoritesStore.byId(id)
+    if (!w || !fav) return
+    const hostOf = (u: string): string => {
+      try {
+        return new URL(u).host
+      } catch {
+        return ''
+      }
+    }
+    const favHost = hostOf(fav.url)
+    // active space first, so a click never yanks you across spaces needlessly
+    const ordered = [
+      ...w.tabs.tabsIn(w.tabs.activeSpaceId),
+      ...w.tabs.tabs.filter((t) => t.spaceId !== w.tabs.activeSpaceId)
+    ]
+    const match =
+      ordered.find((t) => t.wc.getURL() === fav.url) ??
+      (favHost ? ordered.find((t) => hostOf(t.wc.getURL()) === favHost) : undefined)
+    if (match) w.tabs.activateTab(match.id)
+    else w.tabs.createTab(fav.url)
+  })
+  /** A favorite dropped into the tab list: unpin it and open a tab right there. */
+  ipcMain.handle('favorites:to-tab', (e, id: string, beforeTabId: number | null) => {
+    const w = chromeWindow(e)
+    const fav = favoritesStore.byId(id)
+    if (!w || !fav) return
+    favoritesStore.remove(id)
+    let index: number | undefined
+    if (typeof beforeTabId === 'number') {
+      const before = w.tabs.byId(beforeTabId)
+      if (before) index = w.tabs.tabs.indexOf(before)
+    }
+    w.tabs.createTab(fav.url, { index })
+  })
+
   // ---- settings ----
   ipcMain.handle('settings:get', (e) => (isTrustedSender(e) ? settingsStore.get() : null))
   ipcMain.handle('settings:set', (e, patch: Partial<Settings>) => {
@@ -1123,6 +1183,9 @@ export function setupIpc(): void {
   bookmarksStore.on('changed', () => {
     broadcast('bookmarks:changed', bookmarksStore.list())
     for (const w of windows) w.tabs.pushState()
+  })
+  favoritesStore.on('changed', () => {
+    broadcast('favorites:changed', favoritesStore.list())
   })
   // focusOn rides TabInfo; a flip with a host also reaches the pages live
   focusStore.on('changed', (host?: string) => {

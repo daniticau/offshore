@@ -5,6 +5,7 @@ import { join, dirname } from 'path'
 import {
   DEFAULT_SETTINGS,
   type BookmarkNode,
+  type FavoriteEntry,
   type SessionV2,
   type SessionWindowV2,
   type Settings,
@@ -384,6 +385,71 @@ class BookmarksStore extends EventEmitter {
   }
 }
 
+// ---------------- Favorites (pinned sites — the sidebar's icon row) ----------------
+
+class FavoritesStore extends EventEmitter {
+  private file = new JsonFile<{ items: FavoriteEntry[] }>('favorites.json', { items: [] })
+
+  private commit(): void {
+    this.file.save()
+    this.emit('changed')
+  }
+
+  list(): FavoriteEntry[] {
+    return this.file.data.items
+  }
+
+  /** Pin a site. Dedup by exact url — pinning again refreshes title/icon. */
+  add(url: string, title: string, favicon?: string): FavoriteEntry {
+    const existing = this.file.data.items.find((f) => f.url === url)
+    if (existing) {
+      if (title && existing.title !== title) existing.title = title
+      if (favicon && existing.favicon !== favicon) existing.favicon = favicon
+      this.commit()
+      return existing
+    }
+    const fav: FavoriteEntry = { id: genId(), url, title: title || url, favicon, createdAt: Date.now() }
+    this.file.data.items.push(fav)
+    this.commit()
+    return fav
+  }
+
+  byId(id: string): FavoriteEntry | undefined {
+    return this.file.data.items.find((f) => f.id === id)
+  }
+
+  remove(id: string): void {
+    const before = this.file.data.items.length
+    this.file.data.items = this.file.data.items.filter((f) => f.id !== id)
+    if (this.file.data.items.length !== before) this.commit()
+  }
+
+  /** Same contract as tab reorder: the given ids in their new order, rest keep place. */
+  reorder(ids: string[]): void {
+    const moving = new Set(ids)
+    const queue = ids.map((id) => this.byId(id)).filter((f): f is FavoriteEntry => !!f)
+    this.file.data.items = this.file.data.items.map((f) => (moving.has(f.id) ? queue.shift()! : f))
+    this.commit()
+  }
+
+  /** Keep pinned icons showing the site's current favicon (mirrors bookmarks). */
+  setFavicon(url: string, favicon?: string): void {
+    if (!favicon) return
+    let touched = false
+    for (const f of this.file.data.items) {
+      if (f.url === url && f.favicon !== favicon) {
+        f.favicon = favicon
+        touched = true
+      }
+    }
+    if (touched) this.commit()
+  }
+
+  flush(): void {
+    this.file.saveNow()
+  }
+}
+
 // ---------------- History ----------------
 
 export interface HistoryEntry {
@@ -649,6 +715,7 @@ class SessionStore {
 
 export const settingsStore = new SettingsStore()
 export const bookmarksStore = new BookmarksStore()
+export const favoritesStore = new FavoritesStore()
 export const historyStore = new HistoryStore()
 export const sessionStore = new SessionStore()
 export const shieldStatsStore = new ShieldStatsStore()
@@ -656,6 +723,7 @@ export const shieldStatsStore = new ShieldStatsStore()
 export function flushAllStores(): void {
   settingsStore.flush()
   bookmarksStore.flush()
+  favoritesStore.flush()
   historyStore.flush()
   sessionStore.flush()
   shieldStatsStore.flush()

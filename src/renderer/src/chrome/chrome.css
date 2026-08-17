@@ -735,6 +735,101 @@ body,
   color: var(--ink);
 }
 
+/* ---------- favorites (pinned sites, vertical sidebar) ---------- */
+
+/*
+ * The zone exists only when it holds something (or a drag is about to give it
+ * something): empty, none of this renders and the sidebar is untouched. The
+ * sidebar is a flex column, so whatever height the zone takes simply pushes
+ * the New Tab row and the tab list down — no other rule needed.
+ */
+.fav-zone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--section-gap);
+  /* pull the divider toward the New Tab row the way the row pulls toward the
+     tab list — the hairline reads as the row's ceiling, not a stray line */
+  margin-bottom: calc(var(--tab-list-gap) - var(--section-gap));
+  border-radius: var(--radius-row);
+  transition: background var(--dur) var(--ease-out);
+}
+/* a tab in flight: the zone says quietly that it will catch it */
+.fav-zone.drop-armed {
+  background: var(--accent-wash);
+}
+.fav-zone.drop-armed.drop-hot {
+  background: linear-gradient(180deg, var(--accent-wash), transparent 85%), var(--hover);
+}
+
+.fav-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 1px;
+}
+
+/* Arc's favorites, a size tighter: square glass tiles wearing site icons. */
+.fav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--glass);
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 var(--glass-inset-hi);
+  cursor: default;
+  transition:
+    background var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
+}
+.fav-icon:hover {
+  background: var(--active-row);
+  box-shadow:
+    inset 0 1px 0 var(--glass-inset-hi),
+    var(--shadow-row);
+}
+.fav-icon img {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+  border-radius: 3px;
+}
+.fav-icon.dragging {
+  opacity: 0.5;
+}
+
+/* the subtle line the icons stand above; the rows below duck under it */
+.fav-divider {
+  height: 1px;
+  background: var(--hairline);
+  flex-shrink: 0;
+}
+
+/*
+ * No favorites yet: the slot that materializes only while a pinnable tab is
+ * mid-drag — the gesture's discoverability, in the water idiom. A low tide
+ * mark, not a banner: a wash and a hairline where the divider will be.
+ */
+.fav-drop-hint {
+  height: calc(var(--row-h) - 4px);
+  border-radius: var(--radius-row);
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  margin-bottom: calc(var(--tab-list-gap) - var(--section-gap));
+  transition:
+    background var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
+}
+.fav-drop-hint.hot {
+  background: linear-gradient(180deg, var(--accent-wash), transparent 85%), var(--hover);
+  box-shadow:
+    inset 0 0 0 1.5px var(--focus-ring),
+    inset 0 1px 0 var(--glass-inset-hi);
+}
+
 .tab-list {
   flex: 1;
   display: flex;

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import type {
   BookmarkNode,
   DownloadItemInfo,
+  FavoriteEntry,
   FindResult,
   PageFreezeFrame,
   PasswordOffer,
@@ -217,6 +218,7 @@ export function App(): React.JSX.Element {
   })
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [bookmarks, setBookmarks] = useState<BookmarkNode[]>([])
+  const [favorites, setFavorites] = useState<FavoriteEntry[]>([])
   const [omniboxNonce, setOmniboxNonce] = useState(0)
   const [homeEditSignal, setHomeEditSignal] = useState(0)
   const [omniboxOverlay, setOmniboxOverlay] = useState(false)
@@ -443,6 +445,9 @@ export function App(): React.JSX.Element {
         setBookmarkEdit((prev) => (prev ? (nodes.find((n) => n.id === prev.id) ?? null) : null))
       })
     )
+    un.push(
+      offshore.on('favorites:changed', (items: FavoriteEntry[]) => setFavorites(items))
+    )
     un.push(offshore.on('omnibox:focus', () => setOmniboxNonce((n) => n + 1)))
     un.push(offshore.on('find:open', () => setFind((f) => ({ ...f, open: true }))))
     un.push(
@@ -497,6 +502,7 @@ export function App(): React.JSX.Element {
       }
     })
     void offshore.bookmarks.list().then((b) => b && setBookmarks(b))
+    void offshore.favorites.list().then((f) => f && setFavorites(f))
     void offshore.extensions.has().then(setHasExtensions).catch(() => setHasExtensions(false))
     return () => {
       un.forEach((fn) => fn())
@@ -758,6 +764,7 @@ export function App(): React.JSX.Element {
     find,
     downloads,
     bookmarks,
+    favorites,
     renameSpaceId,
     renameBookmarkId,
     bookmarkEdit,

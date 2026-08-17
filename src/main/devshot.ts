@@ -357,7 +357,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor|shield|morning|appearance
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor|shield|morning|appearance|favorites
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -401,7 +401,7 @@ function setupTestFlows(): void {
   const KNOWN_FLOWS = [
     'chrome', 'passwords', 'popups', 'spaces', 'headers', 'privacy',
     'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus', 'harbor', 'shield', 'morning',
-    'appearance'
+    'appearance', 'favorites'
   ]
 
   async function runFlow(): Promise<void> {
@@ -2644,6 +2644,307 @@ function setupTestFlows(): void {
         appearance: { theme: 'system', waves: true, waveStyle: 'dithered', accent: 'sea', accentCustom: null, muted: false }
       })
       settingsStore.flush()
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
+    if (flow === 'favorites') {
+      /*
+       * The sidebar's favorites zone end to end, offline: drag-to-pin makes the
+       * strip + divider and pushes the New Tab row down (geometry asserted),
+       * empty state renders nothing at all, click focuses an open tab for the
+       * site or opens one, reordering commits and persists, dragging an icon
+       * out unpins (into the tab list: unpins AND opens a tab there), and the
+       * store survives on disk. Every gesture is dispatched as the real DOM
+       * drag events the handlers listen to — one DataTransfer per gesture, the
+       * way Chromium would hand it over.
+       */
+      if (!process.env['OFFSHORE_CLEAN_PROFILE']) {
+        // writes favorites.json and flips settings — never against a real profile
+        say('[flowtest] favorites flow requires OFFSHORE_CLEAN_PROFILE')
+        app.exit(1)
+        return
+      }
+      const { settingsStore, favoritesStore } = await import('./stores')
+      const inChrome = <T,>(src: string): Promise<T> =>
+        w.win.webContents.executeJavaScript(src) as Promise<T>
+      settingsStore.set({ onboarded: true, tabOrientation: 'vertical' })
+      surface(w)
+      w.tabs.setActiveVisible(true)
+      await delay(600)
+
+      // three fixture sites — three ports, so "site" (host) is unambiguous —
+      // each with a favicon, so the strip's tiles wear what a site would. The
+      // icons are data: URLs because the chrome document's CSP allows img-src
+      // 'self' data: https: only — an http://127.0.0.1 icon would render as
+      // the broken-image box in a fixture run (real favicons are https).
+      const mkSite = async (
+        label: string,
+        color: string
+      ): Promise<{ url: string; icon: string; server: nodeHttp.Server }> => {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" rx="4" fill="${color}"/></svg>`
+        const icon = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`
+        const server = nodeHttp.createServer((_req, res) => {
+          res.setHeader('content-type', 'text/html')
+          res.end(
+            `<html><head><title>${label}</title><link rel="icon" href="${icon}"></head><body>${label}</body></html>`
+          )
+        })
+        await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+        const port = (server.address() as { port: number }).port
+        return { url: `http://127.0.0.1:${port}/`, icon, server }
+      }
+      const A = await mkSite('Site A', '#1d84ad')
+      const B = await mkSite('Site B', '#1d9c85')
+      const C = await mkSite('Site C', '#c98a4b')
+
+      const shotDir = process.env['OFFSHORE_SHOT']
+      const shoot = async (name: string): Promise<void> => {
+        if (!shotDir) return
+        mkdirSync(shotDir, { recursive: true })
+        await delay(400)
+        const img = await w.win.webContents.capturePage()
+        writeFileSync(join(shotDir, name), img.toPNG())
+        say(`[flowtest] wrote ${join(shotDir, name)}`)
+      }
+
+      // ---- 1. empty state: no zone, no divider, sidebar untouched ----
+      const empty0 = JSON.parse(
+        (await inChrome<string>(
+          `JSON.stringify({zone: !!document.querySelector('.fav-zone'),
+                           hint: !!document.querySelector('.fav-drop-hint'),
+                           divider: !!document.querySelector('.fav-divider')})`
+        ))
+      ) as { zone: boolean; hint: boolean; divider: boolean }
+      check('empty: no zone, no hint, no divider', !empty0.zone && !empty0.hint && !empty0.divider, JSON.stringify(empty0))
+      const ntTop0 = await inChrome<number>(
+        `Math.round(document.querySelector('.new-tab-btn').getBoundingClientRect().top)`
+      )
+      say(`[flowtest] new-tab row baseline top: ${ntTop0}`)
+      await shoot('fav-empty-before.png')
+
+      // ---- 2. a pinnable tab mid-drag materializes the drop slot ----
+      w.tabs.navigate(null, A.url)
+      const tabA = w.tabs.activeTab!
+      await settle(async () => (tabA.wc.getURL() === A.url ? true : undefined), 8000)
+      await settle(
+        async () =>
+          ((await inChrome<boolean>(
+            `!!document.querySelector('.tab-item[data-tab-id="${tabA.id}"]')`
+          )) === true
+            ? true
+            : undefined),
+        6000
+      )
+      // dragstart first; the slot materializes on the next render, the way it
+      // would under a real pointer (drag events pause for no one's re-render)
+      const dragStarted = await inChrome<boolean>(`(() => {
+        const row = document.querySelector('.tab-item[data-tab-id="${tabA.id}"]')
+        if (!row) return false
+        const dt = new DataTransfer()
+        window.__favTestDt = dt
+        row.dispatchEvent(new DragEvent('dragstart', { dataTransfer: dt, bubbles: true, cancelable: true }))
+        return true
+      })()`)
+      check('the tab row takes the drag', dragStarted === true)
+      const midDrag = await settle(async () => {
+        const raw = await inChrome<string>(`(() => {
+          const hint = document.querySelector('.fav-drop-hint')
+          if (!hint) return ''
+          hint.dispatchEvent(new DragEvent('dragover', { dataTransfer: window.__favTestDt, bubbles: true, cancelable: true }))
+          return JSON.stringify({
+            hot: hint.classList.contains('hot'),
+            h: Math.round(hint.getBoundingClientRect().height)
+          })
+        })()`)
+        return raw ? (JSON.parse(raw) as { hot: boolean; h: number }) : undefined
+      }, 5000)
+      say(`[flowtest] mid-drag hint: ${JSON.stringify(midDrag)}`)
+      check('a tab drag materializes the drop slot', midDrag !== undefined && midDrag.h > 12, JSON.stringify(midDrag))
+      const hintHot = await settle(async () =>
+        ((await inChrome<boolean>(`!!document.querySelector('.fav-drop-hint.hot')`)) ? true : undefined), 4000)
+      check('the slot answers the pointer', hintHot === true)
+      await shoot('fav-drophint.png')
+
+      // ---- 3. dropping on the slot pins the site ----
+      await inChrome(`(() => {
+        const row = document.querySelector('.tab-item[data-tab-id="${tabA.id}"]')
+        const hint = document.querySelector('.fav-drop-hint')
+        const o = { dataTransfer: window.__favTestDt, bubbles: true, cancelable: true }
+        hint.dispatchEvent(new DragEvent('drop', o))
+        row.dispatchEvent(new DragEvent('dragend', o))
+        return true
+      })()`)
+      const pinned = await settle(
+        async () => (favoritesStore.list().length === 1 ? favoritesStore.list()[0] : undefined),
+        6000
+      )
+      check('drop pins the site', pinned?.url === A.url, JSON.stringify(pinned))
+      check('the tab itself stays open', !!w.tabs.byId(tabA.id))
+      const afterPin = await settle(async () => {
+        const raw = await inChrome<string>(`(() => {
+          const strip = document.querySelector('.fav-strip')
+          const div = document.querySelector('.fav-divider')
+          const nt = document.querySelector('.new-tab-btn')
+          if (!strip || !div || !nt) return ''
+          return JSON.stringify({
+            icons: strip.querySelectorAll('.fav-icon').length,
+            stripBottom: Math.round(strip.getBoundingClientRect().bottom),
+            divTop: Math.round(div.getBoundingClientRect().top),
+            ntTop: Math.round(nt.getBoundingClientRect().top)
+          })
+        })()`)
+        return raw ? (JSON.parse(raw) as { icons: number; stripBottom: number; divTop: number; ntTop: number }) : undefined
+      }, 6000)
+      say(`[flowtest] after pin: ${JSON.stringify(afterPin)} (baseline nt ${ntTop0})`)
+      check('the strip and its divider are up', afterPin !== undefined && afterPin.icons === 1)
+      check(
+        'the divider sits between the icons and the New Tab row',
+        !!afterPin && afterPin.stripBottom <= afterPin.divTop && afterPin.divTop <= afterPin.ntTop,
+        JSON.stringify(afterPin)
+      )
+      check(
+        'the New Tab row is pushed down to make the space',
+        !!afterPin && afterPin.ntTop >= ntTop0 + 20,
+        `${afterPin?.ntTop} vs ${ntTop0}`
+      )
+
+      // ---- 4. two more favorites; a second tab stays open on B ----
+      const tabB = w.tabs.createTab(B.url)
+      await settle(async () => (tabB.wc.getURL() === B.url ? true : undefined), 8000)
+      favoritesStore.add(B.url, 'Site B', B.icon)
+      favoritesStore.add(C.url, 'Site C', C.icon)
+      const three = await settle(
+        async () =>
+          ((await inChrome<number>(`document.querySelectorAll('.fav-icon').length`)) === 3
+            ? true
+            : undefined),
+        6000
+      )
+      check('three favorites wear three icons', three === true)
+      await shoot('fav-strip.png')
+
+      // ---- 5. click: an open tab for the site gets focused, not duplicated ----
+      check('setup: the B tab is the active one', w.tabs.activeTabId === tabB.id)
+      const tabCount0 = w.tabs.tabs.length
+      await inChrome(`document.querySelectorAll('.fav-icon')[0].click()`)
+      const focusedA = await settle(
+        async () => (w.tabs.activeTabId === tabA.id ? true : undefined),
+        6000
+      )
+      check('clicking a favorite focuses the open tab for its site', focusedA === true)
+      check('…and opens nothing new', w.tabs.tabs.length === tabCount0, `tabs=${w.tabs.tabs.length}`)
+
+      // ---- 6. click with no tab open for the site: it opens one ----
+      await inChrome(`document.querySelectorAll('.fav-icon')[2].click()`)
+      const openedC = await settle(async () => {
+        const t = w.tabs.activeTab
+        return t && t.wc.getURL() === C.url ? true : undefined
+      }, 8000)
+      check('clicking a favorite with no open tab opens the site', openedC === true)
+      check('…as a new tab', w.tabs.tabs.length === tabCount0 + 1, `tabs=${w.tabs.tabs.length}`)
+
+      // ---- 7. reorder by dragging within the row, and it persists ----
+      await inChrome(`(() => {
+        const icons = [...document.querySelectorAll('.fav-icon')]
+        const dt = new DataTransfer()
+        const o = { dataTransfer: dt, bubbles: true, cancelable: true }
+        icons[0].dispatchEvent(new DragEvent('dragstart', o))
+        icons[2].dispatchEvent(new DragEvent('dragover', o))
+        icons[2].dispatchEvent(new DragEvent('drop', o))
+        icons[0].dispatchEvent(new DragEvent('dragend', o))
+        return true
+      })()`)
+      const reordered = await settle(async () => {
+        const urls = favoritesStore.list().map((f) => f.url)
+        return urls[0] === B.url && urls[2] === A.url ? urls : undefined
+      }, 6000)
+      check('dragging an icon across the row reorders it', reordered !== undefined, JSON.stringify(favoritesStore.list().map((f) => f.url)))
+
+      // ---- 8. the store survives: flushed to disk, order and all ----
+      favoritesStore.flush()
+      let onDisk: { items?: { url: string }[] } = {}
+      try {
+        onDisk = JSON.parse(readFileSync(join(app.getPath('userData'), 'favorites.json'), 'utf-8'))
+      } catch {
+        /* missing = fail below */
+      }
+      check(
+        'favorites.json holds all three in their dragged order',
+        onDisk.items?.length === 3 && onDisk.items[0].url === B.url && onDisk.items[2].url === A.url,
+        JSON.stringify(onDisk.items?.map((i) => i.url))
+      )
+
+      // ---- 9. dragged into the tab list: unpinned, and open right there ----
+      const tabCount1 = w.tabs.tabs.length
+      await inChrome(`(() => {
+        const icon = document.querySelectorAll('.fav-icon')[0]
+        const list = document.querySelector('.tab-list')
+        const dt = new DataTransfer()
+        const o = { dataTransfer: dt, bubbles: true, cancelable: true }
+        icon.dispatchEvent(new DragEvent('dragstart', o))
+        list.dispatchEvent(new DragEvent('dragover', o))
+        list.dispatchEvent(new DragEvent('drop', o))
+        icon.dispatchEvent(new DragEvent('dragend', o))
+        return true
+      })()`)
+      const unpinnedToTab = await settle(
+        async () => (favoritesStore.list().length === 2 ? true : undefined),
+        6000
+      )
+      check('dropping an icon in the tab list unpins it', unpinnedToTab === true)
+      const openedFromDrop = await settle(
+        async () => (w.tabs.tabs.length === tabCount1 + 1 ? true : undefined),
+        6000
+      )
+      check('…and opens the site as a tab there', openedFromDrop === true, `tabs=${w.tabs.tabs.length}`)
+
+      // ---- 10. dragged out to nowhere (the page, the void): just unpinned ----
+      await inChrome(`(() => {
+        const icon = document.querySelectorAll('.fav-icon')[0]
+        const dt = new DataTransfer()
+        const o = { dataTransfer: dt, bubbles: true, cancelable: true }
+        icon.dispatchEvent(new DragEvent('dragstart', o))
+        // the pointer crosses the sidebar on its way out — that dragover is
+        // the last the chrome hears before the page view swallows the drag
+        document.querySelector('.sidebar-toolbar').dispatchEvent(new DragEvent('dragover', o))
+        icon.dispatchEvent(new DragEvent('dragend', o))
+        return true
+      })()`)
+      const tabsBeforeVoid = w.tabs.tabs.length
+      const unpinnedToVoid = await settle(
+        async () => (favoritesStore.list().length === 1 ? true : undefined),
+        6000
+      )
+      check('dragging an icon out of the zone unpins it', unpinnedToVoid === true, `favs=${favoritesStore.list().length}`)
+      check('…without opening anything', w.tabs.tabs.length === tabsBeforeVoid)
+
+      // ---- 11. the last one gone, the sidebar is exactly what it was ----
+      favoritesStore.remove(favoritesStore.list()[0].id)
+      const emptyAgain = await settle(async () => {
+        const raw = await inChrome<string>(
+          `JSON.stringify({zone: !!document.querySelector('.fav-zone'),
+                           divider: !!document.querySelector('.fav-divider'),
+                           ntTop: Math.round(document.querySelector('.new-tab-btn').getBoundingClientRect().top)})`
+        )
+        const p = JSON.parse(raw) as { zone: boolean; divider: boolean; ntTop: number }
+        return !p.zone && !p.divider ? p : undefined
+      }, 6000)
+      check('no favorites, no zone, no divider', emptyAgain !== undefined)
+      check(
+        'the New Tab row returns to its old place',
+        !!emptyAgain && Math.abs(emptyAgain.ntTop - ntTop0) <= 2,
+        `${emptyAgain?.ntTop} vs ${ntTop0}`
+      )
+      await shoot('fav-empty-after.png')
+
+      // ---- cleanup: nothing leaks into the next flow ----
+      favoritesStore.flush()
+      settingsStore.flush()
+      A.server.close()
+      B.server.close()
+      C.server.close()
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)
       return
