@@ -28,6 +28,8 @@ export interface TabInfo {
   isBookmarked: boolean
   /** The slop detector's verdict on the loaded page; absent until it reports */
   slop?: SlopReport
+  /** Harbor's per-document verdict: cookies stripped, consent handled. */
+  privacy?: TabPrivacyInfo
   /** Focus is on for this tab's site (per-site memory; see focusStore). */
   focusOn: boolean
   /**
@@ -498,6 +500,8 @@ export interface Settings {
   searchEngine: SearchEngineId
   adblock: AdblockSettings
   popups: PopupSettings
+  /** Harbor: consent auto-answer, tracker-cookie stripping, the tide. */
+  privacy: PrivacySettings
   passwords: PasswordSettings
   brief: BriefSettings
   restoreSession: boolean
@@ -711,6 +715,82 @@ export interface BlockedPopup {
   ts: number
 }
 
+// ---------------- Harbor (privacy manager) ----------------
+
+export interface PrivacySettings {
+  /** Answer cookie prompts automatically with the most private choice. */
+  consentAuto: boolean
+  /** Strip cookies from requests already classified as tracking. */
+  cookieGuard: boolean
+  /** Auto-expire cookies+storage of sites not visited top-level in tideDays. */
+  tide: boolean
+  /** 14 | 30 | 60 | 90 (validated on write; anything else coerces to 30). */
+  tideDays: number
+  /** Registrable domains where Harbor does nothing at all (as the visited site). */
+  disabledSites: string[]
+  /** Registrable domains whose cookies are never stripped and never expire. */
+  keepSites: string[]
+  /** Registrable domains the user declared trackers: stripped as third-party, expired every sweep. */
+  blockSites: string[]
+}
+
+/** What Harbor knows about the loaded page, riding TabInfo. */
+export interface TabPrivacyInfo {
+  /** Tracker cookies kept out of requests made by this page (this document). */
+  cookiesStripped: number
+  /** Consent auto-answer state for this document. */
+  consent: 'none' | 'found' | 'handled' | 'failed'
+  /** CMP name when one was detected (e.g. "Cybotcookiebot"). */
+  cmp?: string
+}
+
+/** The site panel's deep report (privacy:site-report). */
+export interface SiteReport {
+  host: string
+  /** Registrable domain the per-site switches key on. */
+  domain: string
+  cookieCount: number
+  /** navigator.storage.estimate() usage for the page origin; null when unknown. */
+  storageBytes: number | null
+  trackersBlocked: number
+  cookiesStripped: number
+  consent: TabPrivacyInfo['consent']
+  cmp?: string
+  /** Last top-level visit (UTC day start ms) from the engagement map; null = never seen. */
+  lastVisit: number | null
+  keep: boolean
+  blocked: boolean
+  off: boolean
+}
+
+export interface ExpiredSite {
+  domain: string
+  expiredAt: number
+  cookieCount: number
+}
+
+/**
+ * Hosts Harbor never touches, ever — SSO, payment, bot-check and DRM/CDN
+ * domains where a stripped or expired cookie means a broken login, a failed
+ * checkout, or dead playback. Matching is suffix-based:
+ * host === entry || host.endsWith('.' + entry).
+ */
+export const PRIVACY_NEVER_TOUCH: readonly string[] = [
+  // sign-in providers
+  'accounts.google.com', 'accounts.youtube.com', 'gstatic.com',
+  'appleid.apple.com', 'idmsa.apple.com',
+  'login.microsoftonline.com', 'login.live.com', 'login.windows.net',
+  'okta.com', 'auth0.com', 'onelogin.com', 'duosecurity.com', 'pingidentity.com',
+  // payment
+  'paypal.com', 'stripe.com', 'stripe.network', 'braintreegateway.com',
+  'braintree-api.com', 'adyen.com', 'klarna.com', 'checkout.com',
+  // bot checks (a stripped cookie = an endless challenge loop)
+  'recaptcha.net', 'hcaptcha.com', 'challenges.cloudflare.com',
+  // DRM / streaming (Netflix must keep working — locked requirement)
+  'netflix.com', 'nflxvideo.net', 'nflxso.net', 'nflximg.net', 'nflxext.com',
+  'spotify.com', 'scdn.co'
+] as const
+
 // ---------------- Weather brief ----------------
 
 export type WeatherIcon =
@@ -808,7 +888,8 @@ export const ADBLOCK_LISTS: AdblockListMeta[] = [
   { id: 'ublock-privacy', name: 'uBlock filters — Privacy', description: 'uBlock Origin privacy filters', defaultOn: true },
   { id: 'ublock-unbreak', name: 'uBlock filters — Unbreak', description: 'Fixes sites broken by blocking', defaultOn: true },
   { id: 'peter-lowe', name: "Peter Lowe's list", description: 'Ad and tracking server hosts', defaultOn: true },
-  { id: 'annoyances', name: 'Fanboy Annoyances', description: 'Cookie banners, popups, widgets', defaultOn: false }
+  { id: 'annoyances', name: 'Fanboy Annoyances', description: 'Cookie banners, popups, widgets', defaultOn: false },
+  { id: 'easylist-cookie', name: 'EasyList Cookie', description: 'Hides cookie banners the auto-answer misses', defaultOn: true }
 ]
 
 export const ADBLOCK_LIST_URLS: Record<string, string[]> = {
@@ -818,7 +899,8 @@ export const ADBLOCK_LIST_URLS: Record<string, string[]> = {
   'ublock-privacy': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/privacy.min.txt'],
   'ublock-unbreak': ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/unbreak.txt'],
   'peter-lowe': ['https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&showintro=1&mimetype=plaintext'],
-  annoyances: ['https://secure.fanboy.co.nz/fanboy-annoyance.txt']
+  annoyances: ['https://secure.fanboy.co.nz/fanboy-annoyance.txt'],
+  'easylist-cookie': ['https://secure.fanboy.co.nz/fanboy-cookiemonster.txt']
 }
 
 /**
@@ -846,6 +928,15 @@ export const DEFAULT_SETTINGS: Settings = {
     allowlist: []
   },
   popups: { block: true, allowlist: [] },
+  privacy: {
+    consentAuto: true,
+    cookieGuard: true,
+    tide: true,
+    tideDays: 30,
+    disabledSites: [],
+    keepSites: [],
+    blockSites: []
+  },
   passwords: { enabled: true },
   brief: { enabled: true, locationName: '', lat: null, lon: null, unit: 'auto' },
   restoreSession: true,

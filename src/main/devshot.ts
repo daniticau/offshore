@@ -2,7 +2,7 @@ import { BrowserWindow, app, ipcMain, screen, session } from 'electron'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import * as nodeHttp from 'http'
-import { HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_HEAVY_MIN, type SlopReport } from '@shared/types'
+import { HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_HEAVY_MIN, type SiteReport, type SlopReport } from '@shared/types'
 import { TAB_PARTITION } from './sessions'
 import { windows, type OffshoreWindow } from './windows'
 
@@ -327,7 +327,7 @@ async function waitForWindow(timeoutMs: number): Promise<OffshoreWindow | undefi
 
 /**
  * Scripted end-to-end checks (dev only):
- * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus
+ * OFFSHORE_TEST_FLOW=chrome|passwords|popups|spaces|headers|privacy|drm|split|widgets|lasttab|slop|focus|harbor
  * Writes [flowtest] PASS/FAIL lines to OFFSHORE_TEST_LOG (and stdout) and exits 0/1.
  */
 function setupTestFlows(): void {
@@ -370,7 +370,7 @@ function setupTestFlows(): void {
 
   const KNOWN_FLOWS = [
     'chrome', 'passwords', 'popups', 'spaces', 'headers', 'privacy',
-    'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus'
+    'drm', 'split', 'widgets', 'lasttab', 'slop', 'focus', 'harbor'
   ]
 
   async function runFlow(): Promise<void> {
@@ -1180,6 +1180,363 @@ function setupTestFlows(): void {
       // flows leave over app.exit, which skips the debounced save — write now
       focusStore.flush()
       settingsStore.flush()
+      server.close()
+      say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
+      app.exit(failures === 0 ? 0 : 1)
+      return
+    }
+
+    if (flow === 'harbor') {
+      /**
+       * Harbor end to end: consent auto-answer through the real autoconsent
+       * eval pipeline against a Cookiebot-shaped fixture, tracker-cookie
+       * stripping (with a guard-off control run so the header check can never
+       * pass vacuously), the never-touch and document exemptions, the tide
+       * with an injected clock, the undo stash, the engagement file's shape,
+       * and the per-site panel riding the freeze-frame contract.
+       */
+      if (!process.env['OFFSHORE_CLEAN_PROFILE']) {
+        // the tide step forces the grace period open and sweeps the real jar —
+        // never against a lived-in profile
+        say('[flowtest] harbor flow requires OFFSHORE_CLEAN_PROFILE')
+        app.exit(1)
+        return
+      }
+      const { settingsStore, bookmarksStore } = await import('./stores')
+      const { harbor } = await import('./harbor')
+      const ses = session.fromPartition(TAB_PARTITION)
+      const DAY = 86_400_000
+      const origCreatedAt = harbor.engagementCreatedAt()
+
+      const reqLog: string[] = []
+      const trackedPage = (g: string, port: number): string => `<html><body>
+        <p>An honest little page that happens to carry a third-party pixel.</p>
+        <img src="http://127.0.0.1:${port}/pixel.gif?g=${g}">
+        <script>fetch('http://127.0.0.1:${port}/beacon?g=${g}', { credentials: 'include' }).catch(() => {})</script>
+      </body></html>`
+      // Cookiebot-shaped fixture, mirrored from the pinned dynamic rule
+      // (lib/cmps/cookiebot.ts + EVAL_COOKIEBOT_1..5): detection wants
+      // window.Cookiebot with an open dialog, opt-out goes withdraw() then
+      // hide(), self-test reads declined.
+      const cmpPage = `<html><head><script>
+        window.Cookiebot = {
+          hasResponse: false, declined: false, dialog: { visible: true },
+          withdraw() { this.declined = true; this.hasResponse = true; return true },
+          hide() { document.getElementById('CybotCookiebotDialog').style.display = 'none';
+                   this.dialog.visible = false; return true }
+        }
+      </script></head><body>
+        <div id="CybotCookiebotDialog" style="position:fixed;bottom:0;left:0;right:0;height:120px;background:#123;color:#fff">
+          We value your privacy</div>
+        <p>A page with a cookie prompt on it.</p>
+      </body></html>`
+      const server = nodeHttp.createServer((req, res) => {
+        const [path, query = ''] = (req.url ?? '/').split('?')
+        if (path === '/pixel.gif' || path === '/beacon') {
+          reqLog.push(`${path}?${query} ${req.headers.cookie ?? '(none)'}`)
+          res.setHeader('set-cookie', 'track=1; Path=/')
+          if (path === '/pixel.gif') {
+            res.setHeader('content-type', 'image/gif')
+            res.end(Buffer.from('R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==', 'base64'))
+          } else {
+            // credentialed cross-origin fetch: without these the request still
+            // arrives (that's what the log reads) but the console fills with noise
+            res.setHeader('access-control-allow-origin', `http://localhost:${port}`)
+            res.setHeader('access-control-allow-credentials', 'true')
+            res.end('ok')
+          }
+          return
+        }
+        res.setHeader('content-type', 'text/html')
+        if (path === '/cmp') res.end(cmpPage)
+        else if (path === '/tracked') res.end(trackedPage(query.replace(/^g=/, '') || '0', port))
+        else if (path === '/framed') res.end(`<html><body><iframe src="http://127.0.0.1:${port}/frame"></iframe></body></html>`)
+        else if (path === '/frame') {
+          res.setHeader('set-cookie', 'framecookie=1; Path=/')
+          res.end('<html><body>frame</body></html>')
+        } else res.end('<html><body>plain</body></html>')
+      })
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+      const port = (server.address() as { port: number }).port
+      const local = (p: string): string => `http://localhost:${port}${p}`
+      const third = (p: string): string => `http://127.0.0.1:${port}${p}`
+      const tab = (): typeof w.tabs.activeTab => w.tabs.activeTab
+      const inPage = (js: string): Promise<unknown> => tab()!.wc.executeJavaScript(js)
+      const inChrome = (js: string): Promise<unknown> => w.win.webContents.executeJavaScript(js)
+
+      // the Shield is deliberately no part of Harbor (separate engine, separate
+      // switch) — take it out of the fixture's way so no ad list can eat the
+      // tracker requests this flow asserts on
+      const shieldWasOn = settingsStore.get().adblock.enabled
+      settingsStore.set({ adblock: { ...settingsStore.get().adblock, enabled: false } })
+
+      const cleanup = async (): Promise<void> => {
+        const s = settingsStore.get().privacy
+        settingsStore.set({
+          adblock: { ...settingsStore.get().adblock, enabled: shieldWasOn },
+          privacy: {
+            ...s,
+            cookieGuard: true,
+            blockSites: s.blockSites.filter((d) => d !== '127.0.0.1'),
+            keepSites: s.keepSites.filter((d) => d !== 'localhost')
+          }
+        })
+        for (const d of ['stale.example', 'fresh.example', 'kept.example']) {
+          harbor.engagementDelete(d)
+          harbor.stashDelete(d)
+          for (const c of await ses.cookies.get({ url: `https://${d}/` })) {
+            await ses.cookies.remove(`https://${d}${c.path ?? '/'}`, c.name).catch(() => {})
+          }
+        }
+        harbor.engagementSetCreatedAt(origCreatedAt)
+        settingsStore.flush()
+        harbor.flush()
+      }
+
+      // -- 1. consent: the fixture CMP gets auto-answered, most private --
+      // the page console is the only witness if the consent adapter faults
+      tab()!.wc.on('console-message', ((...args: unknown[]) => {
+        const ev = args[0] as { message?: string }
+        const msg = typeof args[2] === 'string' ? args[2] : (ev?.message ?? '')
+        if (msg) say(`[flowtest] page console: ${String(msg).slice(0, 300)}`)
+      }) as never)
+      w.tabs.navigate(null, local('/cmp'))
+      const declined = await settle(
+        async () =>
+          (await inPage(`!!(window.Cookiebot && window.Cookiebot.declined === true)`).catch(() => false)) === true
+            ? true
+            : undefined,
+        15_000
+      )
+      check('consent auto-answered most-private', declined === true)
+      const dlgGone = await settle(
+        async () =>
+          (await inPage(
+            `getComputedStyle(document.getElementById('CybotCookiebotDialog')).display === 'none'`
+          ).catch(() => false)) === true
+            ? true
+            : undefined,
+        5000
+      )
+      check('banner gone', dlgGone === true)
+      const verdict = await settle(async () => {
+        const p = tab()!.info().privacy
+        return p?.consent === 'handled' ? p : undefined
+      }, 8000)
+      check(
+        'tab wears the consent verdict',
+        verdict?.consent === 'handled' && verdict?.cmp === 'Cybotcookiebot',
+        JSON.stringify(verdict ?? tab()!.info().privacy)
+      )
+      check(
+        'easylist-cookie list is on',
+        settingsStore.get().adblock.lists['easylist-cookie'] === true
+      )
+      say(
+        `[flowtest] consent eval path: ${
+          harbor.consentEvalFallbacks === 0
+            ? 'webFrame (primary)'
+            : `consent:eval fallback ×${harbor.consentEvalFallbacks}`
+        }`
+      )
+
+      // -- 2. strip, with a control run so the check can't pass vacuously --
+      const sp = settingsStore.get().privacy
+      settingsStore.set({
+        privacy: {
+          ...sp,
+          cookieGuard: false,
+          blockSites: [...sp.blockSites.filter((d) => d !== '127.0.0.1'), '127.0.0.1']
+        }
+      })
+      // SameSite=None so a third-party subresource would genuinely carry it
+      // (localhost is a trustworthy origin, so Secure is allowed over http)
+      const plantPre = async (value: string): Promise<void> => {
+        await ses.cookies.set({
+          url: third('/'),
+          name: 'pre',
+          value,
+          secure: true,
+          sameSite: 'no_restriction'
+        })
+      }
+      await plantPre('1').catch((err) => say(`[flowtest] plant failed: ${err}`))
+      const preSticks = await settle(async () => {
+        const cs = await ses.cookies.get({ url: third('/') })
+        return cs.some((c) => c.name === 'pre') ? true : undefined
+      }, 4000)
+      check('guard off: planted tracker cookie sticks', preSticks === true)
+      w.tabs.navigate(null, local('/tracked?g=1'))
+      const g1 = await settle(async () => {
+        const hits = reqLog.filter((l) => l.includes('g=1'))
+        return hits.length >= 2 ? hits : undefined
+      }, 15_000)
+      check(
+        'control: guard off, the cookie travels',
+        (g1 ?? []).length >= 2 && (g1 ?? []).every((l) => l.includes('pre=1')),
+        JSON.stringify(g1)
+      )
+      // scrub the control run's Set-Cookie before the real run; a fresh value
+      // guarantees the re-plant emits a real 'changed' for the scrubber
+      settingsStore.set({ privacy: { ...settingsStore.get().privacy, cookieGuard: true } })
+      await plantPre('2').catch(() => {})
+      w.tabs.navigate(null, local('/tracked?g=2'))
+      const g2 = await settle(async () => {
+        const hits = reqLog.filter((l) => l.includes('g=2'))
+        return hits.length >= 2 ? hits : undefined
+      }, 15_000)
+      check(
+        'tracker request carries no cookie',
+        (g2 ?? []).length >= 2 && (g2 ?? []).every((l) => l.endsWith('(none)')),
+        JSON.stringify(g2)
+      )
+      const jarClean = await settle(async () => {
+        const cs = await ses.cookies.get({ url: third('/') })
+        return cs.some((c) => c.name === 'track' || c.name === 'pre') ? undefined : true
+      }, 8000)
+      check('set-cookie scrubbed from the jar', jarClean === true)
+      const strips = await settle(async () => {
+        const p = tab()!.info().privacy
+        return (p?.cookiesStripped ?? 0) >= 1 ? p!.cookiesStripped : undefined
+      }, 8000)
+      check('tab counts its strips', (strips ?? 0) >= 1, `stripped=${strips}`)
+      check(
+        'documents are never stripped',
+        harbor.shouldStripRequest({
+          url: third('/frame'),
+          resourceType: 'subFrame',
+          referrer: local('/framed'),
+          frame: { top: { url: local('/framed') } }
+        }) === false
+      )
+      check(
+        'media is never stripped',
+        harbor.shouldStripRequest({
+          url: third('/stream.mp4'),
+          resourceType: 'media',
+          frame: { top: { url: local('/tracked') } }
+        }) === false
+      )
+      check(
+        'exemptions beat classification',
+        harbor.shouldStripRequest({
+          url: 'https://accounts.google.com/x.js',
+          resourceType: 'script',
+          frame: { top: { url: 'https://example.com/' } }
+        }) === false
+      )
+      const classifierUp = await settle(async () => (harbor.classifierReady() ? true : undefined), 30_000)
+      check(
+        'live classifier knows a tracker (needs network)',
+        classifierUp === true &&
+          harbor.classifyRequest(
+            'https://www.google-analytics.com/analytics.js',
+            'https://example.com/',
+            'script'
+          ) === true
+      )
+
+      // -- 3. the tide, on an injected clock --
+      const now = Date.now()
+      harbor.engagementSeed('stale.example', now - 40 * DAY)
+      harbor.engagementSeed('fresh.example', now - 1 * DAY)
+      harbor.engagementSetCreatedAt(now - 90 * DAY)
+      for (const d of ['stale.example', 'fresh.example', 'kept.example']) {
+        await ses.cookies.set({ url: `https://${d}/`, name: 'jar', value: d }).catch(() => {})
+      }
+      const bm = bookmarksStore.add('https://kept.example/', 'Kept')
+      const sweep1 = await harbor.sweep(now)
+      say(`[flowtest] sweep: ${JSON.stringify(sweep1)}`)
+      check(
+        'stale site washed out',
+        sweep1.swept.includes('stale.example') &&
+          (await ses.cookies.get({ url: 'https://stale.example/' })).length === 0
+      )
+      check('fresh site kept', (await ses.cookies.get({ url: 'https://fresh.example/' })).length >= 1)
+      check('bookmark guards a site', (await ses.cookies.get({ url: 'https://kept.example/' })).length >= 1)
+      const receipts = harbor.expiredList()
+      check(
+        'undo list holds the receipt',
+        receipts.some((x) => x.domain === 'stale.example' && x.cookieCount >= 1),
+        JSON.stringify(receipts)
+      )
+      const restored = await harbor.restore('stale.example')
+      check(
+        'restore brings cookies back',
+        restored === true &&
+          (await ses.cookies.get({ url: 'https://stale.example/' })).some((c) => c.name === 'jar')
+      )
+      harbor.engagementSetCreatedAt(now - 2 * DAY)
+      await ses.cookies.set({ url: 'https://stale.example/', name: 'jar2', value: '1' }).catch(() => {})
+      check('grace period holds fire', (await harbor.sweep(now)).swept.length === 0)
+      harbor.flush()
+      const rawMap = readFileSync(join(app.getPath('userData'), 'engagement.json'), 'utf-8')
+      const map = JSON.parse(rawMap) as { createdAt: number; lastSweepAt: number; hosts: Record<string, number> }
+      const mapValues = [map.createdAt, map.lastSweepAt, ...Object.values(map.hosts)]
+      check(
+        'map stores only names and days',
+        !rawMap.includes('http') && mapValues.every((v) => typeof v === 'number' && v % DAY === 0),
+        rawMap.slice(0, 160)
+      )
+      bookmarksStore.remove(bm.id)
+
+      // -- 4. the per-site panel, on the freeze-frame contract --
+      const report = (await inChrome(`window.offshore.privacy.siteReport()`)) as SiteReport | null
+      say(`[flowtest] site report: ${JSON.stringify(report)}`)
+      check(
+        'report has its numbers',
+        report?.host === 'localhost' &&
+          typeof report?.cookieCount === 'number' &&
+          typeof report?.trackersBlocked === 'number' &&
+          typeof report?.cookiesStripped === 'number' &&
+          typeof report?.consent === 'string'
+      )
+      surface(w)
+      w.tabs.setActiveVisible(true)
+      await delay(900)
+      const preShot = await tab()!.wc.capturePage()
+      say(
+        `[flowtest] pre-click: vis=${await inPage('document.visibilityState')} capture=${preShot.getSize().width}x${preShot.getSize().height}`
+      )
+      await inChrome(`document.querySelector('.omni-tune')?.click()`)
+      const probePanel = async (): Promise<{ si: boolean; freeze: boolean; tide: boolean }> => {
+        const raw = (await inChrome(
+          `JSON.stringify({si: !!document.querySelector('.site-info'),
+                           freeze: !!document.querySelector('.page-freeze'),
+                           tide: !!document.querySelector('.si-tide')})`
+        )) as string
+        return JSON.parse(raw) as { si: boolean; freeze: boolean; tide: boolean }
+      }
+      const panel = await settle(async () => {
+        const p = await probePanel()
+        return p.si && p.freeze ? p : undefined
+      }, 8000)
+      check('panel stands on the freeze-frame', !!panel, JSON.stringify(panel ?? (await probePanel())))
+      check('tide row rendered', panel?.tide === true)
+      await inChrome(`document.querySelector('.si-tide .si-action')?.click()`)
+      const kept = await settle(
+        async () => (settingsStore.get().privacy.keepSites.includes('localhost') ? true : undefined),
+        6000
+      )
+      check('Always allow round-trips', kept === true)
+      await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
+
+      // back on the CMP page, the panel wears the consent verdict too
+      w.tabs.navigate(null, local('/cmp'))
+      await settle(async () => (tab()!.info().privacy?.consent === 'handled' ? true : undefined), 15_000)
+      await inChrome(`document.querySelector('.omni-tune')?.click()`)
+      const consentRow = await settle(async () => {
+        const raw = (await inChrome(
+          `JSON.stringify({row: !!document.querySelector('.si-consent'),
+                           handled: !!document.querySelector('.si-consent.handled')})`
+        )) as string
+        const p = JSON.parse(raw) as { row: boolean; handled: boolean }
+        return p.row ? p : undefined
+      }, 8000)
+      check('consent row rendered as handled', consentRow?.handled === true, JSON.stringify(consentRow))
+      await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
+
+      await cleanup()
       server.close()
       say(`[flowtest] done: ${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
       app.exit(failures === 0 ? 0 : 1)

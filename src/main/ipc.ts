@@ -21,6 +21,7 @@ import {
   type Insets,
   type PasswordOffer,
   type Settings,
+  type SiteReport,
   type SlopSignal,
   type SpaceProfile,
   type Suggestion
@@ -29,6 +30,7 @@ import { adblock } from './adblock'
 import { fetchWeather, geocode } from './brief'
 import { listExtensions, uninstallExtension } from './extensions'
 import { focusStore } from './focus'
+import { harbor, registrableDomain } from './harbor'
 import { passwordVault } from './passwords'
 import {
   allowPopupsForSite,
@@ -739,6 +741,144 @@ export function setupIpc(): void {
     for (const host of hosts) for (const w of windows) w.tabs.refreshFocus(host)
   })
 
+  // ---- Harbor (consent auto-answer + per-site privacy) ----
+
+  // The full rules payload rides one structured clone per page load; the
+  // handler logs its serve time once so a slow machine shows its receipt.
+  let consentRulesTimed = false
+  ipcMain.handle('consent:rules', (e) => {
+    const v = validatedPageSender(e)
+    if (!v) return null
+    const t0 = Date.now()
+    const payload = harbor.consentRulesFor(v.origin.hostname)
+    if (payload && !consentRulesTimed) {
+      consentRulesTimed = true
+      console.log(`[harbor] consent rules served in ${Date.now() - t0}ms`)
+    }
+    return payload
+  })
+
+  const CONSENT_STATUS_TYPES = [
+    'cmpDetected',
+    'popupFound',
+    'optOutResult',
+    'autoconsentDone',
+    'autoconsentError'
+  ]
+  ipcMain.on('consent:status', (e, payload: { type?: unknown; cmp?: unknown; result?: unknown }) => {
+    const v = validatedPageSender(e)
+    if (!v || v.entry.kind !== 'tab') return
+    const type = String(payload?.type ?? '')
+    if (!CONSENT_STATUS_TYPES.includes(type)) return
+    const cmp = typeof payload?.cmp === 'string' ? payload.cmp.slice(0, 64) : undefined
+    harbor.noteConsent(e.sender.id, type, cmp, payload?.result === true)
+    const w = v.entry.ownerWindow
+    if (w.tabs.byId(e.sender.id)) w.tabs.pushState()
+  })
+
+  // Fallback eval path for sandboxed preloads whose webFrame can't evaluate:
+  // the code runs in the sender's own frame with the sender's own privileges
+  // (no escalation), originates only from the bundled consent rules, and is
+  // capped anyway.
+  ipcMain.handle('consent:eval', async (e, code: unknown) => {
+    const v = validatedPageSender(e)
+    if (!v || typeof code !== 'string' || code.length > 4096) return null
+    const frame = e.senderFrame
+    if (!frame) return null
+    harbor.consentEvalFallbacks += 1
+    try {
+      return await frame.executeJavaScript(code)
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle('privacy:site-report', async (e): Promise<SiteReport | null> => {
+    const w = chromeWindow(e)
+    const tab = w?.tabs.activeTab
+    if (!tab) return null
+    let u: URL
+    try {
+      u = new URL(tab.wc.getURL())
+    } catch {
+      return null
+    }
+    if (!/^https?:$/.test(u.protocol)) return null
+    const host = u.hostname
+    const domain = registrableDomain(host)
+    let cookieCount = 0
+    try {
+      for (const c of await tab.wc.session.cookies.get({})) {
+        if (registrableDomain((c.domain ?? '').replace(/^\./, '')) === domain) cookieCount += 1
+      }
+    } catch {
+      /* count stays 0 */
+    }
+    const storageBytes = (await Promise.race([
+      tab.wc
+        .executeJavaScript(
+          `navigator.storage.estimate().then((e) => e.usage ?? null).catch(() => null)`,
+          true
+        )
+        .catch(() => null),
+      new Promise((r) => setTimeout(() => r(null), 300))
+    ])) as unknown
+    const p = harbor.tabPrivacy(tab.id)
+    const s = settingsStore.get().privacy
+    return {
+      host,
+      domain,
+      cookieCount,
+      storageBytes: typeof storageBytes === 'number' ? storageBytes : null,
+      trackersBlocked: adblock.counts.get(tab.id) ?? 0,
+      cookiesStripped: p?.cookiesStripped ?? 0,
+      consent: p?.consent ?? 'none',
+      cmp: p?.cmp,
+      lastVisit: harbor.lastVisit(domain),
+      keep: s.keepSites.includes(domain),
+      blocked: s.blockSites.includes(domain),
+      off: s.disabledSites.includes(domain)
+    }
+  })
+
+  ipcMain.handle('privacy:set-site', async (e, list: unknown, on: unknown) => {
+    const w = chromeWindow(e)
+    const tab = w?.tabs.activeTab
+    if (!w || !tab || !['off', 'keep', 'block'].includes(String(list))) return
+    let host: string
+    try {
+      host = new URL(tab.wc.getURL()).hostname
+    } catch {
+      return
+    }
+    if (!host) return
+    const domain = registrableDomain(host)
+    const s = settingsStore.get().privacy
+    const want = on === true
+    const without = (arr: string[]): string[] => arr.filter((d) => d !== domain)
+    const withD = (arr: string[]): string[] => (want ? [...without(arr), domain] : without(arr))
+    const next = { ...s }
+    // keep and block are mutually exclusive; setting one clears the other
+    if (list === 'off') next.disabledSites = withD(s.disabledSites)
+    if (list === 'keep') {
+      next.keepSites = withD(s.keepSites)
+      if (want) next.blockSites = without(s.blockSites)
+    }
+    if (list === 'block') {
+      next.blockSites = withD(s.blockSites)
+      if (want) next.keepSites = without(s.keepSites)
+    }
+    settingsStore.set({ privacy: next })
+    // blocking a site expires it now — stash first, so it lands in the undo list
+    if (list === 'block' && want) await harbor.expireDomain(domain)
+  })
+
+  ipcMain.handle('privacy:expired', (e) => (isTrustedSender(e) ? harbor.expiredList() : []))
+  ipcMain.handle('privacy:restore', (e, domain: unknown) => {
+    if (!isTrustedSender(e) || typeof domain !== 'string') return false
+    return harbor.restore(domain)
+  })
+
   // ---- popups ----
   ipcMain.on('gesture:activity', (e) => {
     if (pageEntry(e.sender.id)) noteGesture(e.sender.id)
@@ -900,6 +1040,9 @@ export function setupIpc(): void {
         console.warn('[privacy] clear failed for a session:', err)
       }
     }
+    // the tide's site-name map and the recently-expired list go with the data
+    harbor.clearEngagement()
+    harbor.clearStash()
   })
   ipcMain.handle('internal:open', (e, url: string) => {
     if (!isTrustedSender(e)) return
@@ -929,6 +1072,11 @@ export function setupIpc(): void {
     }
   })
   adblock.onCountChanged = (tabId) => {
+    for (const w of windows) {
+      if (w.tabs.byId(tabId)) w.tabs.pushState()
+    }
+  }
+  harbor.onCountChanged = (tabId) => {
     for (const w of windows) {
       if (w.tabs.byId(tabId)) w.tabs.pushState()
     }

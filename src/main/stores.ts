@@ -77,6 +77,11 @@ function mergeSettings(base: Settings, patch: Partial<Settings>): Settings {
     newTabWidgets: { ...base.newTabWidgets, ...(patch.newTabWidgets ?? {}) },
     newTabWidgetLayout: { ...base.newTabWidgetLayout, ...(patch.newTabWidgetLayout ?? {}) },
     popups: { ...base.popups, ...(patch.popups ?? {}) },
+    privacy: ((): Settings['privacy'] => {
+      const merged = { ...base.privacy, ...(patch.privacy ?? {}) }
+      if (![14, 30, 60, 90].includes(merged.tideDays)) merged.tideDays = 30
+      return merged
+    })(),
     passwords: { ...base.passwords, ...(patch.passwords ?? {}) },
     brief: { ...base.brief, ...(patch.brief ?? {}) },
     slop: { ...base.slop, ...(patch.slop ?? {}) },

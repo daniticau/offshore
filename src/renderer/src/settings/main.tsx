@@ -5,6 +5,7 @@ import type {
   AccentId,
   BookmarkNode,
   DevToolsDock,
+  ExpiredSite,
   NewTabWidgets,
   ExtensionInfo,
   GeocodeResult,
@@ -185,6 +186,211 @@ function PasswordsSection({ settings, patch }: { settings: Settings; patch: (p: 
             </div>
           </div>
         )}
+      </div>
+    </section>
+  )
+}
+
+// ---------------- Privacy section ----------------
+
+function PrivacySection({ settings, patch }: { settings: Settings; patch: (p: Partial<Settings>) => void }): React.JSX.Element {
+  const [expired, setExpired] = useState<ExpiredSite[]>([])
+  const [historyFlash, flashHistory] = useFlash()
+  const [siteDataFlash, flashSiteData] = useFlash()
+
+  const refreshExpired = (): void => {
+    void internal?.privacy.expired().then((l) => l && setExpired(l))
+  }
+  useEffect(refreshExpired, [])
+
+  const p = settings.privacy
+  const patchPrivacy = (pp: Partial<Settings['privacy']>): void => patch({ privacy: { ...p, ...pp } })
+  const fmtDay = (ms: number): string =>
+    new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' })
+
+  const exceptions: { title: string; key: 'keepSites' | 'blockSites' | 'disabledSites' }[] = [
+    { title: 'Always allowed', key: 'keepSites' },
+    { title: 'Blocked', key: 'blockSites' },
+    { title: 'Protections off', key: 'disabledSites' }
+  ]
+  const noExceptions = exceptions.every(({ key }) => p[key].length === 0)
+
+  return (
+    <section>
+      <h2>Privacy</h2>
+      <div className="card">
+        <div className="row">
+          <div className="row-title">
+            Answer cookie prompts for you
+            <div className="row-sub">
+              Always the most private choice — reject everything rejectable. Runs entirely on
+              this Mac; leftover banners are hidden by the EasyList Cookie filter.
+            </div>
+          </div>
+          <Toggle on={p.consentAuto} onChange={(v) => patchPrivacy({ consentAuto: v })} />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="row">
+          <div className="row-title">
+            Keep tracker cookies out
+            <div className="row-sub">
+              Strips cookies from requests already known to be tracking. Sign-ins, checkouts
+              and the site you&apos;re on are never touched.
+            </div>
+          </div>
+          <Toggle on={p.cookieGuard} onChange={(v) => patchPrivacy({ cookieGuard: v })} />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="row">
+          <div className="row-title">
+            Let the tide take old cookies
+            <div className="row-sub">
+              Cookies and site data from sites you haven&apos;t visited in a while wash out.
+              Sites you keep open, bookmark, save a password for, or always-allow are never
+              touched. To know when you last visited, Offshore keeps one line per site — the
+              site&apos;s name and the day — and nothing else.
+            </div>
+          </div>
+          <Toggle on={p.tide} onChange={(v) => patchPrivacy({ tide: v })} />
+        </div>
+        {p.tide && (
+          <div className="row">
+            <div className="row-title">Wash out after</div>
+            <Segmented
+              value={String(p.tideDays)}
+              options={[
+                ['14', '2 weeks'],
+                ['30', 'Month'],
+                ['60', '2 months'],
+                ['90', '3 months']
+              ]}
+              onChange={(v) => patchPrivacy({ tideDays: Number(v) })}
+            />
+          </div>
+        )}
+        {expired.length > 0 && (
+          <>
+            <div className="row">
+              <div className="row-title">Recently expired</div>
+            </div>
+            {expired.map((e) => (
+              <div className="row" key={e.domain}>
+                <div className="row-title clamp">
+                  {e.domain}
+                  <div className="row-sub">
+                    {e.cookieCount} cookie{e.cookieCount === 1 ? '' : 's'} · {fmtDay(e.expiredAt)}
+                  </div>
+                </div>
+                <button
+                  className="ghost"
+                  onClick={() => void internal?.privacy.restore(e.domain).then(refreshExpired)}
+                >
+                  Restore
+                </button>
+              </div>
+            ))}
+            <div className="row">
+              <div className="row-sub">
+                Restoring brings cookies back; anything the site stored is gone.
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="card">
+        {noExceptions ? (
+          <div className="row">
+            <div className="row-sub">
+              Nothing yet — set these from the site button in the address bar.
+            </div>
+          </div>
+        ) : (
+          exceptions.map(
+            ({ title, key }) =>
+              p[key].length > 0 && (
+                <div className="row column" key={key}>
+                  <div className="row-title">{title}</div>
+                  <div className="chips">
+                    {p[key].map((domain) => (
+                      <span className="chip" key={domain}>
+                        {domain}
+                        <button
+                          onClick={() => patchPrivacy({ [key]: p[key].filter((d) => d !== domain) })}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )
+          )
+        )}
+      </div>
+
+      <div className="card">
+        <div className="row">
+          <div className="row-title">
+            Remember pages you visit
+            <div className="row-sub">
+              Off by default. When off, nothing is written down and the address bar never suggests
+              somewhere you&apos;ve been.
+            </div>
+          </div>
+          <Toggle on={settings.keepHistory} onChange={(v) => patch({ keepHistory: v })} />
+        </div>
+        <div className="row">
+          <div className="row-title">
+            Suggestions from {SEARCH_ENGINES[settings.searchEngine].name}
+            <div className="row-sub">
+              Finishes what you type in the address bar. It is the one thing here that
+              sends a half-typed word anywhere: the query goes out from Offshore itself,
+              with no cookies and nothing that says who asked. Turn it off and the address
+              bar only ever offers your own tabs, bookmarks and history.
+            </div>
+          </div>
+          <Toggle
+            on={settings.searchSuggestions}
+            onChange={(v) => patch({ searchSuggestions: v })}
+          />
+        </div>
+        <div className="row">
+          <div className="row-title">Clear browsing history</div>
+          <button
+            className="danger"
+            onClick={() => {
+              void internal?.history.clear()
+              flashHistory('Cleared ✓')
+            }}
+          >
+            {historyFlash ?? 'Clear history'}
+          </button>
+        </div>
+        <div className="row">
+          <div className="row-title">
+            Clear cookies &amp; site data
+            <div className="row-sub">
+              Signs you out of every site, in every space. Also clears the tide&apos;s
+              site-name map and the recently-expired list.
+            </div>
+          </div>
+          <button
+            className="danger"
+            onClick={() => {
+              void internal?.privacy.clearSiteData().then(() => {
+                flashSiteData('Cleared ✓')
+                refreshExpired()
+              })
+            }}
+          >
+            {siteDataFlash ?? 'Clear site data'}
+          </button>
+        </div>
       </div>
     </section>
   )
@@ -575,8 +781,6 @@ function App(): React.JSX.Element {
   const [focusSites, setFocusSites] = useState<string[]>([])
   const [rulesDraft, setRulesDraft] = useState('')
   const [rulesFlash, flashRules] = useFlash()
-  const [historyFlash, flashHistory] = useFlash()
-  const [siteDataFlash, flashSiteData] = useFlash()
   const [version, setVersion] = useState('')
   const [active, setActive] = useState<SectionId>(() => {
     const h = window.location.hash.slice(1) as SectionId
@@ -603,6 +807,7 @@ function App(): React.JSX.Element {
       adblock: { ...settings.adblock, ...(p.adblock ?? {}) },
       appearance: { ...settings.appearance, ...(p.appearance ?? {}) },
       popups: { ...settings.popups, ...(p.popups ?? {}) },
+      privacy: { ...settings.privacy, ...(p.privacy ?? {}) },
       passwords: { ...settings.passwords, ...(p.passwords ?? {}) },
       brief: { ...settings.brief, ...(p.brief ?? {}) },
       newTabWidgets: { ...(settings.newTabWidgets ?? DEFAULT_SETTINGS.newTabWidgets), ...(p.newTabWidgets ?? {}) }
@@ -1071,64 +1276,7 @@ function App(): React.JSX.Element {
 
           {active === 'bookmarks' && <BookmarksSection />}
 
-          {active === 'privacy' && (
-            <section>
-              <h2>Privacy</h2>
-              <div className="card">
-                <div className="row">
-                  <div className="row-title">
-                    Remember pages you visit
-                    <div className="row-sub">
-                      Off by default. When off, nothing is written down and the address bar never suggests
-                      somewhere you&apos;ve been.
-                    </div>
-                  </div>
-                  <Toggle on={settings.keepHistory} onChange={(v) => patch({ keepHistory: v })} />
-                </div>
-                <div className="row">
-                  <div className="row-title">
-                    Suggestions from {SEARCH_ENGINES[settings.searchEngine].name}
-                    <div className="row-sub">
-                      Finishes what you type in the address bar. It is the one thing here that
-                      sends a half-typed word anywhere: the query goes out from Offshore itself,
-                      with no cookies and nothing that says who asked. Turn it off and the address
-                      bar only ever offers your own tabs, bookmarks and history.
-                    </div>
-                  </div>
-                  <Toggle
-                    on={settings.searchSuggestions}
-                    onChange={(v) => patch({ searchSuggestions: v })}
-                  />
-                </div>
-                <div className="row">
-                  <div className="row-title">Clear browsing history</div>
-                  <button
-                    className="danger"
-                    onClick={() => {
-                      void internal?.history.clear()
-                      flashHistory('Cleared ✓')
-                    }}
-                  >
-                    {historyFlash ?? 'Clear history'}
-                  </button>
-                </div>
-                <div className="row">
-                  <div className="row-title">
-                    Clear cookies &amp; site data
-                    <div className="row-sub">Signs you out of every site, in every space.</div>
-                  </div>
-                  <button
-                    className="danger"
-                    onClick={() => {
-                      void internal?.privacy.clearSiteData().then(() => flashSiteData('Cleared ✓'))
-                    }}
-                  >
-                    {siteDataFlash ?? 'Clear site data'}
-                  </button>
-                </div>
-              </div>
-            </section>
-          )}
+          {active === 'privacy' && <PrivacySection settings={settings} patch={patch} />}
 
           {active === 'about' && (
             <section>

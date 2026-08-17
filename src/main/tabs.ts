@@ -34,6 +34,7 @@ import { adblock } from './adblock'
 import { HARNESS_ACTIVE } from './bootstrap'
 import { extensionsRef } from './extensions-ref'
 import { focusStore } from './focus'
+import { harbor } from './harbor'
 import { passwordVault } from './passwords'
 import {
   blockedPopupCount,
@@ -269,6 +270,7 @@ export class Tab {
       blockedPopups: blockedPopupCount(this.id),
       isBookmarked: bookmarksStore.isBookmarked(effectiveUrl),
       slop: this.slop,
+      privacy: harbor.tabPrivacy(this.id),
       focusOn: host ? focusStore.isOn(host) : false,
       homeSearch: this.homeSearch && (errorTarget ?? toDisplayUrl(url)).startsWith('offshore://start')
     }
@@ -438,6 +440,7 @@ export class TabManager {
       /* view already detached */
     }
     adblock.dropTab(tab.id)
+    harbor.dropTab(tab.id)
     if (!tab.wc.isDestroyed()) tab.wc.close()
   }
 
@@ -1267,7 +1270,12 @@ export class TabManager {
       tab.favicon = undefined
       if (this.pipTabId === tab.id) this.pipTabId = null
       adblock.resetCount(tab.id)
+      harbor.resetTab(tab.id)
       if (!isInternalUrl(url) && settingsStore.get().keepHistory) historyStore.record(url)
+      // deliberately unconditional (not gated on keepHistory): the engagement
+      // map holds registrable domain → UTC day only, and it is what lets the
+      // tide tell a site you live on from one you've abandoned
+      if (!isInternalUrl(url) && /^https?:/.test(url)) harbor.noteTopVisit(url)
       this.pushState()
       this.host.onTabsChanged()
     })
@@ -1275,6 +1283,7 @@ export class TabManager {
     wc.on('did-navigate-in-page', (_e, url, isMainFrame) => {
       if (isMainFrame) {
         if (!isInternalUrl(url) && settingsStore.get().keepHistory) historyStore.record(url)
+        if (!isInternalUrl(url) && /^https?:/.test(url)) harbor.noteTopVisit(url)
         // an SPA route change is a new page in the old document — ask the
         // detector to look again (the standing verdict holds until it answers)
         wc.send('slop:rescan')

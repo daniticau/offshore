@@ -4,6 +4,7 @@ import { app, dialog, nativeTheme, protocol } from 'electron'
 import { adblock } from './adblock'
 import { setupDevshot } from './devshot'
 import { initExtensions } from './extensions'
+import { harbor } from './harbor'
 import { setupIpc } from './ipc'
 import { installMenu } from './menu'
 import { focusStore } from './focus'
@@ -145,6 +146,9 @@ void app.whenReady().then(async () => {
   void adblock.init()
   boot('adblock kicked off')
 
+  void harbor.init()
+  boot('harbor kicked off')
+
   settingsStore.on('changed', (next: Settings, prev: Settings) => {
     if (next.appearance.theme !== prev.appearance.theme) {
       applyTheme(next.appearance.theme)
@@ -186,8 +190,9 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   markQuitting()
   flushAllStores()
-  // The vault and the Focus ledger debounce their writes like the stores do,
-  // but live apart from them
+  // The vault, the Focus ledger and Harbor's two files debounce their writes
+  // like the stores do, but live apart from them
   passwordVault.flush()
   focusStore.flush()
+  harbor.flush()
 })

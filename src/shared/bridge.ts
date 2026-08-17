@@ -5,12 +5,14 @@ import type {
   BriefWeather,
   DevToolsDock,
   DownloadEntry,
+  ExpiredSite,
   ExtensionInfo,
   GeocodeResult,
   Insets,
   PasswordMeta,
   PasswordsStatus,
   Settings,
+  SiteReport,
   SpaceProfile,
   Suggestion,
   TabsState
@@ -94,7 +96,13 @@ export interface OffshoreApi {
     focusPage(): Promise<void>
     copyText(text: string): Promise<void>
   }
-  privacy: { clearSite(): Promise<boolean> }
+  privacy: {
+    clearSite(): Promise<boolean>
+    /** Harbor's deep per-site report for the panel; null off http(s). */
+    siteReport(): Promise<SiteReport | null>
+    /** Flip the active tab's site on/off one of Harbor's three lists. */
+    setSite(list: 'off' | 'keep' | 'block', on: boolean): Promise<void>
+  }
   brief: { weather(): Promise<BriefWeather | null> }
   find: {
     start(text: string, opts: { findNext: boolean; forward: boolean }): Promise<void>
@@ -182,7 +190,12 @@ export interface OffshoreInternalApi {
     forget(host: string): Promise<void>
     forgetAll(): Promise<void>
   }
-  privacy: { clearSiteData(): Promise<void> }
+  privacy: {
+    clearSiteData(): Promise<void>
+    /** The tide's recently-expired list — domains and counts, never contents. */
+    expired(): Promise<ExpiredSite[]>
+    restore(domain: string): Promise<boolean>
+  }
   app: { info(): Promise<{ version: string } | null> }
   open(url: string): Promise<void>
   /** Fires when the chrome asks the new-tab page to enter widget edit mode. */

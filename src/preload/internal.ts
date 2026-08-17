@@ -3,6 +3,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { OffshoreInternalApi } from '@shared/bridge'
 import { SLOP_BLOCK_TIERS } from '@shared/types'
+import { initConsent } from './consent'
 import { initFocus } from './focus'
 
 /**
@@ -75,7 +76,9 @@ const api: OffshoreInternalApi = {
     forgetAll: () => invoke('focus:forget-all')
   },
   privacy: {
-    clearSiteData: () => invoke('privacy:clear-site-data')
+    clearSiteData: () => invoke('privacy:clear-site-data'),
+    expired: () => invoke('privacy:expired'),
+    restore: (domain: string) => invoke('privacy:restore', domain)
   },
   app: {
     info: () => invoke('app:info')
@@ -111,6 +114,8 @@ if (isInternalDocument()) {
 } else if (/^https?:$/.test(location.protocol)) {
   // real pages get the Focus engine; Offshore's own pages have widgets instead
   initFocus()
+  // …and Harbor's consent auto-answer (inert unless main hands over rules)
+  initConsent()
 }
 
 // ---------------- 2. gesture pings (popup blocker) ----------------

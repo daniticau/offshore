@@ -71,7 +71,9 @@ const api: OffshoreApi = {
     copyText: (text: string) => invoke('chrome:copy-text', text)
   },
   privacy: {
-    clearSite: () => invoke('privacy:clear-site')
+    clearSite: () => invoke('privacy:clear-site'),
+    siteReport: () => invoke('privacy:site-report'),
+    setSite: (list: 'off' | 'keep' | 'block', on: boolean) => invoke('privacy:set-site', list, on)
   },
   brief: {
     weather: () => invoke('brief:weather')

@@ -2156,6 +2156,19 @@ browser-action-list {
 .si-wide:hover {
   background: var(--hover);
 }
+/* Harbor rows: fixed height while the async report fills in — the panel
+   stands on a freeze-frame and must never grow once the still is up */
+.si-fixed {
+  min-height: 33px;
+}
+.si-fixed .si-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.si-consent.handled .si-icon {
+  color: var(--accent-strong);
+}
 
 /* ---------- slop chip + report panel ---------- */
 
