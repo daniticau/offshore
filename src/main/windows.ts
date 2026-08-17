@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from 'electron'
+import { app, BrowserWindow, screen } from 'electron'
 import { join } from 'path'
 import type { Insets, SessionWindowV2, TabsState } from '@shared/types'
 import { HARNESS_ACTIVE, HARNESS_QUIET } from './bootstrap'
@@ -63,6 +63,55 @@ function clampBounds(b: { x: number; y: number; width: number; height: number })
   const x = Math.min(Math.max(b.x, wa.x), wa.x + wa.width - width)
   const y = Math.min(Math.max(b.y, wa.y), wa.y + wa.height - height)
   return { x, y, width, height }
+}
+
+/**
+ * Show a harness window as a 2px sliver hanging off the leftmost display,
+ * positioned BEFORE the show so it never flashes over the human's work.
+ * The focusless show still walks macOS's renderer-visibility marking path
+ * (showInactive does not — captures come back 0×0), and the marking sticks.
+ * The park trusts its own math rather than AppKit, which quietly drags a
+ * wholly off-screen window back to a 40px sliver of its own choosing.
+ */
+export function quietShow(win: BrowserWindow): void {
+  const { width } = win.getBounds()
+  const [, wy] = win.getPosition()
+  const left = screen
+    .getAllDisplays()
+    .reduce((min, d) => (d.bounds.x < min.bounds.x ? d : min))
+  // keep the sliver inside that display's vertical range, or it occludes anyway
+  const y = Math.min(Math.max(wy, left.bounds.y), left.bounds.y + left.bounds.height - 100)
+  win.setPosition(left.bounds.x - width + 2, y)
+  // the sliver satisfies AppKit; opacity and shadow are for the human — a
+  // parked window still blooms a soft shadow onto the screen edge without this
+  win.setHasShadow(false)
+  win.setOpacity(0)
+  // an invisible window still hit-tests: let the human's clicks fall through,
+  // or a stray click on the parked sliver becomes a page gesture
+  win.setIgnoreMouseEvents(true)
+  win.setFocusable(false)
+  win.show()
+  win.setFocusable(true)
+}
+
+// Under the quiet harness, no window escapes: popups and anything else
+// Chromium conjures outside OffshoreWindow's ready-to-show path get parked the
+// moment they try to show. The log line names the escapee so a new window
+// source is a diagnosis, not a mystery.
+if (HARNESS_QUIET) {
+  app.on('browser-window-created', (_e, win) => {
+    win.on('show', () => {
+      const b = win.getBounds()
+      const onScreen = screen.getAllDisplays().some(
+        (d) =>
+          Math.min(b.x + b.width, d.bounds.x + d.bounds.width) - Math.max(b.x, d.bounds.x) > 10 &&
+          Math.min(b.y + b.height, d.bounds.y + d.bounds.height) - Math.max(b.y, d.bounds.y) > 0
+      )
+      if (!onScreen && win.getOpacity() === 0) return
+      console.log(`[quiet] reparked window "${win.getTitle()}" from ${JSON.stringify(b)}`)
+      quietShow(win)
+    })
+  })
 }
 
 /** How long we wait for the chrome to say it has painted the still. */
@@ -133,8 +182,8 @@ export class OffshoreWindow implements TabHost {
     lastFocused ??= this
 
     this.win.on('resize', () => this.tabs.layout())
-    // The harness's window appears without taking the keyboard from the human
-    this.win.once('ready-to-show', () => (HARNESS_QUIET ? this.win.showInactive() : this.win.show()))
+    // Harness windows surface as an edge sliver, never over the human's work
+    this.win.once('ready-to-show', () => (HARNESS_QUIET ? quietShow(this.win) : this.win.show()))
     this.win.on('closed', () => {
       this.tabs.destroy()
       windows.delete(this)

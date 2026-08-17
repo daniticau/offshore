@@ -4,7 +4,7 @@ import { join } from 'path'
 import * as nodeHttp from 'http'
 import { ADBLOCK_LISTS, HOME_WIDGETS, SLOP_FLAG_MIN, SLOP_HEAVY_MIN, type AppearanceSettings, type SiteReport, type SlopReport } from '@shared/types'
 import { TAB_PARTITION } from './sessions'
-import { windows, type OffshoreWindow } from './windows'
+import { quietShow, windows, type OffshoreWindow } from './windows'
 
 /**
  * Headless design-verification harness (dev only).
@@ -271,21 +271,19 @@ function delay(ms: number): Promise<void> {
  * ever taking the keyboard or covering what the human is doing. Quiet (the
  * default) parks it off the side of the display, shown but inactive.
  *
- * "Shown" needs care on macOS. showInactive never marks the page views'
- * renderers visible — Electron only flips a WebContentsView's contents to
- * "shown" on the window's activating show — so a quiet run's pages would sit in
- * `hidden` visibility for the whole flow, and capturePage would hand back empty
- * stills: the freeze-frame dance loses its picture, and every "the page steps
- * aside" check with it. A show() with focusability switched off walks the same
- * marking path without ever touching the human's keyboard, and the visibility
- * sticks once granted. The park also keeps a 2px sliver of the window's edge on
- * the leftmost display rather than trusting AppKit, which quietly drags a
- * wholly off-screen window back to a 40px sliver of its own choosing.
- * OFFSHORE_TEST_FOREGROUND=1 brings back the old grab-everything behavior for
- * the rare check that needs genuine OS focus.
+ * Quiet runs ride quietShow (see windows.ts): an edge-sliver park set before a
+ * focusless show(), which is the only show that marks page renderers visible on
+ * macOS — showInactive leaves them `hidden` and capturePage hands back empty
+ * stills. Boot already quiet-shows harness windows; calling again is a cheap
+ * re-park for windows the flow has since moved. OFFSHORE_TEST_FOREGROUND=1
+ * brings back the old grab-everything behavior for the rare check that needs
+ * genuine OS focus.
  */
 function surface(w: OffshoreWindow): void {
   if (process.env['OFFSHORE_TEST_FOREGROUND']) {
+    w.win.setOpacity(1)
+    w.win.setHasShadow(true)
+    w.win.setIgnoreMouseEvents(false)
     w.win.setAlwaysOnTop(true)
     w.win.show()
     app.focus({ steal: true })
@@ -293,17 +291,21 @@ function surface(w: OffshoreWindow): void {
     w.win.moveTop()
     return
   }
-  const [, wy] = w.win.getPosition()
-  const { width } = w.win.getBounds()
-  const left = screen
-    .getAllDisplays()
-    .reduce((min, d) => (d.bounds.x < min.bounds.x ? d : min))
-  // keep the sliver inside that display's vertical range, or it occludes anyway
-  const y = Math.min(Math.max(wy, left.bounds.y), left.bounds.y + left.bounds.height - 100)
-  w.win.setPosition(left.bounds.x - width + 2, y)
-  w.win.setFocusable(false)
-  w.win.show()
-  w.win.setFocusable(true)
+  quietShow(w.win)
+}
+
+/** Width of the window actually on a screen — the harness promises ≤10px. */
+function visibleSliverPx(win: Electron.BrowserWindow): number {
+  const b = win.getBounds()
+  let worst = 0
+  for (const d of screen.getAllDisplays()) {
+    const w =
+      Math.min(b.x + b.width, d.bounds.x + d.bounds.width) - Math.max(b.x, d.bounds.x)
+    const h =
+      Math.min(b.y + b.height, d.bounds.y + d.bounds.height) - Math.max(b.y, d.bounds.y)
+    if (w > 0 && h > 0) worst = Math.max(worst, w)
+  }
+  return worst
 }
 
 /**
@@ -2601,6 +2603,12 @@ function setupTestFlows(): void {
        * same code path a keystroke takes once the cursor is there.
        */
       surface(w)
+      if (!process.env['OFFSHORE_TEST_FOREGROUND'])
+        check(
+          'the harness stays off the human\'s screen',
+          visibleSliverPx(w.win) <= 10,
+          `sliver=${visibleSliverPx(w.win)}px bounds=${JSON.stringify(w.win.getBounds())}`
+        )
       /*
        * Focusing the window hands the cursor to the page (see OffshoreWindow's
        * 'focus' handler) and that lands asynchronously — ask for the omnibox in
@@ -3053,7 +3061,11 @@ function setupTestFlows(): void {
     }
 
     if (flow === 'popups') {
+      const { resetGestures } = await import('./popups')
       const before = BrowserWindow.getAllWindows().length
+      // ambient input must not have gifted the page a gesture before the
+      // drive-by fires (mouse events are already ignored; this is the belt)
+      resetGestures()
       w.tabs.navigate(null, `${dev}/testpopup.html`)
       await delay(2200)
       const state = w.tabs.state()
