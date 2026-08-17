@@ -2113,15 +2113,24 @@ function setupTestFlows(): void {
       w.tabs.navigate(null, local('/cmp'))
       await settle(async () => (tab()!.info().privacy?.consent === 'handled' ? true : undefined), 15_000)
       await inChrome(`document.querySelector('.omni-tune')?.click()`)
-      const consentRow = await settle(async () => {
+      const probeConsentRow = async (): Promise<{ row: boolean; handled: boolean }> => {
         const raw = (await inChrome(
           `JSON.stringify({row: !!document.querySelector('.si-consent'),
                            handled: !!document.querySelector('.si-consent.handled')})`
         )) as string
-        const p = JSON.parse(raw) as { row: boolean; handled: boolean }
-        return p.row ? p : undefined
+        return JSON.parse(raw) as { row: boolean; handled: boolean }
+      }
+      // the row exists as soon as the panel opens; .handled lands with the async
+      // status fill — settle on the whole condition, not the row alone
+      const consentRow = await settle(async () => {
+        const p = await probeConsentRow()
+        return p.row && p.handled ? p : undefined
       }, 8000)
-      check('consent row rendered as handled', consentRow?.handled === true, JSON.stringify(consentRow))
+      check(
+        'consent row rendered as handled',
+        consentRow?.handled === true,
+        JSON.stringify(consentRow ?? (await probeConsentRow()))
+      )
       await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
 
       await cleanup()
