@@ -94,6 +94,13 @@ export function setupDevshot(): void {
     surface(w)
     w.tabs.setActiveVisible(true)
     await delay(quiet ? 900 : 600)
+    /** OFFSHORE_SHOT_PROBE=<js>: evaluate in the chrome and print — for
+     * reading exact geometry next to the screenshot it belongs to. */
+    const probeJs = process.env['OFFSHORE_SHOT_PROBE']
+    if (probeJs) {
+      const out = await w.win.webContents.executeJavaScript(probeJs).catch((e) => `err: ${e}`)
+      console.log('[devshot] probe', typeof out === 'string' ? out : JSON.stringify(out))
+    }
     const tab = w.tabs.activeTab
     if (tab) {
       const pageImg = await tab.wc.capturePage()
@@ -1550,40 +1557,68 @@ function setupTestFlows(): void {
       const inPage = (js: string): Promise<unknown> => tab()!.wc.executeJavaScript(js)
       const inChrome = (js: string): Promise<unknown> => w.win.webContents.executeJavaScript(js)
 
-      // 1. the chip is on the bar, idle, and the pristine geometry is on record
+      /*
+       * 1. Focus's face in the chrome is its row in the site panel now — the
+       * omnibox chip is retired. The row is there whenever the master switch
+       * is on, idle or lit, and its button does what the chip did. ⇧⌘F and the
+       * menu items still land on the same main-side toggle (steps 9–12 drive
+       * it directly). First: the panel opens with the row idle, and the
+       * pristine geometry is on record.
+       */
+      surface(w)
       w.tabs.navigate(null, `http://127.0.0.1:${port}/`)
-      const chipIdle = await settle(async () => {
-        const raw = (await inChrome(
-          `JSON.stringify({chip: !!document.querySelector('.focus-chip'),
-                           active: !!document.querySelector('.focus-chip.active')})`
-        )) as string
-        const p = JSON.parse(raw) as { chip: boolean; active: boolean }
-        return p.chip ? p : undefined
-      }, 10_000)
-      check('chip on the address bar, idle', chipIdle?.chip === true && chipIdle?.active === false, JSON.stringify(chipIdle))
-      check('tab reports Focus off', tab()!.info().focusOn === false)
       const before = await settle(async () => {
         const raw = (await inPage(`(() => {
           const c = document.getElementById('content'), s = document.getElementById('shell')
           if (!c || !s) return ''
           return JSON.stringify({ contentW: c.getBoundingClientRect().width,
                                   cols: getComputedStyle(s).gridTemplateColumns })
-        })()`)) as string
+        })()`).catch(() => '')) as string
         return raw ? (JSON.parse(raw) as { contentW: number; cols: string }) : undefined
       }, 10_000)
       say(`[flowtest] pristine: ${JSON.stringify(before)}`)
       check('pristine geometry read', !!before && before.cols.split(' ').length === 3, JSON.stringify(before))
-
-      // 2. the chip flips Focus on, for the site
-      await inChrome(`document.querySelector('.focus-chip')?.click()`)
-      const storeOn = await settle(async () => (focusStore.isOn('127.0.0.1') ? true : undefined), 4000)
-      check('chip toggles Focus on for the site', storeOn === true)
-      check('tab reports Focus on', tab()!.info().focusOn === true)
-      const chipLit = await settle(
-        () => inChrome(`!!document.querySelector('.focus-chip.active')`) as Promise<boolean>,
-        4000
+      check('the chip is gone from the bar', (await inChrome(`!document.querySelector('.focus-chip')`)) === true)
+      const focusRow = async (): Promise<{ text: string; action: string } | null> => {
+        const raw = (await inChrome(`(() => {
+          const icon = document.querySelector('.site-info .si-focus')
+          if (!icon) return 'null'
+          const row = icon.closest('.si-row')
+          return JSON.stringify({ text: row?.querySelector('.si-text')?.textContent ?? '',
+                                  action: row?.querySelector('.si-action')?.textContent ?? '' })
+        })()`)) as string
+        return JSON.parse(raw) as { text: string; action: string } | null
+      }
+      const openPanel = (): Promise<unknown> => inChrome(`document.querySelector('.omni-tune')?.click()`)
+      const closePanel = async (): Promise<void> => {
+        await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
+        await settle(
+          async () => ((await inChrome(`!document.querySelector('.site-info')`)) === true ? true : undefined),
+          4000
+        )
+      }
+      await openPanel()
+      const rowIdle = await settle(async () => (await focusRow()) ?? undefined, 8000)
+      check(
+        'the site panel offers the Focus row, idle',
+        rowIdle?.text === 'Focus is off for this site' && rowIdle?.action === 'Turn on',
+        JSON.stringify(rowIdle)
       )
-      check('chip lights up', chipLit === true)
+      check('tab reports Focus off', tab()!.info().focusOn === false)
+
+      // 2. the row's button flips Focus on, for the site
+      await inChrome(
+        `document.querySelector('.site-info .si-focus')?.closest('.si-row')?.querySelector('.si-action')?.click()`
+      )
+      const storeOn = await settle(async () => (focusStore.isOn('127.0.0.1') ? true : undefined), 4000)
+      check('the row toggles Focus on for the site', storeOn === true)
+      check('tab reports Focus on', tab()!.info().focusOn === true)
+      const rowLit = await settle(async () => {
+        const r = await focusRow()
+        return r?.text === 'Focus is on for this site' && r?.action === 'Turn off' ? true : undefined
+      }, 4000)
+      check('the row lights up in place', rowLit === true)
+      await closePanel()
 
       // 3. strip: every tier lands, the reading stands
       const stripped = await settle(async () => {
@@ -1755,10 +1790,17 @@ function setupTestFlows(): void {
       settingsStore.set({ focus: { enabled: false } })
       const masterOff = await settle(async () => {
         const railBack = (await inPage(`getComputedStyle(document.getElementById('rail')).display`)) === 'block'
-        const chipGone = (await inChrome(`!document.querySelector('.focus-chip')`)) === true
-        return railBack && chipGone ? true : undefined
+        return railBack ? true : undefined
       }, 8000)
-      check('the master switch restores pages and hides the chip', masterOff === true)
+      check('the master switch restores open pages', masterOff === true)
+      // and Focus's one surface goes with it: a freshly opened panel has no row
+      await openPanel()
+      const rowGone = await settle(async () => {
+        if ((await inChrome(`!!document.querySelector('.site-info')`)) !== true) return undefined
+        return (await inChrome(`!document.querySelector('.site-info .si-focus')`)) === true ? true : undefined
+      }, 8000)
+      check('master off: the panel drops its Focus row', rowGone === true)
+      await closePanel()
       // every surface must agree with the page: TabInfo drops focusOn while
       // the master is off, though the per-site memory itself survives
       check(
@@ -2248,6 +2290,20 @@ function setupTestFlows(): void {
         )) as string
         return JSON.parse(raw) as { si: boolean; freeze: boolean; tide: boolean }
       }
+      /*
+       * The panel gates its entrance on chrome:freeze-settled, so there must
+       * never be a sample where it is in the tree while the still is not —
+       * that was the beat where it showed over the sidebar but under the page.
+       * Sample the capture window on the way to the settled state.
+       */
+      let panelRaced = false
+      for (let i = 0; i < 16; i++) {
+        const p = await probePanel()
+        if (p.si && !p.freeze) panelRaced = true
+        if (p.si && p.freeze) break
+        await delay(25)
+      }
+      check('the panel never shows before the still is up', panelRaced === false)
       const panel = await settle(async () => {
         const p = await probePanel()
         return p.si && p.freeze ? p : undefined
@@ -2958,6 +3014,36 @@ function setupTestFlows(): void {
       )
       say(`[flowtest] home search rows: ${homeSugs}`)
       check('the new tab search offers suggestions too (needs network)', Number(homeSugs) > 0, String(homeSugs))
+
+      /*
+       * The ⋮ menu over a new-tab page: the home stand-in that takes the
+       * page's place must render settled — the clock does not roll its
+       * entrance again just because a menu opened in front of the sea.
+       */
+      await inChrome(`(() => {
+        const el = document.querySelector('.app-menu-anchor .chrome-btn')
+        el?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+        el?.click()
+        return true
+      })()`)
+      const standIn = await settle(async () => {
+        const raw = await inChrome<string>(`(() => {
+          const menu = !!document.querySelector('.cr-menu')
+          const ch = document.querySelector('.page-freeze-home .clock-ch')
+          if (!menu || !ch) return ''
+          return JSON.stringify({ menu, anim: getComputedStyle(ch).animationName })
+        })()`)
+        return raw ? (JSON.parse(raw) as { menu: boolean; anim: string }) : undefined
+      }, 5000)
+      say(`[flowtest] menu over home: ${JSON.stringify(standIn)}`)
+      check('the menu stands on the live home stand-in', standIn?.menu === true, JSON.stringify(standIn))
+      check('the stand-in clock does not replay its entrance', standIn?.anim === 'none', standIn?.anim)
+      await inChrome(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`)
+      const thawed = await settle(
+        () => inChrome<boolean>(`!document.querySelector('.page-freeze')`),
+        4000
+      )
+      check('closing the menu hands the page back', thawed === true)
 
       /*
        * Downloads keeps to the sidebar column, so it never asks the page to

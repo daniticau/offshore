@@ -15,7 +15,6 @@ import type { FindState } from './App'
 import { BookmarkEditPopover, BookmarksBar, BookmarksSection } from './Bookmarks'
 import { Omnibox } from './Omnibox'
 import { SiteInfo } from './SiteInfo'
-import { FocusChip } from './Focus'
 import { PopupChip } from './PasswordDialog'
 import { SlopChip } from './Slop'
 import { SpaceSwitcher } from './SpaceSwitcher'
@@ -77,6 +76,10 @@ interface ChromeProps {
   onNavigate: (input: string) => void
   onNewTab: () => void
   siteInfoOpen: boolean
+  /** The page's still is really up (chrome:freeze-settled) — panels that
+   * overhang the page hold their entrance until it is, or they spend the
+   * capture window over the sidebar but under the live view. */
+  overlaySettled: boolean
   onToggleSiteInfo: (open: boolean) => void
   onFindQuery: (text: string, findNext: boolean, forward?: boolean) => void
   onCloseFind: () => void
@@ -308,7 +311,8 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
       {activeTab && (
         <PopupChip tab={activeTab} open={props.popupPanelOpen} onToggle={props.onTogglePopupPanel} />
       )}
-      {activeTab && <FocusChip tab={activeTab} settings={props.settings} />}
+      {/* Focus has no chip here any more: it lives as its row in the site
+          panel behind the tune button (and keeps ⇧⌘F and its menu items). */}
       {/* The star belongs to the address, so it rides the address bar in both
           layouts: the far right of it, which is where every browser on this
           machine keeps one and where your hand already goes to save a page. */}
@@ -327,7 +331,8 @@ function OmniboxWrap(props: ChromeProps & { compact?: boolean }): React.JSX.Elem
         onSiteInfo={() => props.onToggleSiteInfo(!props.siteInfoOpen)}
         actions={actions}
       />
-      {props.siteInfoOpen && activeTab && (
+      {/* not a beat before the still is up — see overlaySettled */}
+      {props.siteInfoOpen && props.overlaySettled && activeTab && (
         <SiteInfo
           tab={activeTab}
           settings={props.settings}

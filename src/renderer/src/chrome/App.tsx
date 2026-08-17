@@ -234,6 +234,13 @@ export function App(): React.JSX.Element {
   const [appMenuOpen, setAppMenuOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [freeze, setFreeze] = useState<PageFreezeFrame[]>([])
+  /**
+   * True once main says the live view has actually stood aside behind the
+   * still (chrome:freeze-settled). Panels that overhang the page wait for it:
+   * the chrome draws under the views, so a panel shown any sooner sits over
+   * the sidebar but under the page for the length of the capture.
+   */
+  const [freezeSettled, setFreezeSettled] = useState(false)
   /** The page card in window coordinates — what the chrome draws over it needs it. */
   const [contentRect, setContentRect] = useState<Rect | null>(null)
   const [passwordOffer, setPasswordOffer] = useState<PasswordOffer | null>(null)
@@ -472,6 +479,7 @@ export function App(): React.JSX.Element {
         setFreeze(frames ?? [])
       })
     )
+    un.push(offshore.on('chrome:freeze-settled', () => setFreezeSettled(true)))
     const onSpaceRename = (e: Event): void => {
       setRenameSpaceId((e as CustomEvent<string>).detail)
     }
@@ -581,6 +589,8 @@ export function App(): React.JSX.Element {
     (mode === 'horizontal' && (bookmarkEdit !== null || popupPanelOpen || slopPanelOpen || downloadsPanelOpen))
   useEffect(() => {
     void offshore.chrome.setOverlay(overlayOpen)
+    // closing hands the room back; the next overlay earns its own settle
+    if (!overlayOpen) setFreezeSettled(false)
   }, [overlayOpen])
 
   // escape closes panels
@@ -774,6 +784,7 @@ export function App(): React.JSX.Element {
     slopPanelOpen,
     onToggleSlopPanel: setSlopPanelOpen,
     siteInfoOpen,
+    overlaySettled: freezeSettled,
     onToggleSiteInfo: setSiteInfoOpen,
     appMenuOpen,
     onToggleAppMenu: setAppMenuOpen,

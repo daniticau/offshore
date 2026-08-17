@@ -335,6 +335,12 @@ body,
   display: inline-block;
   animation: clock-roll 320ms var(--ease-spring);
 }
+/* The stand-in is the home screen already there, not one arriving: it mounts
+   whenever a panel borrows the page's room, and the clock must not roll its
+   entrance again every time — it renders settled, mid-tick. */
+.start.stand-in .clock-ch {
+  animation: none;
+}
 @keyframes clock-roll {
   from {
     transform: translateY(38%);

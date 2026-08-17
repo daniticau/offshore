@@ -42,6 +42,7 @@ export const CHROME_EVENTS = [
   'downloads:event',
   'devshot:composite',
   'chrome:page-freeze',
+  'chrome:freeze-settled',
   'spaces:begin-rename',
   'bookmarks:begin-rename',
   'bookmarks:edit-current',
